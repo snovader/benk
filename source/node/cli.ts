@@ -3,7 +3,7 @@ import { parseArgs } from 'node:util';
 import { DEFAULT_OPTIONS, measureGroups } from '#source/core/measure';
 import { describeRun, formatGroup, formatJson } from '#source/core/report';
 import type { Group, Runtime, RunResult } from '#source/core/types';
-import { detachArrayBuffer, NodeRuntime } from './runtime.ts';
+import { NodeRuntime } from './runtime.ts';
 
 /** The options of a benchmark script, from its command line */
 export interface CommandOptions {
@@ -16,8 +16,6 @@ export interface CommandOptions {
     readonly filter: RegExp | undefined;
     /** Where to write the results as JSON: a path, `-` for stdout, or none */
     readonly json: string | undefined;
-    /** Whether to detach an ArrayBuffer first, as `detachArrayBuffer()` does */
-    readonly detachArrayBuffer: boolean;
 }
 
 /** How `main()` runs, for a script that runs it other than from the shell */
@@ -45,8 +43,6 @@ export interface MainOptions {
  *   `-`, when the tables go to stderr
  * - `--no-aa`: leaves out the A/A copy of each group's first variant
  * - `--no-heap`: leaves out the count of heap bytes
- * - `--detach-array-buffer`: detaches an ArrayBuffer before the run, as
- *   `detachArrayBuffer()` describes
  *
  * @throws {TypeError} If an argument isn't one of the options, or an option
  * has no value.
@@ -63,8 +59,7 @@ export function parseOptions(args: readonly string[]): CommandOptions {
             filter: { type: 'string' },
             json: { type: 'string' },
             aa: { type: 'boolean', default: DEFAULT_OPTIONS.aa },
-            heap: { type: 'boolean', default: DEFAULT_OPTIONS.heap },
-            'detach-array-buffer': { type: 'boolean', default: false }
+            heap: { type: 'boolean', default: DEFAULT_OPTIONS.heap }
         }
     });
 
@@ -88,14 +83,13 @@ export function parseOptions(args: readonly string[]): CommandOptions {
             values.filter === undefined
                 ? undefined
                 : new RegExp(values.filter, 'u'),
-        json: values.json,
-        detachArrayBuffer: values['detach-array-buffer']
+        json: values.json
     };
 }
 
 /**
- * Runs a benchmark script: reads its options from the command line, detaches
- * an ArrayBuffer if they ask for it, prints a description of the run, measures each group whose name matches the
+ * Runs a benchmark script: reads its options from the command line, prints
+ * a description of the run, measures each group whose name matches the
  * filter and prints its table, and then writes the results as JSON, if the
  * options ask for it
  *
@@ -108,15 +102,9 @@ export async function main(
     groups: Iterable<Group>,
     options: MainOptions = {}
 ): Promise<RunResult> {
-    const {
-        json,
-        detachArrayBuffer: detach,
-        ...command
-    } = parseOptions(options.args ?? process.argv.slice(2));
-    if (detach) {
-        detachArrayBuffer();
-    }
-
+    const { json, ...command } = parseOptions(
+        options.args ?? process.argv.slice(2)
+    );
     const toStdout = json === '-';
     const print =
         options.print ??

@@ -71,7 +71,6 @@ with a variant that sets up input for each call.
 | `--json <path>` | | Writes the results as JSON to a file, or to stdout for `-`, when the tables go to stderr. |
 | `--no-aa` | | Leaves out the A/A copies. A group's `aa` overrides it. |
 | `--no-heap` | | Leaves out the count of heap bytes. |
-| `--detach-array-buffer` | | Detaches an ArrayBuffer before the run, as the section on detached buffers describes. |
 
 `measureGroups()` and `measureGroup()` take the same options as an object,
 for scripts that print or store results their own way, and return the
@@ -243,51 +242,43 @@ process. `node --trace-protector-invalidation` prints the moment it
 happens. Node only triggers it, with operations that detach a buffer. It
 slows code that V8 compiled with a typed array as a constant, as when a
 variant's call passes the same array every time. A sum of a 1,000-element
-`Float64Array` in `examples/numbers.ts`, which does, took:
-
-| benk loaded from | by default | with `--detach-array-buffer` |
-|---|---|---|
-| its bundle | 1.41 µs | 4.29 µs |
-| its TypeScript source | 4.28 µs | 4.28–4.33 µs |
-
-These are the fastest rounds of 2 runs each, on an Apple M2 Pro with Node
-26.13.0; a `number[]` sum took 1.41 µs in each. In a plain loop, the same
-sum of 2 arrays in turn took 0.84 µs whether a buffer was detached or not.
+`Float64Array` in `examples/numbers.ts`, which does, took 1.41 µs with
+benk's bundle, and 4.28 µs with its TypeScript source, whose type stripping
+detaches a buffer. Detaching one in a run on the bundle took it to
+4.29 µs. These are the fastest rounds of 2 runs each, on an Apple M2 Pro
+with Node 26.13.0; a `number[]` sum took 1.41 µs in each. In a plain loop,
+the same sum of 2 arrays in turn took 0.84 µs whether a buffer was
+detached or not.
 
 **It's a matter of V8's version.** Node 26.13.0's V8, 14.6, switches the
 protector off at the first detach. In Node 27.0.0-alpha's V8, 15.6, and in
 d8 15.8, no detach did, not even d8's own `%ArrayBufferDetach`, and the
-constant sum took 1.40–1.41 µs detached or not. So on those, the option and
-the type stripping change nothing. Versions before 14.6, such as Node 24's,
-weren't tested, but have the protector, which V8 added in 2016.
+constant sum took 1.40–1.41 µs detached or not. Versions before 14.6, such
+as Node 24's, weren't tested, but have the protector, which V8 added in
+2016.
 
-**benk detaches no buffer by default**, so that typed-array code is timed
-as it runs in a process that never detaches one. `--detach-array-buffer`,
-or `detachArrayBuffer()`, detaches one before the run, to time it as it
-runs in a process that does. Of everyday operations, these detached one:
+In Node 26, these detached a buffer:
 
+- Node's type stripping, when it strips a large enough TypeScript file: an
+  8 KB module did, and 2 KB ones didn't;
 - reading a `fetch`, `Response` or `Blob` body, or enqueuing into a byte
   stream;
-- `transfer()`, and growing a `WebAssembly.Memory` whose `buffer` was read;
-- Node's type stripping, when it strips a large enough TypeScript file: an
-  8 KB module did, and 2 KB ones didn't.
+- `transfer()`, and growing a `WebAssembly.Memory` whose `buffer` was read.
 
 These didn't: Node's startup, `fs.readFile`, zlib, `crypto.subtle`,
 `Readable.toWeb` of a file stream, and `structuredClone` without a
-transfer. So a server that reads `fetch` bodies runs in the detached state,
-and a tool that only reads files doesn't.
+transfer.
 
-The type stripping means that a run that loads enough TypeScript from
-source, as benk's own source is, can't time the intact state: load the
-benchmark and the code it times from a bundle, as the published benk is.
-In this repository, `yarn build` writes the bundle, and
+benk detaches none itself. Loaded from its bundle, as it's published, it
+leaves the process as the benchmark finds it. Loaded from its TypeScript
+source, as in this repository, it doesn't: the run's description and the
+JSON's `runtime.processState` then record `'benk from TypeScript source'`.
+To time typed arrays without a detached buffer in Node 26, load the
+benchmark and the code that it times from a bundle: in this repository,
+`yarn build` writes benk's, and
 `node --conditions=benk-dist examples/numbers.ts` runs the example on it.
-
-A run's description and the JSON's `runtime.processState` record what benk
-knows: `'detached ArrayBuffer'` when it detached one, and
-`'benk from TypeScript source'` when it was loaded from its source. benk
-can't see whether other code in the process detached a buffer, as no API
-reads V8's state.
+benk can't see whether other code detached a buffer, as no API reads V8's
+protector.
 
 ## Known confounds
 

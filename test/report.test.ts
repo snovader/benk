@@ -94,7 +94,7 @@ describe('describeRun', () => {
             arch: 'x64',
             cpu: 'A CPU',
             flags: ['--max-inlined-bytecode-size-cumulative=3000'],
-            processState: ['detached ArrayBuffer']
+            processState: ['benk from TypeScript source']
         };
         const options = {
             rounds: 31,
@@ -108,7 +108,7 @@ describe('describeRun', () => {
 
         assert.equal(
             first,
-            'Node v26.0.0, V8 14.6, linux x64, A CPU, with --max-inlined-bytecode-size-cumulative=3000. Process state: detached ArrayBuffer.'
+            'Node v26.0.0, V8 14.6, linux x64, A CPU, with --max-inlined-bytecode-size-cumulative=3000. Process state: benk from TypeScript source.'
         );
         assert.match(
             second,

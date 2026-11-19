@@ -1,9 +1,9 @@
 // An example benchmark: sums and sorts of 1,000 numbers. Run it with
 // `node examples/numbers.ts`, and add `--json results.json` to write the
-// results as JSON too, or `--json -` to write them to stdout. Run on benk's
-// bundle, with `yarn build` and `--conditions=benk-dist`, to time typed
-// arrays in a process that hasn't detached an ArrayBuffer, as the README
-// describes.
+// results as JSON too, or `--json -` to write them to stdout. In Node 26,
+// run it on benk's bundle, with `yarn build` and `--conditions=benk-dist`,
+// to time typed arrays in a process that hasn't detached an ArrayBuffer,
+// as the README describes.
 import { main, type SyncVariant } from 'benk';
 
 const SIZE = 1000;

@@ -11,44 +11,22 @@ import type {
     Timer
 } from '#source/core/types';
 
-const DETACHED_ARRAY_BUFFER = 'detached ArrayBuffer';
-
 const TYPESCRIPT_SOURCE = 'benk from TypeScript source';
 
 /**
  * Whether benk was loaded from its TypeScript source, rather than from its
- * bundle. Node's type stripping of its source detaches an ArrayBuffer, as
- * `detachArrayBuffer()` describes, so the runtime's process state records
- * it.
- */
-const fromSource = import.meta.url.endsWith('.ts');
-
-/** Whether `detachArrayBuffer()` has detached one in the process */
-let detached = false;
-
-/**
- * Detaches an ArrayBuffer, as a process does that reads a `fetch` or `Blob`
- * body. In V8 14.6, Node 26's, that switches off V8's `ArrayBufferDetaching`
+ * bundle. In Node 26, stripping the types of a large enough TypeScript
+ * file, as benk's own source is, grows a WebAssembly memory, which detaches
+ * an ArrayBuffer. V8 14.6 then switches off its `ArrayBufferDetaching`
  * protector for the rest of the process, after which its optimized code
- * checks typed-array accesses for a detached buffer, which can slow code
+ * checks typed-array accesses for a detached buffer. That can slow code
  * that it compiled with a typed array as a constant: in one test, a sum of
  * a `Float64Array` of 1,000 numbers that a variant passed as a constant
- * took 3–4.5 µs rather than 1.41, while the same sum of arrays that varied
- * between calls took 0.84 µs either way. V8 15.6 and 15.8 didn't switch it
- * off, and timed the constant sum alike either way. A run records
- * `'detached ArrayBuffer'` in its runtime's process state.
- *
- * benk detaches none unless asked, but other code in the process can:
- * Node's type stripping does when it strips a large enough TypeScript
- * file, as benk's own source is, by growing its WebAssembly memory. So in
- * Node 26, a run that loads TypeScript from source can't time the intact
- * state. benk records `'benk from TypeScript source'` when it was itself,
- * but can't see what other code did.
+ * took 4.28 µs rather than 1.41. V8 15.6 and 15.8 timed it alike either
+ * way. So the runtime's process state records it, although it can't see
+ * whether other code detached a buffer.
  */
-export function detachArrayBuffer(): void {
-    new ArrayBuffer(0).transfer();
-    detached = true;
-}
+const fromSource = import.meta.url.endsWith('.ts');
 
 type AsyncFunctionConstructor = new (...source: string[]) => AsyncTimer;
 
@@ -150,9 +128,6 @@ function describeNode(): RuntimeDescription {
             ...process.execArgv,
             ...(nodeOptions === '' ? [] : [`NODE_OPTIONS=${nodeOptions}`])
         ],
-        processState: [
-            ...(fromSource ? [TYPESCRIPT_SOURCE] : []),
-            ...(detached ? [DETACHED_ARRAY_BUFFER] : [])
-        ]
+        processState: fromSource ? [TYPESCRIPT_SOURCE] : []
     };
 }

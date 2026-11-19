@@ -17,7 +17,6 @@ describe('NodeRuntime', () => {
         assert.equal(description.version, process.version);
         assert.equal(description.engine, `V8 ${process.versions.v8}`);
         assert.ok(description.flags.every(flag => typeof flag === 'string'));
-        // Whatever else the process detached: benk itself detached nothing
         assert.deepEqual(description.processState, LOADED);
     });
 
@@ -67,30 +66,20 @@ describe('NodeRuntime', () => {
         assert.ok(arrays !== null && arrays > 4000 && arrays < 8400, `${arrays} B`);
     });
 
-    // Last, as the process can't undo it
-    it('records the ArrayBuffer that main() detaches when asked', async () => {
+    it('prints what it knows of the process in the description of a run', async () => {
         const lines: string[] = [];
         const result = await main([{ name: 'calls', variants: [{ name: 'a', run: () => 1 }] }], {
-            args: [
-                '--detach-array-buffer',
-                '--sample-ms',
-                '0.2',
-                '--warmup-rounds',
-                '2',
-                '--rounds',
-                '2',
-                '--no-heap'
-            ],
+            args: ['--sample-ms', '0.2', '--warmup-rounds', '2', '--rounds', '2', '--no-heap'],
             runtime: new NodeRuntime(),
             print: line => lines.push(line)
         });
+        const [first] = lines[0].split('\n');
 
-        const state = [...LOADED, 'detached ArrayBuffer'];
-        assert.deepEqual(result.runtime.processState, state);
-        assert.deepEqual(new NodeRuntime().description.processState, state);
-        assert.ok(
-            lines[0].split('\n')[0].endsWith(` Process state: ${state.join(', ')}.`),
-            lines[0]
+        assert.deepEqual(result.runtime.processState, LOADED);
+        assert.equal(
+            first.endsWith(` Process state: ${LOADED.join(', ')}.`),
+            LOADED.length > 0,
+            first
         );
     });
 });

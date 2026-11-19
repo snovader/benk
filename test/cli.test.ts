@@ -17,8 +17,7 @@ describe('parseOptions', () => {
             aa: true,
             heap: true,
             filter: undefined,
-            json: undefined,
-            detachArrayBuffer: false
+            json: undefined
         });
     });
 
@@ -34,8 +33,7 @@ describe('parseOptions', () => {
             '--json',
             'results.json',
             '--no-aa',
-            '--no-heap',
-            '--detach-array-buffer'
+            '--no-heap'
         ]);
 
         assert.deepEqual(options, {
@@ -45,8 +43,7 @@ describe('parseOptions', () => {
             aa: false,
             heap: false,
             filter: /^record/u,
-            json: 'results.json',
-            detachArrayBuffer: true
+            json: 'results.json'
         });
     });
 

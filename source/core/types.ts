@@ -96,7 +96,7 @@ export interface RuntimeDescription {
     readonly flags: readonly string[];
     /**
      * What the runtime knows of the process that changes what's timed, such
-     * as Node's `'detached ArrayBuffer'`
+     * as Node's `'benk from TypeScript source'`
      */
     readonly processState: readonly string[];
 }
