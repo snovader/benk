@@ -46,9 +46,7 @@ describe('NodeRuntime', () => {
                     { name: 'arrays of 1,000', run: () => new Array<number>(1000).fill(count) }
                 ]
             },
-            // Shorter rounds can count too few bytes of calls that allocate
-            // this much, as the README describes
-            { ...QUICK, sampleTime: 1 }
+            QUICK
         );
         const [none, objects, arrays] = result.variants.map(variant => variant.heapBytes);
 

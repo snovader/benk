@@ -26,11 +26,17 @@ export class FakeClock {
 
 export class FakeHeap implements HeapMeter {
     #allocated = 0;
+    #samples = 0;
     readonly #overhead: number;
+    readonly #errors: readonly number[];
 
-    /** `overhead` is what each sample counts of its own */
-    constructor(overhead: number) {
+    /**
+     * `overhead` is what each sample counts of its own, and `errors` what
+     * the samples count wrongly, in turn
+     */
+    constructor(overhead: number, errors: readonly number[]) {
         this.#overhead = overhead;
+        this.#errors = errors;
     }
 
     allocate(bytes: number): void {
@@ -39,7 +45,9 @@ export class FakeHeap implements HeapMeter {
 
     start(): () => number {
         const before = this.#allocated;
-        return () => this.#allocated - before + this.#overhead;
+        const error = this.#errors[this.#samples++ % this.#errors.length];
+
+        return () => this.#allocated - before + this.#overhead + error;
     }
 }
 
@@ -48,6 +56,8 @@ export interface FakeRuntimeOptions {
     readonly heap?: boolean;
     /** What each heap sample counts of its own. 1,000 bytes by default. */
     readonly heapOverhead?: number;
+    /** What the heap samples count wrongly, in turn. None by default. */
+    readonly heapErrors?: readonly number[];
 }
 
 export class FakeRuntime implements Runtime {
@@ -66,8 +76,12 @@ export class FakeRuntime implements Runtime {
     /** The last result of the last loop */
     sink: unknown;
 
-    constructor({ heap = true, heapOverhead = 1000 }: FakeRuntimeOptions = {}) {
-        this.fakeHeap = new FakeHeap(heapOverhead);
+    constructor({
+        heap = true,
+        heapOverhead = 1000,
+        heapErrors = [0]
+    }: FakeRuntimeOptions = {}) {
+        this.fakeHeap = new FakeHeap(heapOverhead, heapErrors);
         this.heap = heap ? this.fakeHeap : undefined;
     }
 

@@ -3,8 +3,13 @@ import { TimedVariant } from './timedVariant.ts';
 import type { HeapMeter, Runtime } from './types.ts';
 
 /**
- * Samples of each variant's heap bytes, after its timed rounds. The fewest
- * count, since compiling and deoptimizing allocate too.
+ * Samples of each variant's heap bytes, after its timed rounds, of which the
+ * median counts. Their extremes are off both ways: compiling and
+ * deoptimizing allocate in some samples, and in others the heap's used size
+ * shrinks by more than the collections meanwhile report, as when V8 sweeps
+ * garbage concurrently. After a variant that allocated 32 KB a call, the
+ * fewest of 5 samples gave -977 bytes a call for a variant that allocated 16
+ * in each of the others.
  */
 const SAMPLES = 5;
 
@@ -37,9 +42,10 @@ export class HeapCounter {
     async bytesPerCall(variant: TimedVariant): Promise<number> {
         const repetitions = variant.repetitions();
         const baseline = await this.#baseline(variant.isAsync());
-        const fewest = Math.min(...(await this.#samples(variant, repetitions)));
+        const samples = await this.#samples(variant, repetitions);
+        samples.sort();
 
-        return (fewest - baseline) / repetitions;
+        return (quantile(samples, 0.5) - baseline) / repetitions;
     }
 
     #baseline(async: boolean): Promise<number> {

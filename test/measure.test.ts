@@ -280,6 +280,21 @@ describe('measureGroup', () => {
         );
     });
 
+    it('counts the median sample, which a sample counting too few or too many bytes leaves alone', async () => {
+        // In any 5 samples in a row, one counts a megabyte too few, and one
+        // 300 KB too many
+        const runtime = new FakeRuntime({ heapErrors: [0, -1e6, 0, 3e5, 0] });
+        const result = await measureGroup(
+            { name: 'heap', variants: [runtime.variant('some', 50, 48)] },
+            { ...QUICK, runtime }
+        );
+
+        assert.deepEqual(
+            result.variants.map(({ heapBytes }) => heapBytes),
+            [48, 48]
+        );
+    });
+
     it('counts no bytes when the run or the runtime does not', async () => {
         const counting = new FakeRuntime();
         const blind = new FakeRuntime({ heap: false });
