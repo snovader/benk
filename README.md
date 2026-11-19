@@ -161,7 +161,7 @@ Per call of each variant:
   differed from the reference round by round. The A/A row's shows how wide
   an interval is when nothing differs. It's left out with fewer than 6
   rounds. In a group that leads with the fastest round, the ratio compares
-  the fastest rounds instead, and can lie outside this interval.
+  the fastest rounds instead, so the two are different statistics.
 - **heap**: the bytes that a call allocated on V8's heap, from V8's heap
   statistics and a `GCProfiler`, less what a sample allocates itself. V8
   allocates the contents of an `ArrayBuffer` of more than 64 bytes outside
@@ -173,6 +173,14 @@ Per call of each variant:
 - **two modes**: a note for a variant whose rounds form two clusters, far
   apart for their own spread, of at least 3 rounds and 10% each. Its median
   and fastest then describe one of the clusters: compare the modes instead.
+- **by the fastest rounds, but … round by round**: a note in a group that
+  leads with the fastest round, for a variant whose ratio lies more than 5%
+  outside its interval, such as
+  `f3: 0.24× by the fastest rounds, but 0.46–0.47× round by round`. Its
+  rounds then differ from its fastest by more than the reference's do, as
+  when its calls collect garbage or run in two modes, which the fastest
+  round leaves out: consider `lead: 'median'` for the group. Within 5%, the
+  two often differ, the A/A copy's too.
 
 ### Which statistic leads
 

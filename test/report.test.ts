@@ -85,6 +85,21 @@ describe('formatGroup', () => {
         assert.match(row ?? '', /% 0\.00042× 0\.00039–0\.00046 +0 B$/u);
     });
 
+    it('notes a ratio by the fastest round that lies more than 5% outside its interval', () => {
+        const [reference] = group.variants;
+        const near = variant('near', 'variant', steady, { ratio: 1, interval: [1.04, 1.2] });
+        const below = variant('below', 'variant', steady, { ratio: 1, interval: [1.1, 1.2] });
+        const above = variant('above', 'variant', steady, { ratio: 2.5, interval: [1.9, 2.1] });
+        const variants = [reference, near, below, above];
+        const rows = 3 + variants.length;
+
+        assert.deepEqual(formatGroup({ ...group, variants }).slice(rows), [
+            '  below: 1.00× by the fastest rounds, but 1.10–1.20× round by round',
+            '  above: 2.50× by the fastest rounds, but 1.90–2.10× round by round'
+        ]);
+        assert.equal(formatGroup({ ...group, lead: 'median', variants }).length, rows);
+    });
+
     it('names the median round when the group leads with it', () => {
         const [, title] = formatGroup({ ...group, lead: 'median', leadReason: 'allocating calls' });
         assert.equal(

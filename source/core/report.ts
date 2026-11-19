@@ -20,6 +20,18 @@ const COLUMNS: ReadonlyArray<readonly [title: string, width: number]> = [
 /** The narrowest column of names */
 const NAME_WIDTH = 16;
 
+/**
+ * How far outside its interval a ratio by the fastest round needs to be, at
+ * least, as a share of the interval's nearer end, for a note. The two are
+ * different statistics, so they often differ a little: in 16 runs of
+ * two benchmarks of calls of a few nanoseconds, on an Apple M2 Pro with a
+ * load average near 7, 25 of 80 ratios were outside their interval as
+ * printed, 4 of them of A/A copies. 13 of the 25 were within 5% of it. Of
+ * the 12 beyond, 8 were of one variant whose fastest round took half the
+ * time of its median, and 2 of the A/A copy of an allocating call.
+ */
+const OUTSIDE_MARGIN = 0.05;
+
 const LONG = `${LONG_CALL / 1000} µs`;
 const ALLOCATING = `${ALLOCATING_CALL / 1024} KiB`;
 
@@ -54,8 +66,9 @@ export function describeRun(
 }
 
 /**
- * A group's table: its name and lead, a row for each variant, and a note for
- * each variant whose rounds form two modes
+ * A group's table: its name and lead, a row for each variant, a note for
+ * each variant whose rounds form two modes, and one for each whose ratio by
+ * the fastest round lies outside its interval
  */
 export function formatGroup({
     name,
@@ -75,7 +88,8 @@ export function formatGroup({
         `${name}: ${rounds} rounds, by the ${lead === 'fastest' ? 'fastest' : 'median'} round (${LEAD_REASONS[leadReason]})`,
         header,
         ...variants.map(variant => formatRow(variant, nameWidth)),
-        ...variants.flatMap(formatModes)
+        ...variants.flatMap(formatModes),
+        ...(lead === 'fastest' ? variants.flatMap(formatOutside) : [])
     ];
 }
 
@@ -116,6 +130,31 @@ function formatModes({ name, summary }: VariantResult): string[] {
     const { fast, slow } = modes;
     return [
         `  ${name}: two modes, ${fast.rounds} rounds near ${formatTime(fast.median)} and ${slow.rounds} near ${formatTime(slow.median)}`
+    ];
+}
+
+/**
+ * A note for a variant of a group that leads with the fastest round, whose
+ * ratio lies outside its interval by more than `OUTSIDE_MARGIN`. The ratio
+ * compares the fastest rounds, and the interval is of the median of the
+ * per-round ratios, so the two then disagree: the variant's rounds differ
+ * from its fastest by more than the reference's do, as when its calls
+ * collect garbage or run in two modes, which the fastest round leaves out.
+ * The median may then suit the group better as its lead.
+ */
+function formatOutside({ name, ratio, interval }: VariantResult): string[] {
+    if (interval === null) {
+        return [];
+    }
+
+    const [low, high] = interval;
+    const reach = 1 + OUTSIDE_MARGIN;
+    if (ratio >= low / reach && ratio <= high * reach) {
+        return [];
+    }
+
+    return [
+        `  ${name}: ${formatRatio(ratio)}× by the fastest rounds, but ${formatRatio(low)}–${formatRatio(high)}× round by round`
     ];
 }
 
