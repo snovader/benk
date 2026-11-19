@@ -16,7 +16,7 @@ describe('parseOptions', () => {
             sampleTime: 1,
             aa: true,
             heap: true,
-            filter: /(?:)/u,
+            filter: undefined,
             json: undefined
         });
     });

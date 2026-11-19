@@ -12,7 +12,8 @@ export interface CommandOptions {
     readonly sampleTime: number;
     readonly aa: boolean;
     readonly heap: boolean;
-    readonly filter: RegExp;
+    /** Selects groups by name, or none if all of them */
+    readonly filter: RegExp | undefined;
     /** Where to write the results as JSON: a path, `-` for stdout, or none */
     readonly json: string | undefined;
 }
@@ -55,7 +56,7 @@ export function parseOptions(args: readonly string[]): CommandOptions {
             rounds: { type: 'string' },
             'warmup-rounds': { type: 'string' },
             'sample-ms': { type: 'string' },
-            filter: { type: 'string', default: '' },
+            filter: { type: 'string' },
             json: { type: 'string' },
             aa: { type: 'boolean', default: DEFAULT_OPTIONS.aa },
             heap: { type: 'boolean', default: DEFAULT_OPTIONS.heap }
@@ -78,7 +79,10 @@ export function parseOptions(args: readonly string[]): CommandOptions {
         sampleTime: sampleTimeOption(values['sample-ms']),
         aa: values.aa,
         heap: values.heap,
-        filter: new RegExp(values.filter, 'u'),
+        filter:
+            values.filter === undefined
+                ? undefined
+                : new RegExp(values.filter, 'u'),
         json: values.json
     };
 }
@@ -110,7 +114,7 @@ export async function main(
     print(
         describeRun(runtime.description, {
             ...command,
-            filter: command.filter.source
+            filter: command.filter?.source ?? ''
         })
     );
     const result = await measureGroups(

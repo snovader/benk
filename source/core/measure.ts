@@ -103,7 +103,7 @@ export async function measureGroups(
         schema: 1,
         date,
         runtime: runtime.description,
-        options: { ...resolved, filter: filter.source },
+        options: { ...resolved, filter: options.filter?.source ?? '' },
         groups: results
     };
 }
