@@ -215,7 +215,7 @@ export function formatJson(value: unknown): string {
  * inside one, as in a variant's name, is left as it is.
  */
 const STRING_OR_NUMBER_ARRAY =
-    /"(?:[^"\\]|\\.)*"|\[\s+(-?[\d.e+-]+(?:,\s+-?[\d.e+-]+)*)\s+\]/gu;
+    /"(?:[^"\\]|\\.)*"|\[\s+([\d.e+-]+(?:,\s+[\d.e+-]+)*)\s+\]/gu;
 
 /** The numbers of an array on one line, or a string as it was */
 function joinNumbers(match: string, numbers: string | undefined): string {
