@@ -1,17 +1,51 @@
 // Node's own runtime, with its compiled timer loops and V8's heap statistics.
 // Times vary, so these check only what doesn't.
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import { bench, measureGroup, NodeRuntime } from 'benk';
 
 const QUICK = { sampleTime: 0.2, warmupRounds: 2, rounds: 6 };
 
 /** What the runtime records of benk's own loading: its source, or its bundle */
+const BENK_LOADED = import.meta.resolve('benk').endsWith('.ts')
+    ? ['benk from TypeScript source']
+    : [];
+
+const STRIPPING_OFF = "Node's type stripping off";
+
+/**
+ * What the runtime records of this process: benk's loading, this file, and
+ * Node's type stripping, which `yarn test` turns off
+ */
 const LOADED = [
-    ...(import.meta.resolve('benk').endsWith('.ts') ? ['benk from TypeScript source'] : []),
+    ...BENK_LOADED,
     // Node's test runner runs this file as the entry script of a process
-    'entry script from TypeScript source'
+    'entry script from TypeScript source',
+    ...(process.features.typescript === false ? [STRIPPING_OFF] : [])
 ];
+
+/**
+ * The process state of a new process that Node starts with `flags`, and
+ * whose entry is a script on the command line rather than a file. It loads
+ * benk as this one does, as it inherits `NODE_OPTIONS`.
+ */
+function processStateWith(flags: readonly string[]): unknown {
+    const script =
+        "import { NodeRuntime } from 'benk'; console.log(JSON.stringify(new NodeRuntime().description.processState));";
+    const output = execFileSync(
+        process.execPath,
+        [...flags, '--input-type=module', '--eval', script],
+        {
+            // Inside benk's package, where the script can import it by its name
+            cwd: join(import.meta.dirname, '..'),
+            encoding: 'utf8'
+        }
+    );
+
+    return JSON.parse(output);
+}
 
 describe('NodeRuntime', () => {
     it('describes Node and V8', () => {
@@ -22,6 +56,18 @@ describe('NodeRuntime', () => {
         assert.equal(description.engine, `V8 ${process.versions.v8}`);
         assert.ok(description.flags.every(flag => typeof flag === 'string'));
         assert.deepEqual(description.processState, LOADED);
+    });
+
+    it("records Node's type stripping off, where a hook strips the types", () => {
+        const strippedByNode = processStateWith([]);
+        const strippedByHook = processStateWith([
+            '--no-strip-types',
+            '--import',
+            '@snovader/node-hooks/register'
+        ]);
+
+        assert.deepEqual(strippedByNode, BENK_LOADED);
+        assert.deepEqual(strippedByHook, [...BENK_LOADED, STRIPPING_OFF]);
     });
 
     it('times sync and async calls', async () => {

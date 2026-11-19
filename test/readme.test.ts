@@ -4,9 +4,10 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import * as benk from 'benk';
 
-// The README names the package's exports and the command line's options one
-// by one, which a change to either would leave behind: these compare its
-// tables with the package. Its samples are run by hand, as AGENTS.md says.
+// The README names the package's exports, the command line's options and
+// the entries of Node's process state one by one, which a change to any of
+// them would leave behind: these compare it with the package. Its samples
+// are run by hand, as AGENTS.md says.
 const readme = readFileSync(join(import.meta.dirname, '..', 'README.md'), 'utf8');
 
 /** The first table after a heading of the README, up to the blank line that ends it */
@@ -45,5 +46,14 @@ describe('README', () => {
             .map(([name]) => name);
 
         assert.deepEqual(unchanged, []);
+    });
+
+    it("names each entry of Node's process state", () => {
+        // The runtime records those that hold in this process: under
+        // `yarn test`, each of them, and from the bundle, all but benk's
+        // loading from its source
+        for (const entry of new benk.NodeRuntime().description.processState) {
+            assert.ok(readme.includes(entry), `Expected the README to name "${entry}"`);
+        }
     });
 });

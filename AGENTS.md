@@ -99,9 +99,10 @@ intent, not a requirement to preserve every detail.
   imports of Node's modules in the core.
 - A runtime records what it knows of the process that changes what's
   timed in its description's `processState`, as `source/node/runtime.ts`
-  records benk's own loading from TypeScript source, whose type stripping
-  detaches an ArrayBuffer in Node 26. Record facts that the runtime knows,
-  rather than states that it infers.
+  records benk's own loading from TypeScript source, and whether Node's
+  type stripping, which detaches an ArrayBuffer in Node 26, is off. Record
+  facts that the runtime knows, rather than states that it infers: it
+  records that Node's stripping is off, not that no buffer was detached.
 - `source/index.ts` is the Node entry point, which passes Node's runtime to
   the core. A runtime for browsers or Workers would be an entry point of its
   own.

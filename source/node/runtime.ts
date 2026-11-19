@@ -24,7 +24,9 @@ const TYPESCRIPT_SOURCE = 'benk from TypeScript source';
  * a `Float64Array` of 1,000 numbers that a variant passed as a constant
  * took 4.28 µs rather than 1.41. V8 15.6 and 15.8 timed it alike either
  * way. So the runtime's process state records it, and a TypeScript entry
- * script, although it can't see whether other code detached a buffer.
+ * script, although it can't see whether other code detached a buffer. These
+ * name where the code came from, not what stripped its types: a hook can
+ * strip them instead, as `@snovader/node-hooks` does with oxc.
  */
 const fromSource = import.meta.url.endsWith('.ts');
 
@@ -39,6 +41,17 @@ const TYPESCRIPT_ENTRY = 'entry script from TypeScript source';
 function entryFromSource(): boolean {
     return /\.[cm]?ts$/u.test(process.argv[1] ?? '');
 }
+
+const NODE_STRIPPING_OFF = "Node's type stripping off";
+
+/**
+ * Whether Node's own type stripping is off, as `--no-strip-types` turns
+ * it. Node then strips no module's types, and so detaches no buffer for
+ * one, also among the modules that the entry script imports: a hook loaded
+ * whatever TypeScript the process runs. With Node's stripping on, the
+ * runtime can't see whether Node or a hook stripped a module's types.
+ */
+const nodeStrippingOff = process.features.typescript === false;
 
 type AsyncFunctionConstructor = new (...source: string[]) => AsyncTimer;
 
@@ -142,7 +155,8 @@ function describeNode(): RuntimeDescription {
         ],
         processState: [
             ...(fromSource ? [TYPESCRIPT_SOURCE] : []),
-            ...(entryFromSource() ? [TYPESCRIPT_ENTRY] : [])
+            ...(entryFromSource() ? [TYPESCRIPT_ENTRY] : []),
+            ...(nodeStrippingOff ? [NODE_STRIPPING_OFF] : [])
         ]
     };
 }
