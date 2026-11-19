@@ -411,7 +411,7 @@ transfer.
 
 benk detaches none itself. Loaded from its bundle, as it's published, it
 leaves the process as the benchmark finds it. Loaded from its TypeScript
-source, as in this repository, it doesn't: the run's description and the
+source, whose types Node strips, it doesn't: the run's description and the
 JSON's `runtime.processState` then record `'benk from TypeScript source'`.
 They record `'entry script from TypeScript source'` when the process's entry
 script is TypeScript, as a benchmark that `node bench.ts` runs is, whose
@@ -424,6 +424,23 @@ benchmark and the code that it times from a bundle: in this repository,
 `node --conditions=benk-dist examples/numbers.ts` runs the example on it.
 benk can't see whether other code detached a buffer, as no API reads V8's
 protector.
+
+Or strip the types with a hook that detaches nothing. This repository's
+tests, example and benchmark run with
+[`@snovader/node-hooks`](https://www.npmjs.com/package/@snovader/node-hooks),
+which strips them with oxc:
+
+```sh
+node --no-strip-types --import @snovader/node-hooks/register examples/numbers.ts
+```
+
+The example's constant `Float64Array` sum then took 1.41 µs from benk's
+source, rather than 4.28–4.34 µs with Node's stripping, and
+`--trace-protector-invalidation` printed nothing. These are the fastest
+rounds of 3 runs each, on an Apple M2 Pro with Node 26.13.0. The process
+state still records `'benk from TypeScript source'` and
+`'entry script from TypeScript source'`, as these name where the code came
+from, not what stripped its types.
 
 ## Known confounds
 

@@ -54,12 +54,13 @@
     "lint:check": "oxlint",
     "lint:write": "oxlint --fix",
     "prepack": "node scripts/require-yarn.ts && yarn build",
-    "test": "node --test 'test/**/*.test.ts'",
+    "test": "node --no-strip-types --import @snovader/node-hooks/register --enable-source-maps --test 'test/**/*.test.ts'",
     "test:dist": "yarn build && NODE_OPTIONS=--conditions=benk-dist yarn test",
-    "test:watch": "node --test --watch 'test/**/*.test.ts'",
+    "test:watch": "node --no-strip-types --import @snovader/node-hooks/register --enable-source-maps --test --watch 'test/**/*.test.ts'",
     "typecheck": "tsc -p ."
   },
   "devDependencies": {
+    "@snovader/node-hooks": "^0.1.1",
     "@snovader/oxc-config": "^0.1.0",
     "@snovader/tsconfig": "^0.1.0",
     "@types/node": "^26.6.6",
