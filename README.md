@@ -24,9 +24,16 @@ and [tinybench](https://github.com/tinylibs/tinybench) cover more ground.
 
 benk has no dependencies, and runs on Node 24 and later.
 
-## Usage
+## Quick start
 
-A benchmark is a script that passes groups of variants to `main()`:
+Install it:
+
+```sh
+npm install --save-dev benk
+```
+
+A benchmark is a script that passes groups of variants to `main()`. Write
+one, as `bench.ts`:
 
 ```ts
 import { main } from 'benk';
@@ -46,35 +53,66 @@ await main([
         name: 'sum 1,000 numbers',
         variants: [
             { name: 'for loop', run: () => sumLoop(numbers) },
-            { name: 'reduce', run: () => numbers.reduce((sum, x) => sum + x, 0) }
+            {
+                name: 'reduce',
+                run: () => numbers.reduce((sum, x) => sum + x, 0)
+            }
         ]
     }
 ]);
 ```
 
+The script is an ES module, so the project's `package.json` needs
+`"type": "module"`, or the script the name `bench.mts`. With
+`"type": "commonjs"`, Node rejects the script's `import` statement. Without
+a `type`, Node runs it, but warns about it.
+
+Run it:
+
+```sh
+node bench.ts
+```
+
+```text
+Node v26.13.0, V8 14.6.202.34-node.40, darwin arm64, Apple M2 Pro. Process state: entry script from TypeScript source.
+Per call, of at least 31 interleaved rounds of 1 ms per variant after 10 warm-up rounds, in an order that rotates each variant through each position:
+the fastest and median round, the interquartile range as a share of the median, the ratio to the group's first variant by the statistic that the group leads with, a 95% interval of the median of the per-round ratios, and the bytes allocated on the heap.
+
+sum 1,000 numbers: 36 rounds, by the median round (a call of 1 µs or more)
+                      fastest     median   spread    ratio   95% interval        heap
+  for loop            1.41 µs    1.50 µs     3.4%    1.00×                       16 B
+  reduce              7.00 µs    7.47 µs     6.6%    4.95×      4.88–5.01    32,040 B
+  for loop A/A        1.41 µs    1.50 µs     3.8%    1.00×      0.98–1.00        16 B
+```
+
+It prints a description of the run, then each group's table as soon as it's
+measured. Here, `reduce` took 4.95 times as long as the loop, and the A/A
+copy of the loop, which benk added, took as long as the loop itself.
+[What the table reports](#what-the-table-reports) describes each column.
+
+[`examples/numbers.ts`](examples/numbers.ts) is a longer example, with a
+variant that sets up input for each call.
+
+## Usage
+
+### Options
+
+A benchmark script takes its options from the command line:
+
 ```sh
 node bench.ts --rounds 51 --json results.json
 ```
 
-It prints a description of the run, then each group's table as soon as it's
-measured. [`examples/numbers.ts`](examples/numbers.ts) is a complete example,
-with a variant that sets up input for each call.
-
-### Options
-
-| Option | Default | |
-|---|---|---|
-| `--rounds <n>` | 31 | The timed rounds, at least. benk runs whole rotations, so a group of 3 variants and its A/A copy runs 32. |
-| `--warmup-rounds <n>` | 10 | Rounds before the timed ones, after which each variant's calls per round are counted again. |
-| `--sample-ms <ms>` | 1 | The time of one variant's round. |
-| `--filter <regex>` | | Measures only the groups whose name matches. |
-| `--json <path>` | | Writes the results as JSON to a file, or to stdout for `-`, when the tables go to stderr. benk checks that it can write to the file's directory before it measures. |
-| `--no-aa` | | Leaves out the A/A copies. A group's `aa` overrides it. |
-| `--no-heap` | | Leaves out the count of heap bytes. |
-
-`measureGroups()` and `measureGroup()` take the same options as an object,
-for scripts that print or store results their own way, and return the
-results that `main()` writes as JSON.
+| Option                | Default | What it does                                                                                                         |
+| --------------------- | ------- | -------------------------------------------------------------------------------------------------------------------- |
+| `--rounds <n>`        | 31      | Sets the timed rounds, at least. benk runs whole rotations, so a group of 3 variants and its A/A copy runs 32.       |
+| `--warmup-rounds <n>` | 10      | Sets the rounds before the timed ones, after which each variant's calls per round are counted again.                 |
+| `--sample-ms <ms>`    | 1       | Sets the time of one variant's round.                                                                                |
+| `--filter <regex>`    |         | Measures only the groups whose name matches.                                                                         |
+| `--json <path>`       |         | Writes the results as JSON to a file. benk checks that it can write to the file's directory before it measures.      |
+| `--json -`            |         | Writes the JSON to stdout, and the tables to stderr.                                                                 |
+| `--no-aa`             |         | Leaves out the A/A copies. A group's `aa` overrides it.                                                              |
+| `--no-heap`           |         | Leaves out the count of heap bytes.                                                                                  |
 
 ### Variants
 
@@ -110,8 +148,10 @@ const sortVariant = {
 
 A variant whose calls return promises is marked `async: true`, and a loop of
 its own awaits each call before the next. Its `setup` and `teardown` may
-return promises too. A sync variant's call that returns a promise is an
-error, since the sync loop wouldn't await it.
+return promises too. The awaiting loop costs more per call, as
+[The cost of the async loop](#the-cost-of-the-async-loop) measures. A sync
+variant's call that returns a promise is an error, since the sync loop
+wouldn't await it.
 
 ### Groups
 
@@ -124,14 +164,20 @@ interface Group {
 }
 ```
 
-The first variant is the reference, which ratios compare with.
+The first variant is the reference, which ratios compare with. `lead` sets
+the statistic that they compare, which
+[Which statistic leads](#which-statistic-leads) describes. `aa` says whether
+the group gets an A/A copy, whatever `--no-aa` says.
+
+A group needs at least one variant, and its variants need different names.
+The A/A copy takes the reference's name with ` A/A` after it.
 
 ## What the table reports
 
-This is the sorting group of `examples/numbers.ts`, on an Apple M2 Pro with Node
-26.13.0, with benk loaded from its source:
+This is the sorting group of `examples/numbers.ts`, on an Apple M2 Pro with
+Node 26.13.0, with benk loaded from its source:
 
-```
+```text
 sort 1,000 numbers: 36 rounds, by the median round (a call of 1 µs or more)
                       fastest     median   spread    ratio   95% interval        heap
   Float64Array        21.1 µs    23.7 µs    10.4%    1.00×                        0 B
@@ -142,7 +188,7 @@ sort 1,000 numbers: 36 rounds, by the median round (a call of 1 µs or more)
 A variant whose rounds form two clusters gets a note below the table, such
 as this one from another run of the same example:
 
-```
+```text
   number[]: two modes, 18 rounds near 124 µs and 18 near 158 µs
 ```
 
@@ -223,9 +269,92 @@ varies.
 ```
 
 `schema` changes when a field does. The runtime's flags include
-`NODE_OPTIONS`, as V8's flags change what's measured, and its process state
-is what benk knows of the process that changes what's measured, as the next
-section describes.
+`NODE_OPTIONS`, as V8's flags change what's measured. Its process state is
+what benk knows of the process that changes what's measured, as
+[Typed arrays and detached buffers](#typed-arrays-and-detached-buffers)
+describes.
+
+## API
+
+`benk` exports these, and the types of what they take and return:
+
+| Export                                | What it does                                                                                                                                                              |
+| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `main(groups, options?)`              | Runs a benchmark script: reads the command line's options, prints the run's description and each group's table, and writes the JSON if asked to. Returns the `RunResult`. |
+| `measureGroups(groups, options?)`     | Measures the groups without printing, and returns the `RunResult`.                                                                                                        |
+| `measureGroup(group, options?)`       | Measures one group, and returns its `GroupResult`.                                                                                                                        |
+| `parseOptions(args)`                  | Reads a script's options from command-line arguments, as `main()` does.                                                                                                   |
+| `DEFAULT_OPTIONS`                     | The defaults of `rounds`, `warmupRounds`, `sampleTime`, `aa` and `heap`.                                                                                                  |
+| `describeRun(runtime, options)`       | Returns the description that `main()` prints first, from a `RunResult`'s `runtime` and `options`.                                                                         |
+| `formatGroup(result)`                 | Returns the lines of a `GroupResult`'s table, with its notes.                                                                                                             |
+| `formatJson(value)`                   | Returns results as the JSON that `--json` writes, with each array of numbers on one line.                                                                                 |
+| `formatTime(nanoseconds)`             | Returns a time as the table writes it, such as `1.41 µs`.                                                                                                                 |
+| `formatBytes(bytes)`                  | Returns a count of bytes as the table writes it, such as `32,040 B`.                                                                                                      |
+| `summarize(samples)`                  | Returns the `Summary` of samples: the fastest and slowest, the quartiles, the spread, and two modes if they form two.                                                     |
+| `medianInterval(sorted, confidence?)` | Returns a confidence interval of the median of sorted samples, of 95% by default, or `null` for too few samples.                                                          |
+| `rotation(count)`                     | Returns the orders of a rotation of `count` variants, each an array of the variants' indexes.                                                                             |
+| `chooseLead(lead, variants)`          | Chooses the statistic that a group leads with, and says why.                                                                                                              |
+| `NodeRuntime`                         | Times variants in Node. The `runtime` option takes another runtime in its place.                                                                                          |
+
+`measureGroups()` and `measureGroup()` are for scripts that print or store
+results their own way. They take their options as an object:
+
+| Option                                 | What it does                                                                                       |
+| -------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `rounds`, `warmupRounds`, `aa`, `heap` | As `--rounds`, `--warmup-rounds`, `--no-aa` and `--no-heap` on the command line.                   |
+| `sampleTime`                           | The time of one variant's round in milliseconds, as `--sample-ms`.                                 |
+| `filter`                               | A `RegExp` that selects groups by name. `measureGroups()` only.                                    |
+| `onGroup`                              | A function that's called with each `GroupResult` as soon as it's measured. `measureGroups()` only. |
+| `runtime`                              | The `Runtime` that times the variants, in place of a `NodeRuntime`.                                |
+
+This script prints each table as `main()` does, and then reads a result:
+
+```ts
+import { formatGroup, measureGroups, type Group } from 'benk';
+
+const numbers = Array.from({ length: 1000 }, (_, i) => Math.sin(i));
+
+const groups: Group[] = [
+    {
+        name: 'sum 1,000 numbers',
+        variants: [
+            {
+                name: 'reduce',
+                run: () => numbers.reduce((sum, x) => sum + x, 0)
+            }
+        ]
+    }
+];
+
+const result = await measureGroups(groups, {
+    rounds: 51,
+    onGroup: group => {
+        console.log(formatGroup(group).join('\n'));
+    }
+});
+
+// The median round of the first variant, in nanoseconds per call
+console.log(result.groups[0].variants[0].summary.median);
+```
+
+`main()` takes other options: `args` in place of the command line's
+arguments, `runtime`, and `print` and `write` in place of the console and
+stdout.
+
+All three throw:
+
+- a `RangeError` for an option that's out of its range;
+- a `TypeError` for a group without variants, or with two of the same name;
+- an `Error` if a variant throws, with the variant's error as its `cause`.
+
+### Runtimes
+
+benk runs on Node only. Its measuring isn't particular to Node, though: it
+times variants through a `Runtime`, which creates the timer loops and counts
+heap bytes. `NodeRuntime` creates the loops with `new Function`, and counts
+heap bytes with `node:v8`, which Workers and browsers don't allow. The
+`runtime` option takes another `Runtime`, such as one with a fake clock for
+a test.
 
 ## The cost of the async loop
 
@@ -235,10 +364,10 @@ them with that cost included. [`benchmarks/loops.ts`](benchmarks/loops.ts)
 calls the same work from each loop. On an Apple M2 Pro with Node 26.13.0, in
 3 runs, with a load average near 4 from other processes:
 
-| Work per call | sync loop | async function | resolved promise |
-|---|---|---|---|
-| a step of a random number generator | 11.6–11.7 ns | 34.8–35.8 ns | 36.5–37.3 ns |
-| 400 such steps | 4.52–4.54 µs | 4.53–4.58 µs | 4.58–4.62 µs |
+| Work per call                       | sync loop    | async function | resolved promise |
+| ----------------------------------- | ------------ | -------------- | ---------------- |
+| a step of a random number generator | 11.6–11.7 ns | 34.8–35.8 ns   | 36.5–37.3 ns     |
+| 400 such steps                      | 4.52–4.54 µs | 4.53–4.58 µs   | 4.58–4.62 µs     |
 
 These are the fastest rounds. The await costs about 24 ns a call: three
 times the sync loop's time for a call of a few nanoseconds, and within the
@@ -288,6 +417,7 @@ They record `'entry script from TypeScript source'` when the process's entry
 script is TypeScript, as a benchmark that `node bench.ts` runs is, whose
 types Node strips the same way, also with benk's bundle. The modules that
 the script imports aren't recorded.
+
 To time typed arrays without a detached buffer in Node 26, load the
 benchmark and the code that it times from a bundle: in this repository,
 `yarn build` writes benk's, and
@@ -306,17 +436,9 @@ benk keeps these in view rather than out of the results:
   sum of `examples/numbers.ts` took 1.41 µs over its one constant
   `Float64Array`, and 0.84 µs over 2 arrays in turn, in a plain loop, with
   no buffer detached, in Node 26.13.0. In Node 27.0.0-alpha, 2 arrays in
-  turn took 0.99 µs in one run and 1.41 µs in others. A variant that passes one of a few inputs in turn
-  times the call more as a caller with varying data runs it.
-
-## Runtimes
-
-The core, in `source/core/`, runs on any JavaScript runtime: it times
-variants through a `Runtime`, which creates timer loops and counts heap
-bytes. `NodeRuntime` creates them with `new Function`, and counts heap bytes
-with `node:v8`, which Workers and browsers don't allow. oxlint keeps Node's
-modules out of the core. `measureGroup()` and `measureGroups()` take a
-`runtime` option, which the tests use with a fake clock and heap.
+  turn took 0.99 µs in one run and 1.41 µs in others. A variant that passes
+  one of a few inputs in turn times the call more as a caller with varying
+  data runs it.
 
 ## Planned
 
@@ -339,6 +461,9 @@ Not built yet:
 
 ## Development
 
-Run the checks from the repository's root: `yarn format:check`,
-`yarn lint:check`, `yarn typecheck`, `yarn test`, and `yarn test:dist`, which
-builds the package and runs the tests on the bundle.
+[`AGENTS.md`](AGENTS.md) has the guidelines for changing benk, and the checks
+to run.
+
+## License
+
+[MIT](LICENSE)
