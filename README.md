@@ -437,10 +437,16 @@ node --no-strip-types --import @snovader/node-hooks/register examples/numbers.ts
 The example's constant `Float64Array` sum then took 1.41 µs from benk's
 source, rather than 4.28–4.34 µs with Node's stripping, and
 `--trace-protector-invalidation` printed nothing. These are the fastest
-rounds of 3 runs each, on an Apple M2 Pro with Node 26.13.0. The process
-state still records `'benk from TypeScript source'` and
-`'entry script from TypeScript source'`, as these name where the code came
-from, not what stripped its types.
+rounds of 3 runs each, on an Apple M2 Pro with Node 26.13.0.
+
+With `--no-strip-types`, the process state adds
+`"Node's type stripping off"` to the two entries above. Node then strips no
+module's types, not even those of the modules that the entry script
+imports, which the other entries don't see. The other two still name where
+the code came from, not what stripped its types. Without
+`--no-strip-types`, the hook strips the types all the same. benk can't see
+whether the hook or Node stripped a module, though, and records nothing
+more.
 
 ## Known confounds
 
