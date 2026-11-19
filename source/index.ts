@@ -17,7 +17,7 @@ export {
 export { rotation } from './core/rotation.ts';
 export { medianInterval, summarize } from './core/statistics.ts';
 export { main, parseOptions } from './node/cli.ts';
-export { NodeRuntime } from './node/runtime.ts';
+export { detachArrayBuffer, NodeRuntime } from './node/runtime.ts';
 export type { MeasureOptions, RunOptions } from './core/measure.ts';
 export type { LeadChoice, LeadInput } from './core/lead.ts';
 export type { CommandOptions, MainOptions } from './node/cli.ts';

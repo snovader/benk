@@ -71,6 +71,7 @@ with a variant that sets up input for each call.
 | `--json <path>` | | Writes the results as JSON to a file, or to stdout for `-`, when the tables go to stderr. |
 | `--no-aa` | | Leaves out the A/A copies. A group's `aa` overrides it. |
 | `--no-heap` | | Leaves out the count of heap bytes. |
+| `--detach-array-buffer` | | Detaches an ArrayBuffer before the run, as the section on detached buffers describes. |
 
 `measureGroups()` and `measureGroup()` take the same options as an object,
 for scripts that print or store results their own way, and return the
@@ -127,7 +128,7 @@ The first variant is the reference, which ratios compare with.
 ## What the table reports
 
 This is the sorting group of `examples/numbers.ts`, on an Apple M2 Pro with Node
-26.13.0:
+26.13.0, with benk loaded from its source:
 
 ```
 sort 1,000 numbers: 36 rounds, by the median round (a call of 1 µs or more)
@@ -196,7 +197,7 @@ varies.
   "date": "2026-11-19T01:24:00.501Z",
   "runtime": { "name": "Node", "version": "v26.13.0", "engine": "V8 14.6.202.34-node.40",
                "platform": "darwin", "arch": "arm64", "cpu": "Apple M2 Pro", "flags": [],
-               "conditions": ["detached ArrayBuffer"] },
+               "processState": ["benk from TypeScript source"] },
   "options": { "rounds": 31, "warmupRounds": 10, "sampleTime": 1, "aa": true, "heap": true, "filter": "" },
   "groups": [{
     "name": "sum 1,000 numbers", "lead": "median", "leadReason": "long calls", "rounds": 32,
@@ -212,8 +213,9 @@ varies.
 ```
 
 `schema` changes when a field does. The runtime's flags include
-`NODE_OPTIONS`, as V8's flags change what's measured, and its conditions
-are what benk set in the process, as the next section describes.
+`NODE_OPTIONS`, as V8's flags change what's measured, and its process state
+is what benk knows of the process that changes what's measured, as the next
+section describes.
 
 ## The cost of the async loop
 
@@ -234,34 +236,61 @@ A/A pair's noise for a call of a few microseconds.
 
 ## Typed arrays and detached buffers
 
-Once any `ArrayBuffer` in a process has been detached, as by `transfer()`,
-or by growing a `WebAssembly.Memory` whose `buffer` was read, V8's
-optimized code checks every typed-array access for a detached buffer, for
-the rest of the process. Node's type stripping grows its WebAssembly memory
-when it strips a large enough TypeScript file, so whether a process has
-detached a buffer depends on what it loaded.
+Once any `ArrayBuffer` in a process has been detached, V8's optimized code
+checks typed-array accesses for a detached buffer, for the rest of the
+process. It slows code that V8 compiled with a typed array as a constant,
+as when a variant's call passes the same array every time. A sum of a
+1,000-element `Float64Array` in `examples/numbers.ts`, which does, took:
 
-So benk detaches one as it's imported, and times typed-array code alike
-whether a benchmark, or benk itself, loads as TypeScript or as a JavaScript
-bundle. The run's description says so, as do the JSON's
-`runtime.conditions`. In `examples/numbers.ts`, a sum of a 1,000-element
-`Float64Array` took 4.39–4.42 µs with benk's source and 1.41–1.45 µs with
-its bundle before benk did this, and 4.36–4.40 µs with either after, while
-a `number[]` sum took 1.41–1.44 µs throughout.
+| benk loaded from | by default | with `--detach-array-buffer` |
+|---|---|---|
+| its bundle | 1.41 µs | 4.29 µs |
+| its TypeScript source | 4.28 µs | 4.28–4.33 µs |
 
-Typed-array code is slower in such a process than in one that never
-detaches a buffer, and benk can't time it as the latter runs it.
+These are the fastest rounds of 2 runs each, on an Apple M2 Pro with Node
+26.13.0; a `number[]` sum took 1.41 µs in each. In a plain loop, the same
+sum of 2 arrays in turn took 0.84 µs whether a buffer was detached or not.
+
+**benk detaches no buffer by default**, so that typed-array code is timed
+as it runs in a process that never detaches one. `--detach-array-buffer`,
+or `detachArrayBuffer()`, detaches one before the run, to time it as it
+runs in a process that does. Of everyday operations, these detached one:
+
+- reading a `fetch`, `Response` or `Blob` body, or enqueuing into a byte
+  stream;
+- `transfer()`, and growing a `WebAssembly.Memory` whose `buffer` was read;
+- Node's type stripping, when it strips a large enough TypeScript file: an
+  8 KB module did, and 2 KB ones didn't.
+
+These didn't: Node's startup, `fs.readFile`, zlib, `crypto.subtle`,
+`Readable.toWeb` of a file stream, and `structuredClone` without a
+transfer. So a server that reads `fetch` bodies runs in the detached state,
+and a tool that only reads files doesn't.
+
+The type stripping means that a run that loads enough TypeScript from
+source, as benk's own source is, can't time the intact state: load the
+benchmark and the code it times from a bundle, as the published benk is.
+In this repository, `yarn build` writes the bundle, and
+`node --conditions=benk-dist examples/numbers.ts` runs the example on it.
+
+A run's description and the JSON's `runtime.processState` record what benk
+knows: `'detached ArrayBuffer'` when it detached one, and
+`'benk from TypeScript source'` when it was loaded from its source. benk
+can't see whether other code in the process detached a buffer, as no API
+reads V8's state.
 
 ## Known confounds
 
 benk keeps these in view rather than out of the results:
 
-- **Inlining into the timer loop.** Once V8 optimizes a timer loop, it
-  inlines the variant's call into it, which can make the call slower or
-  faster than compiled alone: the same sum took 0.80 µs called from a loop
-  that didn't inline it, and 1.45 µs inlined. Every variant is timed this
-  way, but a function's time in a benchmark can differ from its time in a
-  caller that doesn't inline it.
+- **Constant inputs.** Once V8 optimizes a timer loop, it inlines the
+  variant's call into it, and with it an input that the call passes the
+  same every time, as a constant. V8 can then compile the call for that
+  input, which can make it slower or faster than with inputs that vary: the
+  sum of `examples/numbers.ts` took 1.41 µs over its one constant
+  `Float64Array`, and 0.84 µs over 2 arrays in turn, in a plain loop, with
+  no buffer detached. A variant that passes one of a few inputs in turn
+  times the call more as a caller with varying data runs it.
 
 ## Runtimes
 

@@ -97,11 +97,12 @@ intent, not a requirement to preserve every detail.
   creates timer loops and counts heap bytes. What's particular to Node, such
   as `new Function` and `node:v8`, stays in `source/node`. oxlint rejects
   imports of Node's modules in the core.
-- `source/node/runtime.ts` detaches an ArrayBuffer as it's imported, so
-  that typed-array code is timed alike however the process loaded its code,
-  and records it in the runtime's `conditions`. A runtime that sets
-  anything else in the process that changes what's timed records it there
-  too.
+- A runtime records what it knows of the process that changes what's
+  timed in its description's `processState`, as `source/node/runtime.ts`
+  records an ArrayBuffer that `detachArrayBuffer()` detached, which benk
+  does only when asked, and benk's own loading from TypeScript source,
+  whose type stripping detaches one. Record facts that the runtime knows,
+  rather than states that it infers.
 - `source/index.ts` is the Node entry point, which passes Node's runtime to
   the core. A runtime for browsers or Workers would be an entry point of its
   own.

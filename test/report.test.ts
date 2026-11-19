@@ -94,7 +94,7 @@ describe('describeRun', () => {
             arch: 'x64',
             cpu: 'A CPU',
             flags: ['--max-inlined-bytecode-size-cumulative=3000'],
-            conditions: ['detached ArrayBuffer']
+            processState: ['detached ArrayBuffer']
         };
         const options = {
             rounds: 31,
@@ -108,7 +108,7 @@ describe('describeRun', () => {
 
         assert.equal(
             first,
-            'Node v26.0.0, V8 14.6, linux x64, A CPU, with --max-inlined-bytecode-size-cumulative=3000, in a process with a detached ArrayBuffer.'
+            'Node v26.0.0, V8 14.6, linux x64, A CPU, with --max-inlined-bytecode-size-cumulative=3000. Process state: detached ArrayBuffer.'
         );
         assert.match(
             second,

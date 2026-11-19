@@ -69,7 +69,7 @@ export class FakeRuntime implements Runtime {
         arch: 'none',
         cpu: 'none',
         flags: [],
-        conditions: []
+        processState: []
     };
     readonly clock = new FakeClock();
     readonly fakeHeap: FakeHeap;

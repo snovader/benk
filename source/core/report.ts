@@ -40,13 +40,13 @@ export function describeRun(
 ): string {
     const flags =
         runtime.flags.length > 0 ? `, with ${runtime.flags.join(' ')}` : '';
-    const conditions =
-        runtime.conditions.length > 0
-            ? `, in a process with a ${runtime.conditions.join(', ')}`
+    const state =
+        runtime.processState.length > 0
+            ? ` Process state: ${runtime.processState.join(', ')}.`
             : '';
 
     return [
-        `${runtime.name} ${runtime.version}, ${runtime.engine}, ${runtime.platform} ${runtime.arch}, ${runtime.cpu}${flags}${conditions}.`,
+        `${runtime.name} ${runtime.version}, ${runtime.engine}, ${runtime.platform} ${runtime.arch}, ${runtime.cpu}${flags}.${state}`,
         `Per call, of at least ${rounds} interleaved rounds of ${sampleTime} ms per variant after ${warmupRounds} warm-up rounds, in an order that rotates each variant through each position:`,
         "the fastest and median round, the interquartile range as a share of the median, the ratio to the group's first variant by the statistic that the group leads with, a 95% interval of the median of the per-round ratios" +
             (heap ? ', and the bytes allocated on the heap.' : '.')

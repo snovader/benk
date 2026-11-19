@@ -1,7 +1,6 @@
 // What benk needs from Node to time variants: timer loops that `new Function`
-// compiles, V8's heap statistics, and a process in which an ArrayBuffer has
-// been detached. Workers and browsers that forbid `new Function`, and
-// runtimes without `node:v8`, need a runtime of their own.
+// compiles, and V8's heap statistics. Workers and browsers that forbid
+// `new Function`, and runtimes without `node:v8`, need a runtime of their own.
 import { cpus } from 'node:os';
 import { GCProfiler, getHeapStatistics, type GCProfilerResult } from 'node:v8';
 import type {
@@ -12,19 +11,42 @@ import type {
     Timer
 } from '#source/core/types';
 
-/**
- * Once an ArrayBuffer has been detached in a process, V8's optimized code
- * checks each typed-array access for a detached buffer, and keeps checking:
- * in one test, a sum of a `Float64Array` of 1,000 numbers then took 4.5 µs
- * rather than 1.47. Whether a buffer has been detached depends on what the
- * process loaded: growing a WebAssembly memory whose `buffer` was read
- * detaches it, and Node's type stripping does that when it strips a large
- * enough TypeScript file, as benk's own source is. So benk detaches one as
- * it's imported, and times typed-array code alike whether a benchmark, or
- * benk, is loaded as TypeScript or as a JavaScript bundle.
- */
 const DETACHED_ARRAY_BUFFER = 'detached ArrayBuffer';
-new ArrayBuffer(0).transfer();
+
+const TYPESCRIPT_SOURCE = 'benk from TypeScript source';
+
+/**
+ * Whether benk was loaded from its TypeScript source, rather than from its
+ * bundle. Node's type stripping of its source detaches an ArrayBuffer, as
+ * `detachArrayBuffer()` describes, so the runtime's process state records
+ * it.
+ */
+const fromSource = import.meta.url.endsWith('.ts');
+
+/** Whether `detachArrayBuffer()` has detached one in the process */
+let detached = false;
+
+/**
+ * Detaches an ArrayBuffer, as a process does that reads a `fetch` or `Blob`
+ * body, which V8 can't undo. From then on, V8's optimized code checks
+ * typed-array accesses for a detached buffer, which can slow code that it
+ * compiled with a typed array as a constant: in one test, a sum of a
+ * `Float64Array` of 1,000 numbers that a variant passed as a constant took
+ * 3–4.5 µs rather than 1.41, while the same sum of arrays that varied
+ * between calls took 0.84 µs either way. A run then records
+ * `'detached ArrayBuffer'` in its runtime's process state.
+ *
+ * benk detaches none unless asked, but other code in the process can:
+ * Node's type stripping does when it strips a large enough TypeScript file,
+ * as benk's own source is, by growing its WebAssembly memory. So a run that
+ * loads TypeScript from source can't time the intact state. benk records
+ * `'benk from TypeScript source'` when it was itself, but can't see what
+ * other code did.
+ */
+export function detachArrayBuffer(): void {
+    new ArrayBuffer(0).transfer();
+    detached = true;
+}
 
 type AsyncFunctionConstructor = new (...source: string[]) => AsyncTimer;
 
@@ -44,8 +66,12 @@ let timers = 0;
  * unique source, and counts heap bytes with V8's heap statistics
  */
 export class NodeRuntime implements Runtime {
-    readonly description: RuntimeDescription = describeNode();
     readonly heap: HeapMeter = { start: startCounting };
+
+    /** Node's version and flags, and what benk set in the process */
+    get description(): RuntimeDescription {
+        return describeNode();
+    }
 
     createTimer(): Timer {
         // oxlint-disable-next-line typescript/no-implied-eval -- A timer loop of its own for each variant
@@ -122,6 +148,9 @@ function describeNode(): RuntimeDescription {
             ...process.execArgv,
             ...(nodeOptions === '' ? [] : [`NODE_OPTIONS=${nodeOptions}`])
         ],
-        conditions: [DETACHED_ARRAY_BUFFER]
+        processState: [
+            ...(fromSource ? [TYPESCRIPT_SOURCE] : []),
+            ...(detached ? [DETACHED_ARRAY_BUFFER] : [])
+        ]
     };
 }

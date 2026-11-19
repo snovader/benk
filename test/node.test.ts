@@ -2,9 +2,12 @@
 // Times vary, so these check only what doesn't.
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { measureGroup, NodeRuntime } from 'benk';
+import { main, measureGroup, NodeRuntime } from 'benk';
 
 const QUICK = { sampleTime: 0.2, warmupRounds: 2, rounds: 6 };
+
+/** What the runtime records of benk's own loading: its source, or its bundle */
+const LOADED = import.meta.resolve('benk').endsWith('.ts') ? ['benk from TypeScript source'] : [];
 
 describe('NodeRuntime', () => {
     it('describes Node and V8', () => {
@@ -14,7 +17,8 @@ describe('NodeRuntime', () => {
         assert.equal(description.version, process.version);
         assert.equal(description.engine, `V8 ${process.versions.v8}`);
         assert.ok(description.flags.every(flag => typeof flag === 'string'));
-        assert.deepEqual(description.conditions, ['detached ArrayBuffer']);
+        // Whatever else the process detached: benk itself detached nothing
+        assert.deepEqual(description.processState, LOADED);
     });
 
     it('times sync and async calls', async () => {
@@ -61,5 +65,32 @@ describe('NodeRuntime', () => {
         );
         // The elements, of 4 or 8 bytes, and the array
         assert.ok(arrays !== null && arrays > 4000 && arrays < 8400, `${arrays} B`);
+    });
+
+    // Last, as the process can't undo it
+    it('records the ArrayBuffer that main() detaches when asked', async () => {
+        const lines: string[] = [];
+        const result = await main([{ name: 'calls', variants: [{ name: 'a', run: () => 1 }] }], {
+            args: [
+                '--detach-array-buffer',
+                '--sample-ms',
+                '0.2',
+                '--warmup-rounds',
+                '2',
+                '--rounds',
+                '2',
+                '--no-heap'
+            ],
+            runtime: new NodeRuntime(),
+            print: line => lines.push(line)
+        });
+
+        const state = [...LOADED, 'detached ArrayBuffer'];
+        assert.deepEqual(result.runtime.processState, state);
+        assert.deepEqual(new NodeRuntime().description.processState, state);
+        assert.ok(
+            lines[0].split('\n')[0].endsWith(` Process state: ${state.join(', ')}.`),
+            lines[0]
+        );
     });
 });
