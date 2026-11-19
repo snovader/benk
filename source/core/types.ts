@@ -94,6 +94,11 @@ export interface RuntimeDescription {
     readonly cpu: string;
     /** The flags that the runtime started with, such as V8's */
     readonly flags: readonly string[];
+    /**
+     * What the runtime set in the process to time every run's code alike,
+     * such as Node's `'detached ArrayBuffer'`
+     */
+    readonly conditions: readonly string[];
 }
 
 /**

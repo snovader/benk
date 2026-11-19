@@ -14,6 +14,7 @@ describe('NodeRuntime', () => {
         assert.equal(description.version, process.version);
         assert.equal(description.engine, `V8 ${process.versions.v8}`);
         assert.ok(description.flags.every(flag => typeof flag === 'string'));
+        assert.deepEqual(description.conditions, ['detached ArrayBuffer']);
     });
 
     it('times sync and async calls', async () => {

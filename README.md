@@ -195,7 +195,8 @@ varies.
   "schema": 1,
   "date": "2026-11-19T01:24:00.501Z",
   "runtime": { "name": "Node", "version": "v26.13.0", "engine": "V8 14.6.202.34-node.40",
-               "platform": "darwin", "arch": "arm64", "cpu": "Apple M2 Pro", "flags": [] },
+               "platform": "darwin", "arch": "arm64", "cpu": "Apple M2 Pro", "flags": [],
+               "conditions": ["detached ArrayBuffer"] },
   "options": { "rounds": 31, "warmupRounds": 10, "sampleTime": 1, "aa": true, "heap": true, "filter": "" },
   "groups": [{
     "name": "sum 1,000 numbers", "lead": "median", "leadReason": "long calls", "rounds": 32,
@@ -211,7 +212,8 @@ varies.
 ```
 
 `schema` changes when a field does. The runtime's flags include
-`NODE_OPTIONS`, as V8's flags change what's measured.
+`NODE_OPTIONS`, as V8's flags change what's measured, and its conditions
+are what benk set in the process, as the next section describes.
 
 ## The cost of the async loop
 
@@ -230,21 +232,30 @@ These are the fastest rounds. The await costs about 24 ns a call: three
 times the sync loop's time for a call of a few nanoseconds, and within the
 A/A pair's noise for a call of a few microseconds.
 
+## Typed arrays and detached buffers
+
+Once any `ArrayBuffer` in a process has been detached, as by `transfer()`,
+or by growing a `WebAssembly.Memory` whose `buffer` was read, V8's
+optimized code checks every typed-array access for a detached buffer, for
+the rest of the process. Node's type stripping grows its WebAssembly memory
+when it strips a large enough TypeScript file, so whether a process has
+detached a buffer depends on what it loaded.
+
+So benk detaches one as it's imported, and times typed-array code alike
+whether a benchmark, or benk itself, loads as TypeScript or as a JavaScript
+bundle. The run's description says so, as do the JSON's
+`runtime.conditions`. In `examples/numbers.ts`, a sum of a 1,000-element
+`Float64Array` took 4.39–4.42 µs with benk's source and 1.41–1.45 µs with
+its bundle before benk did this, and 4.36–4.40 µs with either after, while
+a `number[]` sum took 1.41–1.44 µs throughout.
+
+Typed-array code is slower in such a process than in one that never
+detaches a buffer, and benk can't time it as the latter runs it.
+
 ## Known confounds
 
 benk keeps these in view rather than out of the results:
 
-- **Typed arrays after a detached `ArrayBuffer`.** Once any `ArrayBuffer`
-  in the process has been detached, as by `transfer()`, or by growing a
-  `WebAssembly.Memory` whose `buffer` was read, V8's optimized code checks
-  every typed-array access for a detached buffer. Node's type stripping
-  grows its WebAssembly memory when it strips a large enough TypeScript
-  file. In one test, a sum of a 1,000-element `Float64Array` took 1.47 µs in
-  a plain JavaScript process and 4.5 µs after importing an 8 KB TypeScript
-  module, while a `number[]` sum took 1.44 µs in both. So typed-array code
-  can time 3× slower when a benchmark, or benk from its source, loads enough
-  TypeScript, and faster from a bundle. Compare runs that load code the same
-  way.
 - **Inlining into the timer loop.** Once V8 optimizes a timer loop, it
   inlines the variant's call into it, which can make the call slower or
   faster than compiled alone: the same sum took 0.80 µs called from a loop
