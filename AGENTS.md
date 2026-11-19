@@ -158,7 +158,17 @@ intent, not a requirement to preserve every detail.
   built-in only when every one of them has it.
 - Node runs the TypeScript source as it is, by stripping its types, so use
   only erasable syntax, and import relative modules with their `.ts`
-  extensions. Import a module in a parent directory by a private path of
+  extensions.
+- The tests, examples and benchmarks run with
+  `node --no-strip-types --import @snovader/node-hooks/register`, whose
+  hook strips the types with oxc. Node's own stripping of a module as
+  large as benk's source detaches an ArrayBuffer, which in Node 26 slows
+  code that reads typed arrays for the rest of the process, as the README
+  measures. `--no-strip-types` came in Node 24.12, so developing benk needs
+  Node 24.12 or later, although the published bundle runs on what `engines`
+  names. The tests add `--enable-source-maps`, so that a stack trace points
+  at the TypeScript lines. `prepack`'s `node scripts/require-yarn.ts` keeps
+  Node's own stripping. Import a module in a parent directory by a private path of
   package.json's `imports`, as `#source/core/types`, rather than by `../`,
   and the entry point by its name, `benk`. oxlint checks each of these.
 - Name TypeScript and JavaScript files and their folders in kebab-case, as

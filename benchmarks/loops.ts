@@ -1,6 +1,7 @@
 // What the awaiting timer loop of async variants costs per call, against the
 // sync loop: the same work, called from each loop. Run it with
-// `node benchmarks/loops.ts`.
+// `node --no-strip-types --import @snovader/node-hooks/register
+// benchmarks/loops.ts`.
 import { bench, type Variant } from 'benk';
 
 /** A step of a linear congruential generator: a few nanoseconds of work */

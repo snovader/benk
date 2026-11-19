@@ -1,9 +1,10 @@
 // An example benchmark: sums and sorts of 1,000 numbers. Run it with
-// `node examples/numbers.ts`, and add `--json results.json` to write the
-// results as JSON too, or `--json -` to write them to stdout. In Node 26,
-// run it on benk's bundle, with `yarn build` and `--conditions=benk-dist`,
-// to time typed arrays in a process that hasn't detached an ArrayBuffer,
-// as the README describes.
+// `node --no-strip-types --import @snovader/node-hooks/register
+// examples/numbers.ts`, and add `--json results.json` to write the results
+// as JSON too, or `--json -` to write them to stdout. The hook strips the
+// types of benk's source with oxc, which detaches no ArrayBuffer, where
+// Node's own stripping would, in Node 26, slow the typed arrays' sum, as
+// the README describes.
 import { bench, type SyncVariant } from 'benk';
 
 const SIZE = 1000;
