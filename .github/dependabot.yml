@@ -14,8 +14,10 @@ updates:
     groups:
       # oxlint requires a version of oxlint-tsgolint, and oxfmt is released
       # with it
+      # @snovader/oxc-config names oxfmt's and oxlint's versions as peers
       "oxc":
         patterns:
           - "oxfmt"
           - "oxlint"
           - "oxlint-tsgolint"
+          - "@snovader/*"

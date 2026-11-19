@@ -213,6 +213,16 @@ intent, not a requirement to preserve every detail.
   indentation, single quotes, semicolons, no trailing commas, and contextual
   line widths. Intentional whitespace and readable structure still require
   judgment after automatic formatting.
+- The configurations extend the shared ones of `@snovader/tsconfig` and
+  `@snovader/oxc-config`, from the repository `snovader/tooling`. benk's
+  own files keep only what's particular to benk: the paths that the tools
+  ignore or check, the name that benk imports itself by, its restricted
+  imports, and the rules that it sets or turns off for reasons of its own,
+  each with its comment. Change a setting that suits any project in the
+  shared package instead.
+- `@snovader/oxc-config` loads only on Node 26 or later, so the format and
+  lint checks need Node 26, while the tests run on each version that
+  `engines` names.
 
 ## Repository commands
 
