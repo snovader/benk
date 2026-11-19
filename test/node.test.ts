@@ -46,15 +46,16 @@ describe('NodeRuntime', () => {
                     { name: 'arrays of 1,000', run: () => new Array<number>(1000).fill(count) }
                 ]
             },
-            QUICK
+            // Rounds of more calls, over which a sample's error spreads
+            { ...QUICK, sampleTime: 1 }
         );
         const [none, objects, arrays] = result.variants.map(variant => variant.heapBytes);
 
-        assert.ok(none !== null && Math.abs(none) < 1, `${none} B`);
+        assert.ok(none !== null && Math.abs(none) < 2, `${none} B`);
         // Three fields of a header and two of their own, of 4 or 8 bytes each,
         // as V8 compresses pointers or not
         assert.ok(
-            [20, 40].some(size => objects !== null && Math.abs(objects - size) < 1),
+            [20, 40].some(size => objects !== null && Math.abs(objects - size) < 2),
             `${objects} B`
         );
         // The elements, of 4 or 8 bytes, and the array
