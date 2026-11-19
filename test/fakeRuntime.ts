@@ -13,10 +13,24 @@ import type {
 
 export class FakeClock {
     #nanoseconds = 0;
+    readonly #tick: number;
+
+    /**
+     * `tick` is the nanoseconds between the times that the clock reads, as
+     * a coarse clock's, or 0 for a clock that reads every nanosecond spent
+     */
+    constructor(tick = 0) {
+        this.#tick = tick;
+    }
 
     /** The time in milliseconds, as `performance.now()` gives it */
     now(): number {
-        return this.#nanoseconds / 1e6;
+        const read =
+            this.#tick > 0
+                ? Math.floor(this.#nanoseconds / this.#tick) * this.#tick
+                : this.#nanoseconds;
+
+        return read / 1e6;
     }
 
     spend(nanoseconds: number): void {
@@ -58,6 +72,8 @@ export interface FakeRuntimeOptions {
     readonly heapOverhead?: number;
     /** What the heap samples count wrongly, in turn. None by default. */
     readonly heapErrors?: readonly number[];
+    /** The nanoseconds between the times that the clock reads. 0 by default. */
+    readonly clockTick?: number;
 }
 
 export class FakeRuntime implements Runtime {
@@ -71,7 +87,7 @@ export class FakeRuntime implements Runtime {
         flags: [],
         processState: []
     };
-    readonly clock = new FakeClock();
+    readonly clock: FakeClock;
     readonly fakeHeap: FakeHeap;
     readonly heap: HeapMeter | undefined;
     /** The last result of the last loop */
@@ -80,8 +96,10 @@ export class FakeRuntime implements Runtime {
     constructor({
         heap = true,
         heapOverhead = 1000,
-        heapErrors = [0]
+        heapErrors = [0],
+        clockTick = 0
     }: FakeRuntimeOptions = {}) {
+        this.clock = new FakeClock(clockTick);
         this.fakeHeap = new FakeHeap(heapOverhead, heapErrors);
         this.heap = heap ? this.fakeHeap : undefined;
     }

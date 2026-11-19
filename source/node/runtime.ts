@@ -23,10 +23,22 @@ const TYPESCRIPT_SOURCE = 'benk from TypeScript source';
  * that it compiled with a typed array as a constant: in one test, a sum of
  * a `Float64Array` of 1,000 numbers that a variant passed as a constant
  * took 4.28 µs rather than 1.41. V8 15.6 and 15.8 timed it alike either
- * way. So the runtime's process state records it, although it can't see
- * whether other code detached a buffer.
+ * way. So the runtime's process state records it, and a TypeScript entry
+ * script, although it can't see whether other code detached a buffer.
  */
 const fromSource = import.meta.url.endsWith('.ts');
+
+const TYPESCRIPT_ENTRY = 'entry script from TypeScript source';
+
+/**
+ * Whether the process's entry script is TypeScript, as a benchmark that
+ * `node bench.ts` runs is, also with benk's bundle. Node strips its types
+ * as it does those of benk's source, which detaches an ArrayBuffer when
+ * the file is large enough. The modules that it imports aren't seen.
+ */
+function entryFromSource(): boolean {
+    return /\.[cm]?ts$/u.test(process.argv[1] ?? '');
+}
 
 type AsyncFunctionConstructor = new (...source: string[]) => AsyncTimer;
 
@@ -128,6 +140,9 @@ function describeNode(): RuntimeDescription {
             ...process.execArgv,
             ...(nodeOptions === '' ? [] : [`NODE_OPTIONS=${nodeOptions}`])
         ],
-        processState: fromSource ? [TYPESCRIPT_SOURCE] : []
+        processState: [
+            ...(fromSource ? [TYPESCRIPT_SOURCE] : []),
+            ...(entryFromSource() ? [TYPESCRIPT_ENTRY] : [])
+        ]
     };
 }

@@ -99,12 +99,37 @@ export class TimedVariant {
      */
     async calibrate(sampleTime: number): Promise<void> {
         this.#checkResult();
+        await this.#double(sampleTime);
+    }
 
+    /**
+     * Counts the calls again after the warm-up rounds, from the fastest of
+     * their times per call in nanoseconds, since the code that V8 optimized
+     * meanwhile runs several times as fast as the first calls.
+     *
+     * A round shorter than a tick of the runtime's clock reads as no time,
+     * as 3 calls of 20 ns do on a clock of 100 ns ticks. No count of calls
+     * follows from that, so the calls are doubled again instead, now that
+     * they're warm.
+     */
+    async recalibrate(fastest: number, sampleTime: number): Promise<void> {
+        if (fastest > 0) {
+            this.#fit(fastest, sampleTime);
+        } else {
+            await this.#double(sampleTime);
+        }
+    }
+
+    /**
+     * Doubles the calls of a loop until they take a quarter of `sampleTime`,
+     * and counts a round's calls from their time
+     */
+    async #double(sampleTime: number): Promise<void> {
         for (let repetitions = 1; ; repetitions *= 2) {
             const elapsed = await this.#run(repetitions, undefined);
 
             if (elapsed >= sampleTime / 4 || repetitions >= CALIBRATION_CALLS) {
-                this.fit(perCall(elapsed, repetitions), sampleTime);
+                this.#fit(perCall(elapsed, repetitions), sampleTime);
                 return;
             }
         }
@@ -114,7 +139,7 @@ export class TimedVariant {
      * Counts the calls that make a round take about `sampleTime`
      * milliseconds, from a call's time in nanoseconds
      */
-    fit(nanoseconds: number, sampleTime: number): void {
+    #fit(nanoseconds: number, sampleTime: number): void {
         this.#repetitions = Math.max(
             1,
             Math.round((sampleTime * 1e6) / Math.max(nanoseconds, LEAST_TIME))
@@ -167,7 +192,8 @@ export class TimedVariant {
     /**
      * Calls a sync variant once, apart from its timer loop, to check that it
      * doesn't return a promise, as an async function does when its variant
-     * isn't marked `async`
+     * isn't marked `async`. It calls `run` as the loop does, as a function
+     * of its own, so that one that reads `this` fails here as it would there.
      */
     #checkResult(): void {
         const loop = this.#loop;
@@ -177,8 +203,9 @@ export class TimedVariant {
 
         let result: unknown;
         try {
+            const { run } = loop.variant;
             loop.variant.setup?.(1);
-            result = loop.variant.run();
+            result = run();
             loop.variant.teardown?.();
         } catch (error) {
             this.#fail(error);

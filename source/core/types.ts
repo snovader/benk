@@ -9,6 +9,10 @@ export interface SyncVariant {
      * The call that's timed. The last result of each round is kept alive, so
      * that the work can't be eliminated. It mustn't return a promise: an
      * `AsyncVariant` awaits its calls.
+     *
+     * The timer loop calls it as a function of its own, without the variant
+     * as `this`, so that nothing but the call is in the loop. A method that
+     * reads `this` needs binding, or an arrow function around it.
      */
     readonly run: () => unknown;
     readonly async?: false;
@@ -30,6 +34,7 @@ export interface SyncVariant {
  */
 export interface AsyncVariant {
     readonly name: string;
+    /** Called without the variant as `this`, as a `SyncVariant`'s is */
     readonly run: () => PromiseLike<unknown>;
     readonly async: true;
     readonly setup?: (repetitions: number) => void | PromiseLike<void>;

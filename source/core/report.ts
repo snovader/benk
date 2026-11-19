@@ -92,7 +92,19 @@ function formatRow(variant: VariantResult, nameWidth: number): string {
         heapBytes === null ? '–' : formatBytes(heapBytes)
     ];
 
-    return `  ${variant.name.padEnd(nameWidth)}${cells.map((cell, i) => cell.padStart(COLUMNS[i][1])).join('')}`;
+    return `  ${variant.name.padEnd(nameWidth)}${cells.map((cell, i) => padCell(cell, COLUMNS[i][1])).join('')}`;
+}
+
+/** The gap that a cell keeps from the one before it, however wide it is */
+const GAP = ' ';
+
+/**
+ * A cell at the end of its column. One wider than the column, such as the
+ * interval of a ratio under 0.01, takes the room it needs after the gap,
+ * rather than touching the cell before it.
+ */
+function padCell(cell: string, width: number): string {
+    return GAP + cell.padStart(width - GAP.length);
 }
 
 function formatModes({ name, summary }: VariantResult): string[] {
@@ -133,8 +145,16 @@ function formatRatio(ratio: number): string {
     return toSignificant(ratio);
 }
 
-/** Three significant digits, or more for values of 1,000 or more */
+/**
+ * Three significant digits, or more for values of 1,000 or more, and two
+ * decimals for values under 1. Values under 0.1 keep two significant digits,
+ * so that the ratio of a variant much faster than the reference, such as
+ * 0.0042, doesn't round to 0.00.
+ */
 function toSignificant(value: number): string {
+    if (value > 0 && value < 0.1) {
+        return value.toPrecision(2);
+    }
     if (value < 10) {
         return value.toFixed(2);
     }
@@ -147,12 +167,20 @@ function toSignificant(value: number): string {
  * as samples would otherwise take a line each
  */
 export function formatJson(value: unknown): string {
-    return `${JSON.stringify(value, null, 2).replaceAll(NUMBER_ARRAY, joinNumbers)}\n`;
+    return `${JSON.stringify(value, null, 2).replaceAll(STRING_OR_NUMBER_ARRAY, joinNumbers)}\n`;
 }
 
-/** An indented array of numbers, which `JSON.stringify` writes */
-const NUMBER_ARRAY = /\[\s+(-?[\d.e+-]+(?:,\s+-?[\d.e+-]+)*)\s+\]/gu;
+/**
+ * A string, or an indented array of numbers, which `JSON.stringify` writes.
+ * It matches each string whole, so that what looks like an array of numbers
+ * inside one, as in a variant's name, is left as it is.
+ */
+const STRING_OR_NUMBER_ARRAY =
+    /"(?:[^"\\]|\\.)*"|\[\s+(-?[\d.e+-]+(?:,\s+-?[\d.e+-]+)*)\s+\]/gu;
 
-function joinNumbers(_: string, numbers: string): string {
-    return `[${numbers.replaceAll(/,\s+/gu, ', ')}]`;
+/** The numbers of an array on one line, or a string as it was */
+function joinNumbers(match: string, numbers: string | undefined): string {
+    return numbers === undefined
+        ? match
+        : `[${numbers.replaceAll(/,\s+/gu, ', ')}]`;
 }

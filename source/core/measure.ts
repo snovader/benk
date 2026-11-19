@@ -145,9 +145,9 @@ export async function measureGroup(
     }
     if (warmupRounds > 0) {
         const warm = await timeRounds(variants, orders, warmupRounds);
-        variants.forEach((variant, i) => {
-            variant.fit(Math.min(...warm.samples[i]), sampleTime);
-        });
+        for (const [i, variant] of variants.entries()) {
+            await variant.recalibrate(Math.min(...warm.samples[i]), sampleTime);
+        }
     }
 
     const { samples, positions } = await timeRounds(variants, orders, rounds);

@@ -7,7 +7,11 @@ import { main, measureGroup, NodeRuntime } from 'benk';
 const QUICK = { sampleTime: 0.2, warmupRounds: 2, rounds: 6 };
 
 /** What the runtime records of benk's own loading: its source, or its bundle */
-const LOADED = import.meta.resolve('benk').endsWith('.ts') ? ['benk from TypeScript source'] : [];
+const LOADED = [
+    ...(import.meta.resolve('benk').endsWith('.ts') ? ['benk from TypeScript source'] : []),
+    // Node's test runner runs this file as the entry script of a process
+    'entry script from TypeScript source'
+];
 
 describe('NodeRuntime', () => {
     it('describes Node and V8', () => {

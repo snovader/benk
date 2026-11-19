@@ -75,6 +75,16 @@ describe('formatGroup', () => {
         ]);
     });
 
+    it('keeps two digits of a ratio far below 1, and a gap before a cell wider than its column', () => {
+        const fast = variant('fast', 'variant', steady, {
+            ratio: 0.00042,
+            interval: [0.00039, 0.00046]
+        });
+        const row = formatGroup({ ...group, variants: [group.variants[0], fast] }).at(-1);
+
+        assert.match(row ?? '', /% 0\.00042× 0\.00039–0\.00046 +0 B$/u);
+    });
+
     it('names the median round when the group leads with it', () => {
         const [, title] = formatGroup({ ...group, lead: 'median', leadReason: 'allocating calls' });
         assert.equal(
@@ -121,8 +131,18 @@ describe('describeRun', () => {
 describe('formatting', () => {
     it('writes times to three significant digits in a unit that fits', () => {
         assert.deepEqual(
-            [0.5, 61.23, 999.4, 1234, 12_345, 123_456, 12_345_678, 2e9].map(formatTime),
-            ['0.50 ns', '61.2 ns', '999 ns', '1.23 µs', '12.3 µs', '123 µs', '12.3 ms', '2.00 s']
+            [0.0042, 0.5, 61.23, 999.4, 1234, 12_345, 123_456, 12_345_678, 2e9].map(formatTime),
+            [
+                '0.0042 ns',
+                '0.50 ns',
+                '61.2 ns',
+                '999 ns',
+                '1.23 µs',
+                '12.3 µs',
+                '123 µs',
+                '12.3 ms',
+                '2.00 s'
+            ]
         );
     });
 
@@ -135,6 +155,8 @@ describe('formatting', () => {
             samples: [1, 2.5, -3e-7],
             nested: { positions: [0, 1] },
             names: ['a', 'b'],
+            // A string that holds what looks like an array of numbers
+            name: 'at "[ 1, 2 ]"',
             empty: []
         };
         const json = formatJson(value);

@@ -68,7 +68,7 @@ with a variant that sets up input for each call.
 | `--warmup-rounds <n>` | 10 | Rounds before the timed ones, after which each variant's calls per round are counted again. |
 | `--sample-ms <ms>` | 1 | The time of one variant's round. |
 | `--filter <regex>` | | Measures only the groups whose name matches. |
-| `--json <path>` | | Writes the results as JSON to a file, or to stdout for `-`, when the tables go to stderr. |
+| `--json <path>` | | Writes the results as JSON to a file, or to stdout for `-`, when the tables go to stderr. benk checks that it can write to the file's directory before it measures. |
 | `--no-aa` | | Leaves out the A/A copies. A group's `aa` overrides it. |
 | `--no-heap` | | Leaves out the count of heap bytes. |
 
@@ -88,7 +88,9 @@ interface SyncVariant {
 ```
 
 A round calls `run` repeatedly, for about `--sample-ms`. Its last result is
-kept alive, so that V8 can't eliminate the calls.
+kept alive, so that V8 can't eliminate the calls. The timer loop calls `run`
+as a function of its own, without the variant as `this`, so a method that
+reads `this` needs binding, or an arrow function around it.
 
 `setup` runs before each loop of calls, untimed, and is given the loop's count
 of calls; `teardown` runs after it. A variant whose calls each need fresh
@@ -158,7 +160,8 @@ Per call of each variant:
   rounds' distribution. An interval that leaves out 1 says that the variant
   differed from the reference round by round. The A/A row's shows how wide
   an interval is when nothing differs. It's left out with fewer than 6
-  rounds.
+  rounds. In a group that leads with the fastest round, the ratio compares
+  the fastest rounds instead, and can lie outside this interval.
 - **heap**: the bytes that a call allocated on V8's heap, from V8's heap
   statistics and a `GCProfiler`, less what a sample allocates itself. V8
   allocates the contents of an `ArrayBuffer` of more than 64 bytes outside
@@ -196,7 +199,7 @@ varies.
   "date": "2026-11-19T01:24:00.501Z",
   "runtime": { "name": "Node", "version": "v26.13.0", "engine": "V8 14.6.202.34-node.40",
                "platform": "darwin", "arch": "arm64", "cpu": "Apple M2 Pro", "flags": [],
-               "processState": ["benk from TypeScript source"] },
+               "processState": ["benk from TypeScript source", "entry script from TypeScript source"] },
   "options": { "rounds": 31, "warmupRounds": 10, "sampleTime": 1, "aa": true, "heap": true, "filter": "" },
   "groups": [{
     "name": "sum 1,000 numbers", "lead": "median", "leadReason": "long calls", "rounds": 32,
@@ -273,6 +276,10 @@ benk detaches none itself. Loaded from its bundle, as it's published, it
 leaves the process as the benchmark finds it. Loaded from its TypeScript
 source, as in this repository, it doesn't: the run's description and the
 JSON's `runtime.processState` then record `'benk from TypeScript source'`.
+They record `'entry script from TypeScript source'` when the process's entry
+script is TypeScript, as a benchmark that `node bench.ts` runs is, whose
+types Node strips the same way, also with benk's bundle. The modules that
+the script imports aren't recorded.
 To time typed arrays without a detached buffer in Node 26, load the
 benchmark and the code that it times from a bundle: in this repository,
 `yarn build` writes benk's, and

@@ -1,4 +1,5 @@
-import { writeFile } from 'node:fs/promises';
+import { access, constants, writeFile } from 'node:fs/promises';
+import { dirname, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { DEFAULT_OPTIONS, measureGroups } from '#source/core/measure';
 import { describeRun, formatGroup, formatJson } from '#source/core/report';
@@ -47,6 +48,7 @@ export interface MainOptions {
  * @throws {TypeError} If an argument isn't one of the options, or an option
  * has no value.
  * @throws {RangeError} If a number is out of its range.
+ * @throws {SyntaxError} If the filter isn't a regular expression.
  */
 export function parseOptions(args: readonly string[]): CommandOptions {
     const { values } = parseArgs({
@@ -79,10 +81,7 @@ export function parseOptions(args: readonly string[]): CommandOptions {
         sampleTime: sampleTimeOption(values['sample-ms']),
         aa: values.aa,
         heap: values.heap,
-        filter:
-            values.filter === undefined
-                ? undefined
-                : new RegExp(values.filter, 'u'),
+        filter: filterOption(values.filter),
         json: values.json
     };
 }
@@ -96,7 +95,10 @@ export function parseOptions(args: readonly string[]): CommandOptions {
  * @throws {TypeError} If an argument isn't one of the options, or a group is
  * malformed, as `measureGroups()` describes.
  * @throws {RangeError} If a number is out of its range.
- * @throws {Error} If a variant throws, with its error as the cause.
+ * @throws {SyntaxError} If the filter isn't a regular expression.
+ * @throws {Error} If the JSON's directory can't be written to, which it
+ * checks before it measures, or if a variant throws, with its error as the
+ * cause.
  */
 export async function main(
     groups: Iterable<Group>,
@@ -110,6 +112,9 @@ export async function main(
         options.print ??
         (toStdout ? printError : (line: string) => console.log(line));
     const runtime = options.runtime ?? defaultRuntime();
+    if (json !== undefined && !toStdout) {
+        await checkDirectory(json);
+    }
 
     print(
         describeRun(runtime.description, {
@@ -148,6 +153,38 @@ let nodeRuntime: NodeRuntime | undefined;
 export function defaultRuntime(): Runtime {
     nodeRuntime ??= new NodeRuntime();
     return nodeRuntime;
+}
+
+/**
+ * Checks that the directory of the results' file can be written to, before
+ * the run rather than after it, when a mistyped path would lose the
+ * measurements
+ */
+async function checkDirectory(path: string): Promise<void> {
+    const directory = dirname(resolve(path));
+    try {
+        await access(directory, constants.W_OK);
+    } catch (error) {
+        throw new Error(
+            `Expected the directory of --json to be writable, got ${directory}`,
+            { cause: error }
+        );
+    }
+}
+
+function filterOption(value: string | undefined): RegExp | undefined {
+    if (value === undefined) {
+        return undefined;
+    }
+
+    try {
+        return new RegExp(value, 'u');
+    } catch (error) {
+        throw new SyntaxError(
+            `Expected --filter to be a regular expression, got ${value}`,
+            { cause: error }
+        );
+    }
 }
 
 function integerOption(

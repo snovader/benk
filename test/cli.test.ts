@@ -67,6 +67,13 @@ describe('parseOptions', () => {
             assert.throws(() => parseOptions(args), RangeError, args.join(' '));
         }
     });
+
+    it('rejects a filter that is not a regular expression, and names the option', () => {
+        assert.throws(() => parseOptions(['--filter', '[']), {
+            name: 'SyntaxError',
+            message: /--filter.*\[/u
+        });
+    });
 });
 
 describe('main', () => {
@@ -118,6 +125,28 @@ describe('main', () => {
             });
 
             assert.deepEqual(JSON.parse(await readFile(path, 'utf8')), result);
+        } finally {
+            await rm(directory, { recursive: true });
+        }
+    });
+
+    it('rejects a JSON file in a directory that it cannot write to, before it measures', async () => {
+        const runtime = new FakeRuntime();
+        const directory = await mkdtemp(join(tmpdir(), 'benk-'));
+        let calls = 0;
+        try {
+            const path = join(directory, 'missing', 'results.json');
+            const counted = { name: 'counted', run: () => calls++ };
+
+            await assert.rejects(
+                main([{ name: 'group', variants: [counted] }], {
+                    args: [...QUICK, '--json', path],
+                    runtime,
+                    print: () => undefined
+                }),
+                /directory of --json/u
+            );
+            assert.equal(calls, 0);
         } finally {
             await rm(directory, { recursive: true });
         }

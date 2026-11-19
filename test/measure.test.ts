@@ -178,6 +178,44 @@ describe('measureGroup', () => {
         assert.equal(pending, 0);
     });
 
+    it('counts the calls again by doubling them when a warm-up round reads as no time', async () => {
+        // Two slow first calls, so that calibration counts 3 calls a round,
+        // whose 60 ns a clock of 100 ns ticks reads as none in some rounds
+        const runtime = new FakeRuntime({ clockTick: 100 });
+        let calls = 0;
+        const warms: SyncVariant = {
+            name: 'warms',
+            run: () => {
+                runtime.clock.spend(calls++ < 2 ? 300_000 : 20);
+            }
+        };
+
+        const result = await measureGroup(
+            { name: 'group', aa: false, variants: [warms] },
+            { sampleTime: 1, warmupRounds: 3, rounds: 2, runtime }
+        );
+        const [{ repetitions }] = result.variants;
+
+        // 1 ms of calls of 20 ns, give or take the clock's ticks
+        assert.ok(Math.abs(repetitions - 50_000) < 500, `${repetitions} calls a round`);
+    });
+
+    it('calls run as a function of its own, without the variant as this', async () => {
+        const runtime = new FakeRuntime();
+        const receivers = new Set<unknown>();
+        const method: SyncVariant = {
+            name: 'method',
+            run(this: unknown) {
+                receivers.add(this);
+                runtime.clock.spend(50);
+            }
+        };
+
+        await measureGroup({ name: 'group', variants: [method] }, { ...QUICK, runtime });
+
+        assert.deepEqual([...receivers], [undefined]);
+    });
+
     it('rejects a sync variant whose call returns a promise', async () => {
         const runtime = new FakeRuntime();
         await assert.rejects(
