@@ -4,7 +4,7 @@
 // run it on benk's bundle, with `yarn build` and `--conditions=benk-dist`,
 // to time typed arrays in a process that hasn't detached an ArrayBuffer,
 // as the README describes.
-import { main, type SyncVariant } from 'benk';
+import { bench, type SyncVariant } from 'benk';
 
 const SIZE = 1000;
 
@@ -51,7 +51,7 @@ function sortVariant<T>(
     };
 }
 
-await main([
+await bench([
     {
         name: `sum ${SIZE.toLocaleString('en-US')} numbers`,
         variants: [
