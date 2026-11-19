@@ -98,6 +98,9 @@ export default defineConfig({
         'import/no-empty-named-blocks': 'error',
         'import/no-mutable-exports': 'error',
         'unicorn/prefer-node-protocol': 'error',
+        // Files are named in kebab-case, whatever they export, so that an
+        // import path reads the same on file systems that ignore case
+        'unicorn/filename-case': ['error', { case: 'kebabCase' }],
         // A module in a parent directory is imported by a private path of
         // package.json's `imports`, such as `#source/core/types`, rather than
         // by `../`

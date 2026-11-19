@@ -1,5 +1,5 @@
 import { quantile } from './statistics.ts';
-import { TimedVariant } from './timedVariant.ts';
+import { TimedVariant } from './timed-variant.ts';
 import type { HeapMeter, Runtime } from './types.ts';
 
 /**

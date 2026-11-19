@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import * as fc from 'fast-check';
 import { formatJson, measureGroup, measureGroups, type GroupResult, type SyncVariant } from 'benk';
-import { FakeRuntime } from './fakeRuntime.ts';
+import { FakeRuntime } from './fake-runtime.ts';
 
 /** Options that keep the fake loops short: about 200 calls of 50 ns a round */
 const QUICK = { sampleTime: 0.01, warmupRounds: 2 };

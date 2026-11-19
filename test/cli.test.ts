@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import { main, parseOptions, type Group } from 'benk';
-import { FakeRuntime } from './fakeRuntime.ts';
+import { FakeRuntime } from './fake-runtime.ts';
 
 const QUICK = ['--sample-ms', '0.01', '--warmup-rounds', '1', '--rounds', '6'];
 

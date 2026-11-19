@@ -8,7 +8,7 @@ intent, not a requirement to preserve every detail.
 
 - Give each function, class, and module a clear scope of responsibility.
   For example, `rotation.ts` orders the rounds, `statistics.ts` summarizes
-  samples, `timedVariant.ts` runs a variant's loops, `measure.ts` measures
+  samples, `timed-variant.ts` runs a variant's loops, `measure.ts` measures
   groups, `report.ts` formats results, and `node/runtime.ts` creates Node's
   timer loops.
 - Search for existing implementations and related abstractions before adding
@@ -138,7 +138,7 @@ intent, not a requirement to preserve every detail.
   `benk`, which `yarn test:dist` runs on the bundle. Import what the package
   doesn't export by its private path, as `test/statistics.test.ts` imports
   `#source/core/statistics`, which suits modules without state.
-- Time with the fake runtime of `test/fakeRuntime.ts`, whose clock moves only
+- Time with the fake runtime of `test/fake-runtime.ts`, whose clock moves only
   when a fake call spends time, and whose heap grows only when one
   allocates, so that a test knows what a measurement should report. Tests of
   `NodeRuntime` check only what doesn't vary between runs.
@@ -161,6 +161,8 @@ intent, not a requirement to preserve every detail.
   extensions. Import a module in a parent directory by a private path of
   package.json's `imports`, as `#source/core/types`, rather than by `../`,
   and the entry point by its name, `benk`. oxlint checks each of these.
+- Name TypeScript and JavaScript files and their folders in kebab-case, as
+  `timed-variant.ts`, whatever they export. oxlint checks the files' names.
 - `yarn build` bundles the entry point into `dist/` with rolldown, and tsc
   writes the declarations. In this repository, the package's exports name the
   source, or the bundle with the `benk-dist` condition, which
@@ -182,4 +184,4 @@ intent, not a requirement to preserve every detail.
   which builds the package and runs the tests on the bundle.
   `.github/workflows/ci.yml` runs the same checks in CI.
 - Pack and publish only with Yarn, which replaces the exports with those of
-  `publishConfig`, as `scripts/requireYarn.ts` checks.
+  `publishConfig`, as `scripts/require-yarn.ts` checks.
