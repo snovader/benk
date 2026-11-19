@@ -2,7 +2,7 @@
 // compiles, and V8's heap statistics. Workers and browsers that forbid
 // `new Function`, and runtimes without `node:v8`, need a runtime of their own.
 import { cpus } from 'node:os';
-import { GCProfiler, getHeapStatistics, type GCProfilerResult } from 'node:v8';
+import { getHeapStatistics, GCProfiler, type GCProfilerResult } from 'node:v8';
 import type {
     AsyncTimer,
     HeapMeter,

@@ -2,7 +2,7 @@
 // takes the runtime that it times them with: this module passes Node's.
 import * as core from './core/measure.ts';
 import type { MeasureOptions, RunOptions } from './core/measure.ts';
-import type { Group, GroupResult, Runtime, RunResult } from './core/types.ts';
+import type { Group, GroupResult, RunResult, Runtime } from './core/types.ts';
 import { defaultRuntime } from './node/cli.ts';
 
 export { DEFAULT_OPTIONS } from './core/measure.ts';

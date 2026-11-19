@@ -1,6 +1,8 @@
+import oxfmt from '@snovader/oxc-config/oxfmt';
 import { defineConfig } from 'oxfmt';
 
 export default defineConfig({
+    ...oxfmt,
     ignorePatterns: [
         '.yarn',
         'dist',
@@ -9,46 +11,7 @@ export default defineConfig({
         // Prose wrapped by hand
         '**/*.md'
     ],
-    endOfLine: 'lf',
-    tabWidth: 4,
-    printWidth: 80,
-    singleQuote: true,
-    quoteProps: 'as-needed',
-    trailingComma: 'none',
-    semi: true,
-    arrowParens: 'avoid',
-    bracketSpacing: true,
-    bracketSameLine: false,
-    objectWrap: 'preserve',
-    // Node's modules, other packages, this package by the name that it
-    // exports, then by its private paths, then relative paths, nearest last
-    sortImports: {
-        groups: [
-            'builtin',
-            'external',
-            'internal',
-            'subpath',
-            'parent',
-            ['sibling', 'index'],
-            'unknown'
-        ],
-        internalPattern: ['benk'],
-        newlinesBetween: false
-    },
-    overrides: [
-        {
-            files: ['**/*.test.ts'],
-            options: { printWidth: 100 }
-        },
-        {
-            files: ['**/tsconfig.json', '**/tsconfig.*.json'],
-            options: { printWidth: 60 }
-        },
-        {
-            // GitHub's workflows and Dependabot's configuration, as GitHub's
-            // documentation writes them
-            files: ['**/*.yml', '**/*.yaml'],
-            options: { tabWidth: 2, singleQuote: false }
-        }
-    ]
+    // The package imports itself by the name that it exports, after other
+    // packages and before its private paths
+    sortImports: { ...oxfmt.sortImports, internalPattern: ['benk'] }
 });

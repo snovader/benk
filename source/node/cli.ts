@@ -1,9 +1,9 @@
 import { access, constants, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
-import { DEFAULT_OPTIONS, measureGroups } from '#source/core/measure';
+import { measureGroups, DEFAULT_OPTIONS } from '#source/core/measure';
 import { describeRun, formatGroup, formatJson } from '#source/core/report';
-import type { Group, Runtime, RunResult } from '#source/core/types';
+import type { Group, RunResult, Runtime } from '#source/core/types';
 import { NodeRuntime } from './runtime.ts';
 
 /** The options of a benchmark script, from its command line */
