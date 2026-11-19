@@ -1,0 +1,71 @@
+{
+  "name": "benk",
+  "version": "0.0.0",
+  "description": "Interleaved, rotated benchmarks for JavaScript, with an A/A pair in every group.",
+  "keywords": [
+    "benchmark",
+    "performance",
+    "v8"
+  ],
+  "license": "MIT",
+  "author": "snovader",
+  "homepage": "https://github.com/snovader/benk#readme",
+  "bugs": {
+    "url": "https://github.com/snovader/benk/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/snovader/benk.git"
+  },
+  "type": "module",
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=24"
+  },
+  "exports": {
+    ".": {
+      "benk-dist": "./dist/index.js",
+      "default": "./source/index.ts"
+    }
+  },
+  "imports": {
+    "#source/*": "./source/*.ts",
+    "#test/*": "./test/*.ts"
+  },
+  "publishConfig": {
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      }
+    },
+    "imports": {
+      "#source/*": {
+        "types": "./dist/*.d.ts"
+      }
+    }
+  },
+  "scripts": {
+    "build": "rolldown -c && tsc -p tsconfig.dist.json",
+    "format:check": "oxfmt --check",
+    "format:write": "oxfmt",
+    "lint:check": "oxlint",
+    "lint:write": "oxlint --fix",
+    "prepack": "node scripts/requireYarn.ts && yarn build",
+    "test": "node --test 'test/**/*.test.ts'",
+    "test:dist": "yarn build && NODE_OPTIONS=--conditions=benk-dist yarn test",
+    "test:watch": "node --test --watch 'test/**/*.test.ts'",
+    "typecheck": "tsc -p ."
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "fast-check": "^4.10.2",
+    "oxfmt": "^0.78.0",
+    "oxlint": "^1.93.0",
+    "oxlint-tsgolint": "^7.0.2007",
+    "rolldown": "^1.3.2",
+    "typescript": "^7.0.2"
+  }
+}
