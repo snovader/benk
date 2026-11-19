@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
-import { main, parseOptions, type Group } from 'benk';
+import { bench, parseOptions, type Group } from 'benk';
 import { FakeRuntime } from './fake-runtime.ts';
 
 const QUICK = ['--sample-ms', '0.01', '--warmup-rounds', '1', '--rounds', '6'];
@@ -76,7 +76,7 @@ describe('parseOptions', () => {
     });
 });
 
-describe('main', () => {
+describe('bench', () => {
     function groups(runtime: FakeRuntime): Group[] {
         return [
             { name: 'first', variants: [runtime.variant('a', 50), runtime.variant('b', 100)] },
@@ -88,7 +88,7 @@ describe('main', () => {
         const runtime = new FakeRuntime();
         const lines: string[] = [];
 
-        const result = await main(groups(runtime), {
+        const result = await bench(groups(runtime), {
             args: [...QUICK, '--filter', 'first'],
             runtime,
             print: line => lines.push(line)
@@ -118,7 +118,7 @@ describe('main', () => {
         const directory = await mkdtemp(join(tmpdir(), 'benk-'));
         try {
             const path = join(directory, 'results.json');
-            const result = await main(groups(runtime), {
+            const result = await bench(groups(runtime), {
                 args: [...QUICK, '--json', path],
                 runtime,
                 print: () => undefined
@@ -139,7 +139,7 @@ describe('main', () => {
             const counted = { name: 'counted', run: () => calls++ };
 
             await assert.rejects(
-                main([{ name: 'group', variants: [counted] }], {
+                bench([{ name: 'group', variants: [counted] }], {
                     args: [...QUICK, '--json', path],
                     runtime,
                     print: () => undefined
@@ -157,7 +157,7 @@ describe('main', () => {
         const written: string[] = [];
         const printed: string[] = [];
 
-        const result = await main(groups(runtime), {
+        const result = await bench(groups(runtime), {
             args: [...QUICK, '--json', '-'],
             runtime,
             print: line => printed.push(line),

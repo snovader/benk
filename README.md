@@ -32,11 +32,11 @@ Install it:
 npm install --save-dev benk
 ```
 
-A benchmark is a script that passes groups of variants to `main()`. Write
+A benchmark is a script that passes groups of variants to `bench()`. Write
 one, as `bench.ts`:
 
 ```ts
-import { main } from 'benk';
+import { bench } from 'benk';
 
 const numbers = Array.from({ length: 1000 }, (_, i) => Math.sin(i));
 
@@ -48,7 +48,7 @@ function sumLoop(values: readonly number[]): number {
     return sum;
 }
 
-await main([
+await bench([
     {
         name: 'sum 1,000 numbers',
         variants: [
@@ -280,12 +280,12 @@ describes.
 
 | Export                                | What it does                                                                                                                                                              |
 | ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `main(groups, options?)`              | Runs a benchmark script: reads the command line's options, prints the run's description and each group's table, and writes the JSON if asked to. Returns the `RunResult`. |
+| `bench(groups, options?)`             | Runs a benchmark script: reads the command line's options, prints the run's description and each group's table, and writes the JSON if asked to. Returns the `RunResult`. |
 | `measureGroups(groups, options?)`     | Measures the groups without printing, and returns the `RunResult`.                                                                                                        |
 | `measureGroup(group, options?)`       | Measures one group, and returns its `GroupResult`.                                                                                                                        |
-| `parseOptions(args)`                  | Reads a script's options from command-line arguments, as `main()` does.                                                                                                   |
+| `parseOptions(args)`                  | Reads a script's options from command-line arguments, as `bench()` does.                                                                                                  |
 | `DEFAULT_OPTIONS`                     | The defaults of `rounds`, `warmupRounds`, `sampleTime`, `aa` and `heap`.                                                                                                  |
-| `describeRun(runtime, options)`       | Returns the description that `main()` prints first, from a `RunResult`'s `runtime` and `options`.                                                                         |
+| `describeRun(runtime, options)`       | Returns the description that `bench()` prints first, from a `RunResult`'s `runtime` and `options`.                                                                        |
 | `formatGroup(result)`                 | Returns the lines of a `GroupResult`'s table, with its notes.                                                                                                             |
 | `formatJson(value)`                   | Returns results as the JSON that `--json` writes, with each array of numbers on one line.                                                                                 |
 | `formatTime(nanoseconds)`             | Returns a time as the table writes it, such as `1.41 µs`.                                                                                                                 |
@@ -307,7 +307,7 @@ results their own way. They take their options as an object:
 | `onGroup`                              | A function that's called with each `GroupResult` as soon as it's measured. `measureGroups()` only. |
 | `runtime`                              | The `Runtime` that times the variants, in place of a `NodeRuntime`.                                |
 
-This script prints each table as `main()` does, and then reads a result:
+This script prints each table as `bench()` does, and then reads a result:
 
 ```ts
 import { formatGroup, measureGroups, type Group } from 'benk';
@@ -337,7 +337,7 @@ const result = await measureGroups(groups, {
 console.log(result.groups[0].variants[0].summary.median);
 ```
 
-`main()` takes other options: `args` in place of the command line's
+`bench()` takes other options: `args` in place of the command line's
 arguments, `runtime`, and `print` and `write` in place of the console and
 stdout.
 

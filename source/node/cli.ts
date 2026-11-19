@@ -19,8 +19,8 @@ export interface CommandOptions {
     readonly json: string | undefined;
 }
 
-/** How `main()` runs, for a script that runs it other than from the shell */
-export interface MainOptions {
+/** How `bench()` runs, for a script that runs it other than from the shell */
+export interface BenchOptions {
     /** The command-line arguments, `process.argv.slice(2)` by default */
     readonly args?: readonly string[];
     readonly runtime?: Runtime;
@@ -100,9 +100,9 @@ export function parseOptions(args: readonly string[]): CommandOptions {
  * checks before it measures, or if a variant throws, with its error as the
  * cause.
  */
-export async function main(
+export async function bench(
     groups: Iterable<Group>,
-    options: MainOptions = {}
+    options: BenchOptions = {}
 ): Promise<RunResult> {
     const { json, ...command } = parseOptions(
         options.args ?? process.argv.slice(2)

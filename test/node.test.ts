@@ -2,7 +2,7 @@
 // Times vary, so these check only what doesn't.
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { main, measureGroup, NodeRuntime } from 'benk';
+import { bench, measureGroup, NodeRuntime } from 'benk';
 
 const QUICK = { sampleTime: 0.2, warmupRounds: 2, rounds: 6 };
 
@@ -72,7 +72,7 @@ describe('NodeRuntime', () => {
 
     it('prints what it knows of the process in the description of a run', async () => {
         const lines: string[] = [];
-        const result = await main([{ name: 'calls', variants: [{ name: 'a', run: () => 1 }] }], {
+        const result = await bench([{ name: 'calls', variants: [{ name: 'a', run: () => 1 }] }], {
             args: ['--sample-ms', '0.2', '--warmup-rounds', '2', '--rounds', '2', '--no-heap'],
             runtime: new NodeRuntime(),
             print: line => lines.push(line)
