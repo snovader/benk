@@ -28,20 +28,22 @@ let detached = false;
 
 /**
  * Detaches an ArrayBuffer, as a process does that reads a `fetch` or `Blob`
- * body, which V8 can't undo. From then on, V8's optimized code checks
- * typed-array accesses for a detached buffer, which can slow code that it
- * compiled with a typed array as a constant: in one test, a sum of a
- * `Float64Array` of 1,000 numbers that a variant passed as a constant took
- * 3–4.5 µs rather than 1.41, while the same sum of arrays that varied
- * between calls took 0.84 µs either way. A run then records
+ * body. In V8 14.6, Node 26's, that switches off V8's `ArrayBufferDetaching`
+ * protector for the rest of the process, after which its optimized code
+ * checks typed-array accesses for a detached buffer, which can slow code
+ * that it compiled with a typed array as a constant: in one test, a sum of
+ * a `Float64Array` of 1,000 numbers that a variant passed as a constant
+ * took 3–4.5 µs rather than 1.41, while the same sum of arrays that varied
+ * between calls took 0.84 µs either way. V8 15.6 and 15.8 didn't switch it
+ * off, and timed the constant sum alike either way. A run records
  * `'detached ArrayBuffer'` in its runtime's process state.
  *
  * benk detaches none unless asked, but other code in the process can:
- * Node's type stripping does when it strips a large enough TypeScript file,
- * as benk's own source is, by growing its WebAssembly memory. So a run that
- * loads TypeScript from source can't time the intact state. benk records
- * `'benk from TypeScript source'` when it was itself, but can't see what
- * other code did.
+ * Node's type stripping does when it strips a large enough TypeScript
+ * file, as benk's own source is, by growing its WebAssembly memory. So in
+ * Node 26, a run that loads TypeScript from source can't time the intact
+ * state. benk records `'benk from TypeScript source'` when it was itself,
+ * but can't see what other code did.
  */
 export function detachArrayBuffer(): void {
     new ArrayBuffer(0).transfer();

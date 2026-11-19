@@ -236,11 +236,14 @@ A/A pair's noise for a call of a few microseconds.
 
 ## Typed arrays and detached buffers
 
-Once any `ArrayBuffer` in a process has been detached, V8's optimized code
-checks typed-array accesses for a detached buffer, for the rest of the
-process. It slows code that V8 compiled with a typed array as a constant,
-as when a variant's call passes the same array every time. A sum of a
-1,000-element `Float64Array` in `examples/numbers.ts`, which does, took:
+V8 has had a protector, `ArrayBufferDetaching`, since 2016: until any
+`ArrayBuffer` in the process is detached, its optimized code skips checks
+for detached buffers, and once one is, it checks for the rest of the
+process. `node --trace-protector-invalidation` prints the moment it
+happens. Node only triggers it, with operations that detach a buffer. It
+slows code that V8 compiled with a typed array as a constant, as when a
+variant's call passes the same array every time. A sum of a 1,000-element
+`Float64Array` in `examples/numbers.ts`, which does, took:
 
 | benk loaded from | by default | with `--detach-array-buffer` |
 |---|---|---|
@@ -250,6 +253,13 @@ as when a variant's call passes the same array every time. A sum of a
 These are the fastest rounds of 2 runs each, on an Apple M2 Pro with Node
 26.13.0; a `number[]` sum took 1.41 µs in each. In a plain loop, the same
 sum of 2 arrays in turn took 0.84 µs whether a buffer was detached or not.
+
+**It's a matter of V8's version.** Node 26.13.0's V8, 14.6, switches the
+protector off at the first detach. In Node 27.0.0-alpha's V8, 15.6, and in
+d8 15.8, no detach did, not even d8's own `%ArrayBufferDetach`, and the
+constant sum took 1.40–1.41 µs detached or not. So on those, the option and
+the type stripping change nothing. Versions before 14.6, such as Node 24's,
+weren't tested, but have the protector, which V8 added in 2016.
 
 **benk detaches no buffer by default**, so that typed-array code is timed
 as it runs in a process that never detaches one. `--detach-array-buffer`,
@@ -289,7 +299,8 @@ benk keeps these in view rather than out of the results:
   input, which can make it slower or faster than with inputs that vary: the
   sum of `examples/numbers.ts` took 1.41 µs over its one constant
   `Float64Array`, and 0.84 µs over 2 arrays in turn, in a plain loop, with
-  no buffer detached. A variant that passes one of a few inputs in turn
+  no buffer detached, in Node 26.13.0. In Node 27.0.0-alpha, 2 arrays in
+  turn took 0.99 µs in one run and 1.41 µs in others. A variant that passes one of a few inputs in turn
   times the call more as a caller with varying data runs it.
 
 ## Runtimes
