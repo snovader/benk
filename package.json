@@ -53,7 +53,7 @@
     "format:write": "oxfmt",
     "lint:check": "oxlint",
     "lint:write": "oxlint --fix",
-    "prepack": "node scripts/requireYarn.ts && yarn build",
+    "prepack": "node scripts/require-yarn.ts && yarn build",
     "test": "node --test 'test/**/*.test.ts'",
     "test:dist": "yarn build && NODE_OPTIONS=--conditions=benk-dist yarn test",
     "test:watch": "node --test --watch 'test/**/*.test.ts'",
