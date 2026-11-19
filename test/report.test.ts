@@ -182,4 +182,18 @@ describe('formatting', () => {
         assert.match(json, /"names": \[\n {4}"a",/u);
         assert.ok(json.endsWith('}\n'));
     });
+
+    it('writes an array of negative numbers and a null without backtracking', () => {
+        // NaN is written as null, so the array isn't one of numbers. A pattern
+        // that can match a number's minus in two ways tries each combination
+        // of them before giving the array up, which takes seconds for 28.
+        const value = [...new Array<number>(28).fill(-1), Number.NaN];
+
+        const start = performance.now();
+        const json = formatJson(value);
+        const elapsed = performance.now() - start;
+
+        assert.deepEqual(JSON.parse(json), [...new Array<number>(28).fill(-1), null]);
+        assert.ok(elapsed < 1000, `took ${elapsed.toFixed(0)} ms`);
+    });
 });
