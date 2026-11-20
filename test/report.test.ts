@@ -40,6 +40,7 @@ const group: GroupResult = {
     lead: 'fastest',
     leadReason: 'short calls',
     rounds: 6,
+    timerResolution: 41.7,
     variants: [
         variant('tafla', 'reference', steady, {}),
         variant('tafla-gen', 'variant', bimodal, {
@@ -98,6 +99,37 @@ describe('formatGroup', () => {
             '  above: 2.50× by the fastest rounds, but 1.90–2.10× round by round'
         ]);
         assert.equal(formatGroup({ ...group, lead: 'median', variants }).length, rows);
+    });
+
+    it("notes median rounds of less than 50 times the timer's resolution", () => {
+        const coarse = (median: number): GroupResult => ({
+            ...group,
+            timerResolution: 1e6,
+            variants: [
+                variant('reference', 'reference', [median, median, median], {}),
+                variant('long calls', 'variant', [median * 100], { ratio: 100 })
+            ]
+        });
+        const rows = 3 + 2;
+
+        // 1,000 calls of 1 µs a round, a tick each
+        assert.deepEqual(formatGroup(coarse(1000)).slice(rows), [
+            "  median rounds are as short as 1 times the timer's resolution, of 1.00 ms: a sample time of 50.0 ms or more gives 50"
+        ]);
+        assert.deepEqual(formatGroup(coarse(49_400)).slice(rows), [
+            "  median rounds are as short as 49 times the timer's resolution, of 1.00 ms: a sample time of 50.0 ms or more gives 50"
+        ]);
+        assert.deepEqual(formatGroup(coarse(50_000)).slice(rows), []);
+    });
+
+    it('has no such note for results without a resolution', () => {
+        const rows = formatGroup(group).length;
+
+        assert.equal(formatGroup({ ...group, timerResolution: null }).length, rows);
+
+        // As a file of results that a version before schema 2 wrote
+        const { timerResolution: _, ...before } = group;
+        assert.equal(formatGroup(before as GroupResult).length, rows);
     });
 
     it('names the median round when the group leads with it', () => {

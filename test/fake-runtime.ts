@@ -1,6 +1,8 @@
-// A runtime whose clock moves only when a fake call spends time, and whose
-// heap grows only when a fake call allocates, so that tests can check what a
-// measurement makes of known times and allocations
+// A runtime whose clock moves only when a call spends time, and whose heap
+// grows only when a fake call allocates, so that tests can check what a
+// measurement makes of known times and allocations. A call that spends no
+// time of its own, as benk's empty calls that time the clock, takes
+// `emptyCall` nanoseconds, as no call is free.
 import type {
     AsyncTimer,
     AsyncVariant,
@@ -35,6 +37,11 @@ export class FakeClock {
 
     spend(nanoseconds: number): void {
         this.#nanoseconds += nanoseconds;
+    }
+
+    /** The nanoseconds spent, which the clock reads to its tick */
+    spent(): number {
+        return this.#nanoseconds;
     }
 }
 
@@ -74,6 +81,17 @@ export interface FakeRuntimeOptions {
     readonly heapErrors?: readonly number[];
     /** The nanoseconds between the times that the clock reads. 0 by default. */
     readonly clockTick?: number;
+    /**
+     * The nanoseconds that a call takes when it spends none of its own, as
+     * benk's empty calls that time the clock. 1 by default. With 0, the
+     * clock moves only when a fake call spends time.
+     */
+    readonly emptyCall?: number;
+    /**
+     * The nanoseconds that the runtime's first loops each spend before
+     * their calls, in turn, as cold code does. None by default.
+     */
+    readonly coldLoops?: readonly number[];
 }
 
 export class FakeRuntime implements Runtime {
@@ -92,24 +110,34 @@ export class FakeRuntime implements Runtime {
     readonly heap: HeapMeter | undefined;
     /** The last result of the last loop */
     sink: unknown;
+    readonly #emptyCall: number;
+    readonly #coldLoops: readonly number[];
+    #loops = 0;
 
     constructor({
         heap = true,
         heapOverhead = 1000,
         heapErrors = [0],
-        clockTick = 0
+        clockTick = 0,
+        emptyCall = 1,
+        coldLoops = []
     }: FakeRuntimeOptions = {}) {
         this.clock = new FakeClock(clockTick);
         this.fakeHeap = new FakeHeap(heapOverhead, heapErrors);
         this.heap = heap ? this.fakeHeap : undefined;
+        this.#emptyCall = emptyCall;
+        this.#coldLoops = coldLoops;
     }
 
     createTimer(): Timer {
         return (run, repetitions) => {
             const start = this.clock.now();
+            this.clock.spend(this.#coldLoops[this.#loops++] ?? 0);
             let result: unknown;
             for (let i = 0; i < repetitions; i++) {
+                const before = this.clock.spent();
                 result = run();
+                this.#spendIfEmpty(before);
             }
             this.sink = result;
 
@@ -122,12 +150,21 @@ export class FakeRuntime implements Runtime {
             const start = this.clock.now();
             let result: unknown;
             for (let i = 0; i < repetitions; i++) {
+                const before = this.clock.spent();
                 result = await run();
+                this.#spendIfEmpty(before);
             }
             this.sink = result;
 
             return this.clock.now() - start;
         };
+    }
+
+    /** Spends an empty call's time for a call that spent none since `before` */
+    #spendIfEmpty(before: number): void {
+        if (this.clock.spent() === before) {
+            this.clock.spend(this.#emptyCall);
+        }
     }
 
     /** A variant whose calls each take `nanoseconds` and allocate `bytes` */

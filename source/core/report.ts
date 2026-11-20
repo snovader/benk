@@ -32,6 +32,17 @@ const NAME_WIDTH = 16;
  */
 const OUTSIDE_MARGIN = 0.05;
 
+/**
+ * The fewest times the timer's resolution that a median round takes without
+ * a note. A round's reading is off by less than a tick of the clock either
+ * way, so a ratio can be off by about one over the ticks of a round. Against a fake clock, with
+ * rounds of 10 µs and calls of 37 ns to 96 ns, ratios were at most 1.5% from
+ * the true ones at 50 ticks a round, and 4.9% at 20. In Node 26.13.0 on an
+ * Apple M2 Pro, with rounds of 1 ms and `performance.now()` floored, A/A
+ * ratios were within 0.8% of 1 at 50 ticks, and up to 7.1% off at 20.
+ */
+const ROUND_TICKS = 50;
+
 const LONG = `${LONG_CALL / 1000} µs`;
 const ALLOCATING = `${ALLOCATING_CALL / 1024} KiB`;
 
@@ -66,15 +77,17 @@ export function describeRun(
 }
 
 /**
- * A group's table: its name and lead, a row for each variant, a note for
- * each variant whose rounds form two modes, and one for each whose ratio by
- * the fastest round lies outside its interval
+ * A group's table: its name and lead, a row for each variant, a note if its
+ * rounds are few times the timer's resolution, a note for each variant whose rounds
+ * form two modes, and one for each whose ratio by the fastest round lies
+ * outside its interval
  */
 export function formatGroup({
     name,
     lead,
     leadReason,
     rounds,
+    timerResolution,
     variants
 }: GroupResult): string[] {
     const nameWidth = Math.max(
@@ -88,6 +101,7 @@ export function formatGroup({
         `${name}: ${rounds} rounds, by the ${lead === 'fastest' ? 'fastest' : 'median'} round (${LEAD_REASONS[leadReason]})`,
         header,
         ...variants.map(variant => formatRow(variant, nameWidth)),
+        ...formatResolution(timerResolution, variants),
         ...variants.flatMap(formatModes),
         ...(lead === 'fastest' ? variants.flatMap(formatOutside) : [])
     ];
@@ -119,6 +133,39 @@ const GAP = ' ';
  */
 function padCell(cell: string, width: number): string {
     return GAP + cell.padStart(width - GAP.length);
+}
+
+/**
+ * A note for a group whose median rounds take less than `ROUND_TICKS` times
+ * the timer's resolution, with the sample time that would make the shortest
+ * of them take that. The median round counts, as the fastest round of a
+ * coarse clock is the one that read a tick less.
+ *
+ * There's no note without a resolution: where the clock read no time for
+ * empty calls, and in results that a version before `schema` 2 wrote, which
+ * have none.
+ */
+function formatResolution(
+    resolution: number | null | undefined,
+    variants: readonly VariantResult[]
+): string[] {
+    if (resolution === null || resolution === undefined) {
+        return [];
+    }
+
+    let shortest = Infinity;
+    for (const { summary, repetitions } of variants) {
+        shortest = Math.min(shortest, summary.median * repetitions);
+    }
+
+    const times = Math.round(shortest / resolution);
+    if (times >= ROUND_TICKS) {
+        return [];
+    }
+
+    return [
+        `  median rounds are as short as ${times} times the timer's resolution, of ${formatTime(resolution)}: a sample time of ${formatTime(ROUND_TICKS * resolution)} or more gives ${ROUND_TICKS}`
+    ];
 }
 
 function formatModes({ name, summary }: VariantResult): string[] {

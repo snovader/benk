@@ -41,6 +41,12 @@ describe('NodeRuntime', () => {
             assert.ok(summary.fastest > 0 && summary.fastest < 1e6, `${summary.fastest} ns`);
             assert.ok(repetitions > 1);
         }
+        // Node's clock is finer than a loop of an empty call, whose time it records
+        const { timerResolution } = result;
+        assert.ok(
+            timerResolution !== null && timerResolution > 0 && timerResolution < 1e5,
+            `${timerResolution} ns`
+        );
     });
 
     it('counts the bytes that calls allocate on the heap', async () => {

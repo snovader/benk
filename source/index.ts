@@ -37,7 +37,8 @@ export interface RuntimeOption {
  *
  * @throws {RangeError} If an option is out of its range.
  * @throws {TypeError} If the group has no variants, or two of the same name.
- * @throws {Error} If a variant throws, with its error as the cause.
+ * @throws {Error} If the runtime's clock reads no time, or if a variant
+ * throws, with its error as the cause.
  */
 export function measureGroup(
     group: Group,
@@ -56,7 +57,8 @@ export function measureGroup(
  *
  * @throws {RangeError} If an option is out of its range.
  * @throws {TypeError} If a group has no variants, or two of the same name.
- * @throws {Error} If a variant throws, with its error as the cause.
+ * @throws {Error} If the runtime's clock reads no time, or if a variant
+ * throws, with its error as the cause.
  */
 export function measureGroups(
     groups: Iterable<Group>,
