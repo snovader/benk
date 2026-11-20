@@ -40,6 +40,7 @@ const group: GroupResult = {
     lead: 'fastest',
     leadReason: 'short calls',
     rounds: 6,
+    clockTick: 41.7,
     variants: [
         variant('tafla', 'reference', steady, {}),
         variant('tafla-gen', 'variant', bimodal, {
@@ -98,6 +99,27 @@ describe('formatGroup', () => {
             '  above: 2.50× by the fastest rounds, but 1.90–2.10× round by round'
         ]);
         assert.equal(formatGroup({ ...group, lead: 'median', variants }).length, rows);
+    });
+
+    it('notes median rounds that span fewer than 50 ticks of the clock', () => {
+        const coarse = (median: number): GroupResult => ({
+            ...group,
+            clockTick: 1e6,
+            variants: [
+                variant('reference', 'reference', [median, median, median], {}),
+                variant('long calls', 'variant', [median * 100], { ratio: 100 })
+            ]
+        });
+        const rows = 3 + 2;
+
+        // 1,000 calls of 1 µs a round, a tick each
+        assert.deepEqual(formatGroup(coarse(1000)).slice(rows), [
+            '  median rounds span as few as 1 tick of the clock, of 1.00 ms: a sample time of 50.0 ms or more gives 50'
+        ]);
+        assert.deepEqual(formatGroup(coarse(49_400)).slice(rows), [
+            '  median rounds span as few as 49 ticks of the clock, of 1.00 ms: a sample time of 50.0 ms or more gives 50'
+        ]);
+        assert.deepEqual(formatGroup(coarse(50_000)).slice(rows), []);
     });
 
     it('names the median round when the group leads with it', () => {

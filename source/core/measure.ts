@@ -1,3 +1,4 @@
+import { clockTickOf } from './clock.ts';
 import { heapCounterOf } from './heap.ts';
 import { chooseLead } from './lead.ts';
 import { rotation } from './rotation.ts';
@@ -75,7 +76,8 @@ interface Measured {
  *
  * @throws {RangeError} If an option is out of its range.
  * @throws {TypeError} If a group has no variants, or two of the same name.
- * @throws {Error} If a variant throws, with its error as the cause.
+ * @throws {Error} If the runtime's clock doesn't advance, or if a variant
+ * throws, with its error as the cause.
  */
 export async function measureGroups(
     groups: Iterable<Group>,
@@ -100,7 +102,7 @@ export async function measureGroups(
     }
 
     return {
-        schema: 1,
+        schema: 2,
         date,
         runtime: runtime.description,
         options: { ...resolved, filter: options.filter?.source ?? '' },
@@ -116,6 +118,10 @@ export async function measureGroups(
  * Each variant gets its own timer loop, so that its call site and type
  * feedback aren't shared with the others.
  *
+ * Before the variants' first calls, it estimates the tick of the runtime's
+ * clock, once for each runtime, which the group's results record: a round
+ * that spans few ticks reads its time coarsely, which `formatGroup()` notes.
+ *
  * A round of a variant repeats its call for about `sampleTime`. The
  * repetitions are counted from the variant's first calls, and then again from
  * its fastest warm-up round, since the code that V8 optimizes during the
@@ -127,7 +133,8 @@ export async function measureGroups(
  *
  * @throws {RangeError} If an option is out of its range.
  * @throws {TypeError} If the group has no variants, or two of the same name.
- * @throws {Error} If a variant throws, with its error as the cause.
+ * @throws {Error} If the runtime's clock doesn't advance, or if a variant
+ * throws, with its error as the cause.
  */
 export async function measureGroup(
     group: Group,
@@ -139,6 +146,7 @@ export async function measureGroup(
     const variants = timedVariants(group, options.aa, runtime);
     const orders = rotation(variants.length);
     const rounds = Math.ceil(options.rounds / orders.length) * orders.length;
+    const clockTick = clockTickOf(runtime);
 
     for (const variant of variants) {
         await variant.calibrate(sampleTime);
@@ -171,6 +179,7 @@ export async function measureGroup(
         lead,
         leadReason: reason,
         rounds,
+        clockTick,
         variants: measured.map(variant =>
             variantResult(variant, measured[0], lead)
         )

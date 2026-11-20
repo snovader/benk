@@ -450,7 +450,7 @@ describe('measureGroups', () => {
             result.groups.map(group => group.name),
             ['banana', 'blueberry']
         );
-        assert.equal(result.schema, 1);
+        assert.equal(result.schema, 2);
         assert.equal(result.runtime, runtime.description);
         assert.deepEqual(result.options, {
             rounds: 31,
