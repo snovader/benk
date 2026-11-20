@@ -1,5 +1,6 @@
 // benk's entry point, which times variants in Node. The core, in `core/`,
 // takes the runtime that it times them with: this module passes Node's.
+// `core.ts` is the core's own entry point, without Node's modules.
 import * as core from './core/measure.ts';
 import type { MeasureOptions, RunOptions } from './core/measure.ts';
 import type { Group, GroupResult, RunResult, Runtime } from './core/types.ts';
@@ -16,6 +17,7 @@ export {
 } from './core/report.ts';
 export { rotation } from './core/rotation.ts';
 export { medianInterval, summarize } from './core/statistics.ts';
+export { asyncTimerSource, timerSource } from './core/timer-source.ts';
 export { bench, parseOptions } from './node/cli.ts';
 export { NodeRuntime } from './node/runtime.ts';
 export type { MeasureOptions, RunOptions } from './core/measure.ts';

@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import * as benk from 'benk';
+import * as core from 'benk/core';
 
 // The README names the package's exports and the command line's options one
 // by one, which a change to either would leave behind: these compare its
@@ -28,6 +29,18 @@ describe('README', () => {
         const described = captures(tableAfter('## API'), /^\| `(\w+)/gmu);
 
         assert.deepEqual(described.toSorted(), Object.keys(benk).toSorted());
+    });
+
+    it('names each export of benk that benk/core leaves out', () => {
+        const named = captures(tableAfter('### Runtimes'), /^\| `(\w+)/gmu);
+        const exported = new Set(Object.keys(core));
+        const leftOut = Object.keys(benk).filter(name => !exported.has(name));
+
+        assert.deepEqual(named.toSorted(), leftOut.toSorted());
+        assert.deepEqual(
+            Object.keys(core).filter(name => !(name in benk)),
+            []
+        );
     });
 
     it('describes each option of the command line', () => {

@@ -1,11 +1,11 @@
 import oxlint from '@snovader/oxc-config/oxlint';
 import { defineConfig } from 'oxlint';
 
-/** Imports of the entry point by its private path */
+/** Imports of an entry point by its private path */
 const ENTRY_POINTS = {
-    regex: '^#source/index$',
+    regex: '^#source/(index|core)$',
     message:
-        'Import the entry point by the name that the package exports it under.'
+        'Import an entry point by the name that the package exports it under.'
 };
 
 export default defineConfig({
@@ -16,9 +16,9 @@ export default defineConfig({
         // package.json's `imports`, such as `#source/core/types`, rather than
         // by `../`
         'import/no-relative-parent-imports': 'error',
-        // The entry point is imported by the name that package.json's
-        // `exports` give it, `benk`, which names the bundle when the tests
-        // run on it
+        // An entry point is imported by the name that package.json's
+        // `exports` give it, `benk` or `benk/core`, which names the bundle
+        // when the tests run on it
         'eslint/no-restricted-imports': ['error', { patterns: [ENTRY_POINTS] }],
 
         // Turned off
@@ -41,8 +41,9 @@ export default defineConfig({
         {
             // The core runs on any JavaScript runtime: what's particular to
             // Node, such as `node:v8`'s heap statistics and timer loops
-            // compiled with `new Function`, stays in `source/node`
-            files: ['source/core/**'],
+            // compiled with `new Function`, stays in `source/node`. The
+            // core's entry point is as free of them.
+            files: ['source/core/**', 'source/core.ts'],
             rules: {
                 'eslint/no-restricted-imports': [
                     'error',

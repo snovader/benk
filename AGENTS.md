@@ -102,9 +102,14 @@ intent, not a requirement to preserve every detail.
   records benk's own loading from TypeScript source, whose type stripping
   detaches an ArrayBuffer in Node 26. Record facts that the runtime knows,
   rather than states that it infers.
-- `source/index.ts` is the Node entry point, which passes Node's runtime to
-  the core. A runtime for browsers or Workers would be an entry point of its
-  own.
+- `source/index.ts` is the Node entry point, `benk`, which passes Node's
+  runtime to the core. `source/core.ts` is the core's entry point,
+  `benk/core`, which loads none of Node's modules and requires a runtime.
+  It exports what `benk` does, apart from what needs Node. A runtime for
+  browsers or Workers would be an entry point of its own.
+- The source of the timer loops is the core's, in `timer-source.ts`, since
+  a runtime that can't compile a string writes its loops from it at build
+  time. A change to it changes what every runtime times.
 
 ## CPU, memory, and measurement
 
@@ -135,7 +140,7 @@ intent, not a requirement to preserve every detail.
   observe, such as the results it gets and the errors raised. Do not assert
   private state or which code path ran.
 - Import what a test tests by the name that the package exports it under,
-  `benk`, which `yarn test:dist` runs on the bundle. Import what the package
+  `benk` or `benk/core`, which `yarn test:dist` runs on the bundle. Import what the package
   doesn't export by its private path, as `test/statistics.test.ts` imports
   `#source/core/statistics`, which suits modules without state.
 - Time with the fake runtime of `test/fake-runtime.ts`, whose clock moves only
@@ -170,10 +175,10 @@ intent, not a requirement to preserve every detail.
   at the TypeScript lines. `prepack`'s `node scripts/require-yarn.ts` keeps
   Node's own stripping. Import a module in a parent directory by a private path of
   package.json's `imports`, as `#source/core/types`, rather than by `../`,
-  and the entry point by its name, `benk`. oxlint checks each of these.
+  and an entry point by its name, `benk` or `benk/core`. oxlint checks each of these.
 - Name TypeScript and JavaScript files and their folders in kebab-case, as
   `timed-variant.ts`, whatever they export. oxlint checks the files' names.
-- `yarn build` bundles the entry point into `dist/` with rolldown, and tsc
+- `yarn build` bundles the entry points into `dist/` with rolldown, and tsc
   writes the declarations. In this repository, the package's exports name the
   source, or the bundle with the `benk-dist` condition, which
   `yarn test:dist` runs the tests on; the published package's, in

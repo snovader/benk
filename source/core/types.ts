@@ -86,7 +86,11 @@ export interface HeapMeter {
     start(): () => number;
 }
 
-/** What a run's results record about the runtime that timed it */
+/**
+ * What a run's results record about the runtime that timed it. A runtime
+ * that can't know one of them, as a Worker can't its processor, gives
+ * `'unknown'`.
+ */
 export interface RuntimeDescription {
     /** Such as `'Node'` */
     readonly name: string;
