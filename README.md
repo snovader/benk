@@ -465,6 +465,65 @@ await measureGroups(
 Both scripts were run in Node. benk isn't tested in a Worker or a browser,
 whose clocks and module loading differ from Node's.
 
+### Groups apart from the run
+
+A script that calls `bench()` at its top level starts timing while it loads.
+That suits Node, which runs the script. It doesn't suit a host that starts
+the run itself, such as a Worker, which runs from its handler.
+
+For such a host, declare the groups in a module that only exports them, as
+`groups.ts`:
+
+```ts
+import type { Group } from 'benk/core';
+
+const numbers = Array.from({ length: 1000 }, (_, i) => Math.sin(i));
+
+export const groups: Group[] = [
+    {
+        name: 'sum 1,000 numbers',
+        variants: [
+            {
+                name: 'reduce',
+                run: () => numbers.reduce((sum, x) => sum + x, 0)
+            }
+        ]
+    }
+];
+```
+
+Importing it times nothing. Node's script, `bench.ts`, runs the groups as it
+loads:
+
+```ts
+import { bench } from 'benk';
+import { groups } from './groups.ts';
+
+await bench(groups);
+```
+
+The host's script, `run.ts`, exports a function that runs the same groups.
+It imports the `runtime` of [Runtimes](#runtimes)' script from a module of
+its own, `runtime.ts`, which exports it:
+
+```ts
+import { formatGroup, measureGroups, type RunResult } from 'benk/core';
+import { groups } from './groups.ts';
+import { runtime } from './runtime.ts';
+
+export function run(): Promise<RunResult> {
+    return measureGroups(groups, {
+        runtime,
+        onGroup: group => {
+            console.log(formatGroup(group).join('\n'));
+        }
+    });
+}
+```
+
+The host calls `run()` when it's ready to time. These scripts were run in
+Node only, where another script called `run()`.
+
 ## The cost of the async loop
 
 The awaiting loop of an async variant costs more per call than the sync
