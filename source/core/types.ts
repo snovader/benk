@@ -213,6 +213,13 @@ export interface GroupResult {
     readonly leadReason: LeadReason;
     /** The timed rounds, in whole rotations of the variants' order */
     readonly rounds: number;
+    /**
+     * The tick of the runtime's clock in nanoseconds, as benk estimates it:
+     * the shortest time other than 0 that a timer loop of empty calls read.
+     * Where the clock is finer than such a loop, as Node's is, it's the
+     * loop's own time instead, so it's never shorter than the tick.
+     */
+    readonly clockTick: number;
     readonly variants: readonly VariantResult[];
 }
 
@@ -230,7 +237,7 @@ export interface RecordedOptions {
 /** A run's results, which `JSON.stringify` writes as they are */
 export interface RunResult {
     /** The version of this format, which changes when a field does */
-    readonly schema: 1;
+    readonly schema: 2;
     /** When the run started, as an ISO 8601 string */
     readonly date: string;
     readonly runtime: RuntimeDescription;

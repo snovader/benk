@@ -216,6 +216,18 @@ Per call of each variant:
   by more than the collections report, as when V8 sweeps garbage
   concurrently. A call that returns a double, such as a sum, can count 16
   bytes, the size of a boxed number.
+- **median rounds span as few as … ticks of the clock**: a note for a group
+  whose median rounds span fewer than 50 ticks of the runtime's clock, as
+  [JSON results](#json-results) describes the tick. A round's time is read
+  to a tick, so a ratio can be off by about one over the ticks of a round:
+  2% at 50 ticks, and 10% at 10. The note gives the sample time that spans
+  50 ticks, for `--sample-ms`. Node's clock gets it only for rounds of a few
+  microseconds, as the sums of `examples/numbers.ts` did with
+  `--sample-ms 0.005`:
+
+  ```text
+    median rounds span as few as 23 ticks of the clock, of 166 ns: a sample time of 8.30 µs or more gives 50
+  ```
 - **two modes**: a note for a variant whose rounds form two clusters, far
   apart for their own spread, of at least 3 rounds and 10% each. Its median
   and fastest then describe one of the clusters: compare the modes instead.
@@ -249,17 +261,18 @@ varies.
 
 ```jsonc
 {
-  "schema": 1,
-  "date": "2026-11-19T01:24:00.501Z",
+  "schema": 2,
+  "date": "2026-11-20T17:29:11.999Z",
   "runtime": { "name": "Node", "version": "v26.13.0", "engine": "V8 14.6.202.34-node.40",
                "platform": "darwin", "arch": "arm64", "cpu": "Apple M2 Pro", "flags": [],
-               "processState": ["benk from TypeScript source", "entry script from TypeScript source"] },
-  "options": { "rounds": 31, "warmupRounds": 10, "sampleTime": 1, "aa": true, "heap": true, "filter": "" },
+               "processState": ["entry script from TypeScript source"] },
+  "options": { "rounds": 31, "warmupRounds": 10, "sampleTime": 1, "aa": true, "heap": true, "filter": "^sum" },
   "groups": [{
     "name": "sum 1,000 numbers", "lead": "median", "leadReason": "long calls", "rounds": 32,
+    "clockTick": 166.0000000001105,      // nanoseconds, as benk estimates the clock's tick
     "variants": [{
-      "name": "for over number[]", "role": "reference", "async": false, "repetitions": 682,
-      "samples": [1465.48, 1468.17, …],   // nanoseconds per call, in the rounds' order
+      "name": "for over number[]", "role": "reference", "async": false, "repetitions": 712,
+      "samples": [1411.52, 1464.54, …],   // nanoseconds per call, in the rounds' order
       "positions": [0, 2, 3, 1, …],       // the variant's position in each round
       "summary": { "fastest": …, "q1": …, "median": …, "q3": …, "slowest": …, "spread": …, "modes": null },
       "ratio": 1, "interval": null, "heapBytes": 16
@@ -273,6 +286,25 @@ varies.
 what benk knows of the process that changes what's measured, as
 [Typed arrays and detached buffers](#typed-arrays-and-detached-buffers)
 describes.
+
+A group's `clockTick` is the tick of the runtime's clock, which benk
+estimates once for each runtime, before a group's first calls:
+
+1. It calls an empty function in a timer loop of its own, and doubles the
+   calls until a loop reads time.
+2. It times 8 loops of half as many calls, which read either no time or one
+   tick.
+3. It does both twice, and takes the shortest time other than 0 that a loop
+   read.
+
+Where the clock is finer than such a loop, as Node's is, the estimate is the
+loop's own time instead, and so never shorter than the tick. On an Apple M2
+Pro with Node 26.13.0, `performance.now()` advances in steps of 41.7 ns.
+The first estimates of 31 processes, the one above among them, gave 83 ns
+to 166 ns. With `performance.now()` floored to ticks of 1 µs, 5 µs, 20 µs,
+100 µs and 1 ms, 500 estimates of each gave the tick, and so did 30 of
+16 ms. The median estimate took 4.7 ms for ticks of 1 ms, and 111 ms for
+ticks of 16 ms.
 
 ## API
 
@@ -347,6 +379,8 @@ All three throw:
 
 - a `RangeError` for an option that's out of its range;
 - a `TypeError` for a group without variants, or with two of the same name;
+- an `Error` if the runtime's clock reads no time in a loop of 2³⁰ empty
+  calls, which takes about a second, before any variant's calls;
 - an `Error` if a variant throws, with the variant's error as its `cause`.
 
 ### Runtimes
@@ -383,8 +417,9 @@ one function.
 - The body ends with a comment, so the function's closing brace goes on a
   line after it.
 
-A group needs a loop for each variant, and one for its A/A copy. This
-script, `write-timers.ts`, writes a module of 16 loops:
+A group needs a loop for each variant, and one for its A/A copy. A runtime
+needs one more, the first time that it measures a group, to time its clock.
+This script, `write-timers.ts`, writes a module of 16 loops:
 
 ```ts
 import { writeFileSync } from 'node:fs';
@@ -554,6 +589,23 @@ from, not what stripped its types.
 ## Known confounds
 
 benk keeps these in view rather than out of the results:
+
+- **A coarse clock.** A round's time is read to a tick of the runtime's
+  clock, so a round that spans few ticks is read coarsely. On an Apple M2
+  Pro with Node 26.13.0, with `performance.now()` floored and rounds of
+  1 ms, 3 runs of a sum of 100 numbers gave these A/A ratios:
+
+  | Ticks a round | A/A ratios          |
+  | ------------- | ------------------- |
+  | 1             | NaN, NaN, NaN       |
+  | 5             | 1.000, 1.042, 1.042 |
+  | 20            | 1.071, 0.961, 1.071 |
+  | 50            | 1.000, 0.992, 0.999 |
+  | not floored   | 1.001, 0.996, 0.999 |
+
+  benk notes a group whose median rounds span fewer than 50 ticks, as
+  [What the table reports](#what-the-table-reports) describes, but doesn't
+  lengthen its rounds: a longer sample time does.
 
 - **Constant inputs.** Once V8 optimizes a timer loop, it inlines the
   variant's call into it, and with it an input that the call passes the
