@@ -214,12 +214,14 @@ export interface GroupResult {
     /** The timed rounds, in whole rotations of the variants' order */
     readonly rounds: number;
     /**
-     * The tick of the runtime's clock in nanoseconds, as benk estimates it:
-     * the shortest time other than 0 that a timer loop of empty calls read.
-     * Where the clock is finer than such a loop, as Node's is, it's the
-     * loop's own time instead, so it's never shorter than the tick.
+     * The resolution of the runtime's timer loops in nanoseconds, as benk
+     * estimates it: the shortest time other than 0 that a timer loop of
+     * empty calls read. That's the tick of a coarse clock. Where the clock
+     * is finer than such a loop, as Node's is, it's the loop's own time,
+     * which is longer than the tick. It's null where no such loop read
+     * time, as with a virtual clock that only a variant's calls move.
      */
-    readonly clockTick: number;
+    readonly timerResolution: number | null;
     readonly variants: readonly VariantResult[];
 }
 

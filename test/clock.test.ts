@@ -1,17 +1,23 @@
-// The tick of the runtime's clock, which a group's results record, and the
-// note of a table whose rounds span too few ticks of it
+// The resolution of the runtime's timer loops, which a group's results
+// record, and the note of a table whose rounds are too few times it
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import * as fc from 'fast-check';
-import { formatGroup, formatTime, measureGroup, type Timer } from 'benk';
+import { formatGroup, formatTime, measureGroup, type GroupResult, type Timer } from 'benk';
 import { FakeRuntime, type FakeRuntimeOptions } from './fake-runtime.ts';
 
 /** Rounds of 100 µs, few of them */
 const QUICK = { sampleTime: 0.1, warmupRounds: 1, rounds: 3, aa: false, heap: false };
 
-/** The note of a table whose rounds span too few ticks */
-function clockNote(lines: readonly string[]): string | undefined {
-    return lines.find(line => line.includes(' of the clock, of '));
+/** The note of a table whose rounds are too few times the resolution */
+function resolutionNote(lines: readonly string[]): string | undefined {
+    return lines.find(line => line.includes(" times the timer's resolution, of "));
+}
+
+/** A group's resolution, which a clock that read time for empty calls has */
+function resolutionOf({ timerResolution }: GroupResult): number {
+    assert.ok(timerResolution !== null, 'Expected a resolution');
+    return timerResolution;
 }
 
 /** A fake runtime whose clock starts `phase` nanoseconds into a tick */
@@ -22,7 +28,7 @@ function startedAt(phase: number, options: FakeRuntimeOptions): FakeRuntime {
     return runtime;
 }
 
-describe("the clock's tick", () => {
+describe("the timer's resolution", () => {
     it("records a coarse clock's tick", async () => {
         await fc.assert(
             fc.asyncProperty(fc.integer({ min: 1, max: 20_000 }), fc.nat(), async (tick, phase) => {
@@ -32,11 +38,40 @@ describe("the clock's tick", () => {
                     { ...QUICK, runtime }
                 );
 
+                const resolution = resolutionOf(result);
+
                 assert.ok(
-                    Math.abs(result.clockTick - tick) <= tick * 1e-9,
-                    `${result.clockTick} ns for ticks of ${tick} ns`
+                    Math.abs(resolution - tick) <= tick * 1e-9,
+                    `${resolution} ns for ticks of ${tick} ns`
                 );
             })
+        );
+    });
+
+    it("records a coarse clock's tick when the first loops take several ticks, as cold code does", async () => {
+        await fc.assert(
+            fc.asyncProperty(
+                fc.integer({ min: 1, max: 20_000 }),
+                fc.nat(),
+                fc.array(fc.integer({ min: 1, max: 40 }), { minLength: 1, maxLength: 3 }),
+                async (tick, phase, coldTicks) => {
+                    const runtime = startedAt(phase % tick, {
+                        clockTick: tick,
+                        coldLoops: coldTicks.map(ticks => ticks * tick),
+                        heap: false
+                    });
+                    const result = await measureGroup(
+                        { name: 'calls', variants: [runtime.variant('a', 50)] },
+                        { ...QUICK, runtime }
+                    );
+                    const resolution = resolutionOf(result);
+
+                    assert.ok(
+                        Math.abs(resolution - tick) <= tick * 1e-9,
+                        `${resolution} ns for ticks of ${tick} ns`
+                    );
+                }
+            )
         );
     });
 
@@ -49,15 +84,17 @@ describe("the clock's tick", () => {
                     { ...QUICK, runtime }
                 );
 
+                const resolution = resolutionOf(result);
+
                 assert.ok(
-                    Math.abs(result.clockTick - emptyCall) <= emptyCall * 1e-6,
-                    `${result.clockTick} ns for empty calls of ${emptyCall} ns`
+                    Math.abs(resolution - emptyCall) <= emptyCall * 1e-6,
+                    `${resolution} ns for empty calls of ${emptyCall} ns`
                 );
             })
         );
     });
 
-    it('notes rounds that span fewer than 50 ticks, with the sample time that spans 50', async () => {
+    it('notes rounds of fewer than 50 ticks, with the sample time that gives 50', async () => {
         await fc.assert(
             fc.asyncProperty(
                 fc.integer({ min: 1, max: 20_000 }),
@@ -72,13 +109,13 @@ describe("the clock's tick", () => {
                     // A round's reading is off by less than a tick, so its
                     // ticks are those of its calls' time, give or take one
                     const ticks = (result.variants[0].repetitions * call) / tick;
-                    const note = clockNote(formatGroup(result));
+                    const note = resolutionNote(formatGroup(result));
 
                     if (ticks < 48) {
                         assert.ok(note !== undefined, `no note at ${ticks} ticks a round`);
                         // Of the recorded tick, which a float's rounding can take a hair
                         // under the clock's, and a time such as 152.5 µs to 152
-                        const sampleTime = formatTime(50 * result.clockTick);
+                        const sampleTime = formatTime(50 * resolutionOf(result));
                         assert.ok(
                             note.endsWith(`a sample time of ${sampleTime} or more gives 50`),
                             note
@@ -110,7 +147,19 @@ describe("the clock's tick", () => {
         assert.equal(runtime.loops, 5);
     });
 
-    it("rejects before a variant's calls when the clock doesn't advance", async () => {
+    it("measures with a clock that only a variant's calls move, without a resolution", async () => {
+        const runtime = new FakeRuntime({ emptyCall: 0, heap: false });
+        const result = await measureGroup(
+            { name: 'calls', variants: [runtime.variant('a', 100)] },
+            { ...QUICK, runtime }
+        );
+
+        assert.equal(result.timerResolution, null);
+        assert.ok(Math.abs(result.variants[0].summary.median - 100) < 1e-9);
+        assert.equal(resolutionNote(formatGroup(result)), undefined);
+    });
+
+    it("rejects when the clock reads no time for empty calls, nor for a variant's", async () => {
         class FrozenRuntime extends FakeRuntime {
             override createTimer(): Timer {
                 return () => 0;
@@ -118,19 +167,16 @@ describe("the clock's tick", () => {
         }
 
         const runtime = new FrozenRuntime({ heap: false });
-        let calls = 0;
         await assert.rejects(
             measureGroup(
-                { name: 'calls', variants: [{ name: 'a', run: () => calls++ }] },
+                { name: 'calls', variants: [{ name: 'a', run: () => 1 }] },
                 { ...QUICK, runtime }
             ),
             {
                 name: 'Error',
                 message:
-                    "Expected the runtime's clock to advance, but a loop of 1,073,741,824 empty calls read no time"
+                    'Expected the runtime\'s clock to advance, but it read no time for empty calls, nor for 1,048,576 calls of Variant "a" of group "calls"'
             }
         );
-        // Not even the call that checks that it doesn't return a promise
-        assert.equal(calls, 0);
     });
 });

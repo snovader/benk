@@ -75,7 +75,7 @@ intent, not a requirement to preserve every detail.
   measurement says why in the code, and the README describes what a user
   sees: the rotation of the variants' order, the A/A copy, calibration and
   warm-up, the lead statistic, the modes, the interval, the heap bytes, and
-  the clock's tick.
+  the timer's resolution.
   Where benk departs from tafla's harness, which it was extracted from, say
   why, as `heap.ts` does for counting the median heap sample.
 - A variant's timer loop is its own, compiled from a unique source, so that

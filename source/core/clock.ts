@@ -1,15 +1,20 @@
-// The tick of a runtime's clock, which the core can't read itself: it times
-// empty calls in a timer loop of its own, and takes the shortest time that
-// the loop reads as the tick.
+// The resolution of a runtime's timer loops: the shortest time that one
+// reads. The core can't read a clock itself, so it times empty calls in a
+// timer loop of its own. Where the clock is coarse, that's the clock's tick.
 import type { Runtime, Timer } from './types.ts';
 
 /**
- * The calls of an empty function in one loop after which a clock that still
- * reads no time is taken as frozen. Under a clock that never moved, doubling
- * the calls up to this many took 0.96 s in Node 26.13.0 on an Apple M2 Pro,
- * where a clock floored to 16 ms read its first tick within 2^25 calls.
+ * The calls of an empty function in one loop after which the estimate gives
+ * up on a clock that still reads no time. Such a clock is frozen, or moves
+ * only when a variant's call moves it, as a test's virtual clock does, or
+ * has a tick longer than the loops took.
+ *
+ * Doubling the calls up to this many took 61 ms in Node 26.13.0 on an Apple
+ * M2 Pro, and 2.1 s with `--jitless`, so that's what a runtime whose clock
+ * reads nothing costs, once. A clock floored to 16 ms read its first tick
+ * within 2^25 calls there.
  */
-const FROZEN_CALLS = 2 ** 30;
+const GIVE_UP_CALLS = 2 ** 26;
 
 /**
  * The passes of the estimate, of whose readings the shortest counts. The
@@ -42,41 +47,47 @@ function empty(): undefined {
     return undefined;
 }
 
-const ticks = new WeakMap<Runtime, number>();
+const resolutions = new WeakMap<Runtime, number | null>();
 
 /**
- * The tick of a runtime's clock in nanoseconds, as `estimateTick()` gives
- * it, which it keeps between groups, as the clock's tick doesn't change. It
- * takes a timer loop of the runtime's own the first time.
- *
- * @throws {Error} If the clock reads no time in a loop of `FROZEN_CALLS`
- * empty calls.
+ * The resolution of a runtime's timer loops in nanoseconds, as
+ * `estimateResolution()` gives it, or null where the clock read no time. It
+ * keeps it between groups, as a clock's tick doesn't change, and takes a
+ * timer loop of the runtime's own the first time.
  */
-export function clockTickOf(runtime: Runtime): number {
-    let tick = ticks.get(runtime);
-    if (tick === undefined) {
-        tick = estimateTick(runtime.createTimer());
-        ticks.set(runtime, tick);
+export function timerResolutionOf(runtime: Runtime): number | null {
+    let resolution = resolutions.get(runtime);
+    if (resolution === undefined) {
+        resolution = estimateResolution(runtime.createTimer());
+        resolutions.set(runtime, resolution);
     }
 
-    return tick;
+    return resolution;
 }
 
 /**
- * Estimates the tick of the clock that a timer loop reads, in nanoseconds:
- * the shortest time other than 0 that the loop reads for empty calls. In
- * each pass, it doubles the calls from 1 until a loop reads time, and then
- * times loops of half as many calls. Where the clock is finer than the
- * loop's own time, as Node's is, it gives the loop's own time instead, so
- * the estimate is never shorter than the tick.
+ * Estimates the shortest time other than 0 that a timer loop reads, in
+ * nanoseconds, from loops of empty calls. In each pass, it doubles the calls
+ * from 1 until a loop reads time, and then times loops of half as many
+ * calls. Where the clock is coarse, that's its tick. Where the clock is
+ * finer than the loop's own time, as Node's is, it's the loop's own time,
+ * which is longer than the tick. It's null if no loop of up to
+ * `GIVE_UP_CALLS` calls reads time.
  */
-function estimateTick(timer: Timer): number {
+function estimateResolution(timer: Timer): number | null {
     let shortest = Infinity;
     for (let pass = 0; pass < PASSES; pass++) {
-        const { calls, elapsed } = firstReading(timer);
-        const half = Math.max(1, calls / 2);
+        const first = firstReading(timer);
+        if (first === undefined) {
+            return null;
+        }
 
-        shortest = Math.min(shortest, elapsed, shortestReading(timer, half));
+        const half = Math.max(1, first.calls / 2);
+        shortest = Math.min(
+            shortest,
+            first.elapsed,
+            shortestReading(timer, half)
+        );
     }
 
     return shortest * 1e6;
@@ -89,23 +100,18 @@ interface Reading {
 }
 
 /**
- * The first loop that reads time, of calls that double from 1
- *
- * @throws {Error} If none does by `FROZEN_CALLS` calls.
+ * The first loop that reads time, of calls that double from 1, or undefined
+ * if none does by `GIVE_UP_CALLS` calls
  */
-function firstReading(timer: Timer): Reading {
-    for (let calls = 1; ; calls *= 2) {
+function firstReading(timer: Timer): Reading | undefined {
+    for (let calls = 1; calls <= GIVE_UP_CALLS; calls *= 2) {
         const elapsed = timer(empty, calls);
         if (elapsed > 0) {
             return { calls, elapsed };
         }
-
-        if (calls >= FROZEN_CALLS) {
-            throw new Error(
-                `Expected the runtime's clock to advance, but a loop of ${calls.toLocaleString('en-US')} empty calls read no time`
-            );
-        }
     }
+
+    return undefined;
 }
 
 /**

@@ -1,4 +1,4 @@
-import { clockTickOf } from './clock.ts';
+import { timerResolutionOf } from './clock.ts';
 import { heapCounterOf } from './heap.ts';
 import { chooseLead } from './lead.ts';
 import { rotation } from './rotation.ts';
@@ -76,7 +76,7 @@ interface Measured {
  *
  * @throws {RangeError} If an option is out of its range.
  * @throws {TypeError} If a group has no variants, or two of the same name.
- * @throws {Error} If the runtime's clock doesn't advance, or if a variant
+ * @throws {Error} If the runtime's clock reads no time, or if a variant
  * throws, with its error as the cause.
  */
 export async function measureGroups(
@@ -118,9 +118,11 @@ export async function measureGroups(
  * Each variant gets its own timer loop, so that its call site and type
  * feedback aren't shared with the others.
  *
- * Before the variants' first calls, it estimates the tick of the runtime's
- * clock, once for each runtime, which the group's results record: a round
- * that spans few ticks reads its time coarsely, which `formatGroup()` notes.
+ * Before the variants' first calls, it estimates the resolution of the
+ * runtime's timer loops, once for each runtime, which the group's results
+ * record: a round of few times the resolution reads its time coarsely,
+ * which `formatGroup()` notes. It takes the timer loop for that before the
+ * variants' loops, so that a runtime with too few loops fails on it first.
  *
  * A round of a variant repeats its call for about `sampleTime`. The
  * repetitions are counted from the variant's first calls, and then again from
@@ -133,7 +135,7 @@ export async function measureGroups(
  *
  * @throws {RangeError} If an option is out of its range.
  * @throws {TypeError} If the group has no variants, or two of the same name.
- * @throws {Error} If the runtime's clock doesn't advance, or if a variant
+ * @throws {Error} If the runtime's clock reads no time, or if a variant
  * throws, with its error as the cause.
  */
 export async function measureGroup(
@@ -143,13 +145,13 @@ export async function measureGroup(
 ): Promise<GroupResult> {
     const options = resolveOptions(measureOptions);
     const { sampleTime, warmupRounds } = options;
+    const timerResolution = timerResolutionOf(runtime);
     const variants = timedVariants(group, options.aa, runtime);
     const orders = rotation(variants.length);
     const rounds = Math.ceil(options.rounds / orders.length) * orders.length;
-    const clockTick = clockTickOf(runtime);
 
     for (const variant of variants) {
-        await variant.calibrate(sampleTime);
+        await variant.calibrate(sampleTime, timerResolution !== null);
     }
     if (warmupRounds > 0) {
         const warm = await timeRounds(variants, orders, warmupRounds);
@@ -179,7 +181,7 @@ export async function measureGroup(
         lead,
         leadReason: reason,
         rounds,
-        clockTick,
+        timerResolution,
         variants: measured.map(variant =>
             variantResult(variant, measured[0], lead)
         )

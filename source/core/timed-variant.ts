@@ -92,14 +92,24 @@ export class TimedVariant {
     /**
      * Counts the calls that make a round take about `sampleTime`
      * milliseconds from the variant's first calls, doubling them until they
-     * take a quarter of it
+     * take a quarter of it. `clockReads` is whether the runtime's clock read
+     * time for empty calls, when its resolution was estimated.
      *
      * @throws {TypeError} If a sync variant's call returns a promise, which
      * the sync loop wouldn't await.
+     * @throws {Error} If the clock read no time for empty calls, and reads
+     * none in a loop of `CALIBRATION_CALLS` of the variant's calls either,
+     * as a clock that doesn't advance. No count of calls follows from that.
      */
-    async calibrate(sampleTime: number): Promise<void> {
+    async calibrate(sampleTime: number, clockReads: boolean): Promise<void> {
         this.#checkResult();
-        await this.#double(sampleTime);
+        const elapsed = await this.#double(sampleTime);
+
+        if (elapsed === 0 && !clockReads) {
+            throw new Error(
+                `Expected the runtime's clock to advance, but it read no time for empty calls, nor for ${CALIBRATION_CALLS.toLocaleString('en-US')} calls of ${this.#label()}`
+            );
+        }
     }
 
     /**
@@ -122,15 +132,16 @@ export class TimedVariant {
 
     /**
      * Doubles the calls of a loop until they take a quarter of `sampleTime`,
-     * and counts a round's calls from their time
+     * and counts a round's calls from their time. Returns the time of the
+     * last loop in milliseconds, which is 0 if no loop read time.
      */
-    async #double(sampleTime: number): Promise<void> {
+    async #double(sampleTime: number): Promise<number> {
         for (let repetitions = 1; ; repetitions *= 2) {
             const elapsed = await this.#run(repetitions, undefined);
 
             if (elapsed >= sampleTime / 4 || repetitions >= CALIBRATION_CALLS) {
                 this.#fit(perCall(elapsed, repetitions), sampleTime);
-                return;
+                return elapsed;
             }
         }
     }

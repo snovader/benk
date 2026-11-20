@@ -83,9 +83,15 @@ export interface FakeRuntimeOptions {
     readonly clockTick?: number;
     /**
      * The nanoseconds that a call takes when it spends none of its own, as
-     * benk's empty calls that time the clock. 1 by default.
+     * benk's empty calls that time the clock. 1 by default. With 0, the
+     * clock moves only when a fake call spends time.
      */
     readonly emptyCall?: number;
+    /**
+     * The nanoseconds that the runtime's first loops each spend before
+     * their calls, in turn, as cold code does. None by default.
+     */
+    readonly coldLoops?: readonly number[];
 }
 
 export class FakeRuntime implements Runtime {
@@ -105,23 +111,28 @@ export class FakeRuntime implements Runtime {
     /** The last result of the last loop */
     sink: unknown;
     readonly #emptyCall: number;
+    readonly #coldLoops: readonly number[];
+    #loops = 0;
 
     constructor({
         heap = true,
         heapOverhead = 1000,
         heapErrors = [0],
         clockTick = 0,
-        emptyCall = 1
+        emptyCall = 1,
+        coldLoops = []
     }: FakeRuntimeOptions = {}) {
         this.clock = new FakeClock(clockTick);
         this.fakeHeap = new FakeHeap(heapOverhead, heapErrors);
         this.heap = heap ? this.fakeHeap : undefined;
         this.#emptyCall = emptyCall;
+        this.#coldLoops = coldLoops;
     }
 
     createTimer(): Timer {
         return (run, repetitions) => {
             const start = this.clock.now();
+            this.clock.spend(this.#coldLoops[this.#loops++] ?? 0);
             let result: unknown;
             for (let i = 0; i < repetitions; i++) {
                 const before = this.clock.spent();

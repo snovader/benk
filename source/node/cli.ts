@@ -97,7 +97,7 @@ export function parseOptions(args: readonly string[]): CommandOptions {
  * @throws {RangeError} If a number is out of its range.
  * @throws {SyntaxError} If the filter isn't a regular expression.
  * @throws {Error} If the JSON's directory can't be written to, which it
- * checks before it measures, if the runtime's clock doesn't advance, or if
+ * checks before it measures, if the runtime's clock reads no time, or if
  * a variant throws, with its error as the cause.
  */
 export async function bench(
