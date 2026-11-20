@@ -3,6 +3,7 @@
 // `new Function`, and runtimes without `node:v8`, need a runtime of their own.
 import { cpus } from 'node:os';
 import { getHeapStatistics, GCProfiler, type GCProfilerResult } from 'node:v8';
+import { asyncTimerSource, timerSource } from '#source/core/timer-source';
 import type {
     AsyncTimer,
     HeapMeter,
@@ -25,8 +26,13 @@ const TYPESCRIPT_SOURCE = 'benk from TypeScript source';
  * took 4.28 µs rather than 1.41. V8 15.6 and 15.8 timed it alike either
  * way. So the runtime's process state records it, and a TypeScript entry
  * script, although it can't see whether other code detached a buffer.
+ *
+ * It reads the module's URL when a runtime is described rather than when
+ * the module loads, since a bundle that another runtime loads may have none.
  */
-const fromSource = import.meta.url.endsWith('.ts');
+function fromSource(): boolean {
+    return import.meta.url.endsWith('.ts');
+}
 
 const TYPESCRIPT_ENTRY = 'entry script from TypeScript source';
 
@@ -70,7 +76,7 @@ export class NodeRuntime implements Runtime {
         return new Function(
             'run',
             'repetitions',
-            timerSource('run()', timers++)
+            timerSource(timers++)
         ) as Timer;
     }
 
@@ -78,24 +84,9 @@ export class NodeRuntime implements Runtime {
         return new AsyncFunction(
             'run',
             'repetitions',
-            timerSource('await run()', timers++)
+            asyncTimerSource(timers++)
         );
     }
-}
-
-/**
- * A timer loop's source, which keeps the last result alive in a global, so
- * that V8 can't eliminate the calls
- */
-function timerSource(call: string, id: number): string {
-    return `let result;
-        const start = performance.now();
-        for (let i = 0; i < repetitions; i++) {
-            result = ${call};
-        }
-        const elapsed = performance.now() - start;
-        globalThis.benkSink = result;
-        return elapsed; // timer ${id}`;
 }
 
 /**
@@ -141,7 +132,7 @@ function describeNode(): RuntimeDescription {
             ...(nodeOptions === '' ? [] : [`NODE_OPTIONS=${nodeOptions}`])
         ],
         processState: [
-            ...(fromSource ? [TYPESCRIPT_SOURCE] : []),
+            ...(fromSource() ? [TYPESCRIPT_SOURCE] : []),
             ...(entryFromSource() ? [TYPESCRIPT_ENTRY] : [])
         ]
     };

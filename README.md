@@ -294,6 +294,8 @@ describes.
 | `medianInterval(sorted, confidence?)` | Returns a confidence interval of the median of sorted samples, of 95% by default, or `null` for too few samples.                                                          |
 | `rotation(count)`                     | Returns the orders of a rotation of `count` variants, each an array of the variants' indexes.                                                                             |
 | `chooseLead(lead, variants)`          | Chooses the statistic that a group leads with, and says why.                                                                                                              |
+| `timerSource(id)`                     | Returns the body of benk's timer loop, for a runtime that can't compile one, as [Runtimes](#runtimes) describes.                                                          |
+| `asyncTimerSource(id)`                | Returns the body of the timer loop that awaits each call.                                                                                                                 |
 | `NodeRuntime`                         | Times variants in Node. The `runtime` option takes another runtime in its place.                                                                                          |
 
 `measureGroups()` and `measureGroup()` are for scripts that print or store
@@ -349,12 +351,119 @@ All three throw:
 
 ### Runtimes
 
-benk runs on Node only. Its measuring isn't particular to Node, though: it
-times variants through a `Runtime`, which creates the timer loops and counts
-heap bytes. `NodeRuntime` creates the loops with `new Function`, and counts
-heap bytes with `node:v8`, which Workers and browsers don't allow. The
-`runtime` option takes another `Runtime`, such as one with a fake clock for
-a test.
+benk's measuring isn't particular to Node. It times variants through a
+`Runtime`, which creates the timer loops and counts heap bytes. `NodeRuntime`
+creates the loops with `new Function`, and counts heap bytes with `node:v8`,
+which Workers and browsers don't allow. The `runtime` option takes another
+`Runtime`, such as one with a fake clock for a test.
+
+benk has a runtime for Node only. A script for another runtime passes its
+own, and imports `benk/core` rather than `benk`. Importing `benk` loads
+Node's modules, whichever runtime times the variants. Importing `benk/core`
+loads none.
+
+`benk/core` exports what `benk` does, except these, which need Node:
+
+| Export           | What to do without it                                                       |
+| ---------------- | --------------------------------------------------------------------------- |
+| `bench()`        | Call `measureGroups()`, and print with `describeRun()` and `formatGroup()`. |
+| `parseOptions()` | Pass the options as an object.                                              |
+| `NodeRuntime`    | Pass a `Runtime` as the `runtime` option, which `benk/core` requires.       |
+
+A runtime that can't compile a string needs its loops written before it
+runs. Each variant needs a loop from a source of its own: V8 shares the
+compiled code and type feedback of identical sources, and of closures of
+one function.
+
+- `timerSource(id)` returns the body of benk's loop, for a function that
+  takes `run` and `repetitions`.
+- `asyncTimerSource(id)` returns the body of the loop that awaits each
+  call, for an async function.
+- Each `id` gives another source.
+- The body ends with a comment, so the function's closing brace goes on a
+  line after it.
+
+A group needs a loop for each variant, and one for its A/A copy. This
+script, `write-timers.ts`, writes a module of 16 loops:
+
+```ts
+import { writeFileSync } from 'node:fs';
+import { timerSource } from 'benk/core';
+
+const loops = Array.from(
+    { length: 16 },
+    (_, id) => `function (run, repetitions) {\n${timerSource(id)}\n}`
+);
+
+writeFileSync(
+    'timers.ts',
+    `// @ts-nocheck
+import type { Timer } from 'benk/core';
+
+export const timers: Timer[] = [
+${loops.join(',\n')}
+];
+`
+);
+```
+
+Run it with `node write-timers.ts`. This script, `bench.ts`, then times a
+group with those loops, and prints its table:
+
+```ts
+import { formatGroup, measureGroups, type Runtime } from 'benk/core';
+import { timers } from './timers.ts';
+
+const numbers = Array.from({ length: 1000 }, (_, i) => Math.sin(i));
+
+const runtime: Runtime = {
+    description: {
+        name: 'My runtime',
+        version: 'unknown',
+        engine: 'unknown',
+        platform: 'unknown',
+        arch: 'unknown',
+        cpu: 'unknown',
+        flags: [],
+        processState: []
+    },
+    createTimer() {
+        const timer = timers.pop();
+        if (timer === undefined) {
+            throw new Error('Expected timers.ts to have a loop for each variant');
+        }
+
+        return timer;
+    },
+    createAsyncTimer() {
+        throw new Error('Expected sync variants only');
+    },
+    heap: undefined
+};
+
+await measureGroups(
+    [
+        {
+            name: 'sum 1,000 numbers',
+            variants: [
+                {
+                    name: 'reduce',
+                    run: () => numbers.reduce((sum, x) => sum + x, 0)
+                }
+            ]
+        }
+    ],
+    {
+        runtime,
+        onGroup: group => {
+            console.log(formatGroup(group).join('\n'));
+        }
+    }
+);
+```
+
+Both scripts were run in Node. benk isn't tested in a Worker or a browser,
+whose clocks and module loading differ from Node's.
 
 ## The cost of the async loop
 
@@ -470,9 +579,9 @@ Not built yet:
   deopts, tied to the result that they explain, with a budget check for CI.
 - **A `bench` API in hypotes**, Vitest's `bench()` on node:test, layered over
   benk.
-- **Runtimes other than Node**: a runtime for browsers and Workers, which
-  needs timer loops without `new Function`, such as a loop generated per
-  variant at build time, and no heap bytes.
+- **Runtimes other than Node**: a runtime for browsers and Workers, with
+  timer loops written at build time and no heap bytes, in place of the one
+  that a script writes itself, as [Runtimes](#runtimes) describes.
 - **Position effects in the report.** The JSON has each round's position;
   the table could flag a variant whose time depends on it.
 
