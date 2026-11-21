@@ -71,17 +71,15 @@ describe('parseOptions', () => {
         const parse = (): unknown => parseOptions(['--filter', '[']);
 
         expect(parse).toThrow(SyntaxError);
-        expect(parse).toThrow(/--filter.*\[/u);
+        expect(parse).toThrow(/--filter.*\[/);
     });
 });
 
 describe('bench', () => {
-    function groups(runtime: FakeRuntime): Group[] {
-        return [
-            { name: 'first', variants: [runtime.variant('a', 50), runtime.variant('b', 100)] },
-            { name: 'second', variants: [runtime.variant('c', 10)] }
-        ];
-    }
+    const groups = (runtime: FakeRuntime): Group[] => [
+        { name: 'first', variants: [runtime.variant('a', 50), runtime.variant('b', 100)] },
+        { name: 'second', variants: [runtime.variant('c', 10)] }
+    ];
 
     it('prints a description of the run and the table of each group that the filter selects', async () => {
         const runtime = new FakeRuntime();
@@ -95,9 +93,9 @@ describe('bench', () => {
 
         const rows = lines
             .filter(line => line.startsWith('  ') && line.trim() !== '')
-            .map(line => line.trim().split(/\s{2,}/u)[0]);
+            .map(line => line.trim().split(/\s{2,}/)[0]);
 
-        expect(lines[0]).toMatch(/^Fake 1\.0\.0, none, test none, none\./u);
+        expect(lines[0]).toMatch(/^Fake 1\.0\.0, none, test none, none\./);
         expect(lines).toContain(
             'first: 6 rounds, by the fastest round (every call under 1 µs and 1 KiB)'
         );
@@ -137,7 +135,7 @@ describe('bench', () => {
                 print: () => undefined
             });
 
-            await expect(run).rejects.toThrow(/directory of --json/u);
+            await expect(run).rejects.toThrow(/directory of --json/);
             expect(calls).toBe(0);
         } finally {
             await rm(directory, { recursive: true });

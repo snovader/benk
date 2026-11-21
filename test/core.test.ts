@@ -54,7 +54,7 @@ describe('benk/core', () => {
                 { name: 'first', variants: [runtime.variant('a', 100)] },
                 { name: 'second', variants: [runtime.variant('a', 100)] }
             ],
-            { ...QUICK, filter: /second/u, runtime }
+            { ...QUICK, filter: /second/, runtime }
         );
 
         expect(result.runtime).toStrictEqual(runtime.description);

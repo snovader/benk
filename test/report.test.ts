@@ -80,9 +80,9 @@ describe('formatGroup', () => {
             ratio: 0.00042,
             interval: [0.00039, 0.00046]
         });
-        const row = formatGroup({ ...group, variants: [group.variants[0], fast] }).at(-1);
+        const lines = formatGroup({ ...group, variants: [group.variants[0], fast] });
 
-        expect(row).toMatch(/% 0\.00042× 0\.00039–0\.00046 +0 B$/u);
+        expect(lines[lines.length - 1]).toMatch(/% 0\.00042× 0\.00039–0\.00046 +0 B$/);
     });
 
     it('notes a ratio by the fastest round that lies more than 5% outside its interval', () => {
@@ -165,9 +165,9 @@ describe('describeRun', () => {
             'Node v26.0.0, V8 14.6, linux x64, A CPU, with --max-inlined-bytecode-size-cumulative=3000. Process state: benk from TypeScript source.'
         );
         expect(second).toMatch(
-            /at least 31 interleaved rounds of 1 ms per variant after 10 warm-up rounds/u
+            /at least 31 interleaved rounds of 1 ms per variant after 10 warm-up rounds/
         );
-        expect(third).not.toMatch(/heap/u);
+        expect(third).not.toMatch(/heap/);
     });
 });
 
@@ -209,10 +209,10 @@ describe('formatting', () => {
         const json = formatJson(value);
 
         expect(JSON.parse(json)).toStrictEqual(value);
-        expect(json).toMatch(/"samples": \[1, 2\.5, -3e-7\]/u);
-        expect(json).toMatch(/"positions": \[0, 1\]/u);
-        expect(json).toMatch(/"names": \[\n {4}"a",/u);
-        expect(json).toMatch(/\}\n$/u);
+        expect(json).toMatch(/"samples": \[1, 2\.5, -3e-7\]/);
+        expect(json).toMatch(/"positions": \[0, 1\]/);
+        expect(json).toMatch(/"names": \[\n {4}"a",/);
+        expect(json).toMatch(/\}\n$/);
     });
 
     it('writes an array of negative numbers and a null without backtracking', () => {

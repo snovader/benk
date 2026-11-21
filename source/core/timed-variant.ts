@@ -47,10 +47,9 @@ export class TimedVariant {
     #repetitions = 1;
 
     constructor(variant: Variant, placement: Placement, runtime: Runtime) {
-        this.#loop =
-            variant.async === true
-                ? { async: true, variant, timer: runtime.createAsyncTimer() }
-                : { async: false, variant, timer: runtime.createTimer() };
+        this.#loop = variant.async
+            ? { async: true, variant, timer: runtime.createAsyncTimer() }
+            : { async: false, variant, timer: runtime.createTimer() };
         this.#placement = placement;
     }
 

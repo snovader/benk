@@ -89,7 +89,7 @@ export async function measureGroups(
     // A global or sticky expression's `test()` would move its `lastIndex`
     const filter = new RegExp(
         options.filter?.source ?? '',
-        options.filter?.flags.replaceAll(/[gy]/gu, '')
+        options.filter?.flags.replaceAll(/[gy]/g, '')
     );
 
     const results: GroupResult[] = [];
@@ -199,7 +199,7 @@ function timedVariants(
     runtime: Runtime
 ): TimedVariant[] {
     const [reference] = group.variants;
-    if (reference === undefined) {
+    if (reference == null) {
         throw new TypeError(`Expected group "${group.name}" to have variants`);
     }
 

@@ -104,12 +104,12 @@ const counters = new WeakMap<Runtime, HeapCounter>();
  */
 export function heapCounterOf(runtime: Runtime): HeapCounter | undefined {
     const { heap } = runtime;
-    if (heap === undefined) {
+    if (heap == null) {
         return undefined;
     }
 
     let counter = counters.get(runtime);
-    if (counter === undefined) {
+    if (counter == null) {
         counter = new HeapCounter(heap, runtime);
         counters.set(runtime, counter);
     }

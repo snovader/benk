@@ -78,7 +78,7 @@ function estimateResolution(timer: Timer): number | null {
     let shortest = Infinity;
     for (let pass = 0; pass < PASSES; pass++) {
         const first = firstReading(timer);
-        if (first === undefined) {
+        if (first == null) {
             return null;
         }
 

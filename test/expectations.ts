@@ -6,7 +6,7 @@ import { expect } from 'hypotes';
  * such, which a matcher doesn't narrow its type to
  */
 export function expectPresent<T>(value: T, message?: string): NonNullable<T> {
-    if (value === null || value === undefined) {
+    if (value == null) {
         expect.fail(message ?? `Expected a value, but got ${String(value)}`);
     }
 

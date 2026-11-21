@@ -25,23 +25,23 @@ function captures(text: string, pattern: RegExp): string[] {
 
 describe('README', () => {
     it('describes each export of benk', () => {
-        const described = captures(tableAfter('## API'), /^\| `(\w+)/gmu);
+        const described = captures(tableAfter('## API'), /^\| `(\w+)/gm);
 
-        expect(described.toSorted()).toStrictEqual(Object.keys(benk).toSorted());
+        expect(described.sort()).toStrictEqual(Object.keys(benk).sort());
     });
 
     it('names each export of benk that benk/core leaves out', () => {
-        const named = captures(tableAfter('### Runtimes'), /^\| `(\w+)/gmu);
+        const named = captures(tableAfter('### Runtimes'), /^\| `(\w+)/gm);
         const exported = new Set(Object.keys(core));
         const leftOut = Object.keys(benk).filter(name => !exported.has(name));
 
-        expect(named.toSorted()).toStrictEqual(leftOut.toSorted());
+        expect(named.sort()).toStrictEqual(leftOut.sort());
         expect(Object.keys(core).filter(name => !(name in benk))).toStrictEqual([]);
     });
 
     it('describes each option of the command line', () => {
         // An option with a value, as `--rounds <n>`, has a space after its name
-        const options = new Set(captures(tableAfter('### Options'), /^\| `(--[a-z-]+ ?)/gmu));
+        const options = new Set(captures(tableAfter('### Options'), /^\| `(--[a-z-]+ ?)/gm));
         const args = Array.from(options).flatMap(option =>
             option.endsWith(' ') ? [option.trimEnd(), '7'] : [option]
         );
