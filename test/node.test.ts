@@ -78,6 +78,29 @@ describe('NodeRuntime', () => {
         expect(arrays).toBeLessThan(8400);
     });
 
+    it('counts the bytes of array buffers that calls allocate outside the heap', async () => {
+        let count = 0;
+        const result = await measureGroup(
+            {
+                name: 'array buffers',
+                variants: [
+                    { name: 'small integers', run: () => (count = (count + 1) % 1024) },
+                    // V8 keeps the contents of a buffer of 64 bytes on its heap
+                    { name: 'Float64Array of 8', run: () => new Float64Array(8) },
+                    { name: 'Float64Array of 128', run: () => new Float64Array(128) },
+                    { name: 'Float64Array of 131,072', run: () => new Float64Array(131_072) }
+                ]
+            },
+            { ...QUICK, aa: false }
+        );
+
+        expect(result.variants.map(variant => variant.arrayBufferBytes)).toStrictEqual([
+            0, 0, 1024, 1_048_576
+        ]);
+        // By their bytes, if not by their time
+        expect(result.lead).toBe('median');
+    });
+
     it('prints what it knows of the process in the description of a run', async () => {
         const lines: string[] = [];
         const result = await bench([{ name: 'calls', variants: [{ name: 'a', run: () => 1 }] }], {

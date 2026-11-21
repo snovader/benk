@@ -1,3 +1,4 @@
+import { arrayBufferBytesPerCall } from './array-buffers.ts';
 import { timerResolutionOf } from './clock.ts';
 import { heapCounterOf } from './heap.ts';
 import { chooseLead } from './lead.ts';
@@ -41,7 +42,10 @@ export interface MeasureOptions {
      * the first shows the run's noise. True by default.
      */
     readonly aa?: boolean;
-    /** Whether to count the bytes that calls allocate. True by default. */
+    /**
+     * Whether to count the bytes that calls allocate, on the heap and in
+     * array buffers. True by default.
+     */
     readonly heap?: boolean;
 }
 
@@ -68,6 +72,7 @@ interface Measured {
     readonly positions: Int32Array;
     readonly summary: Summary;
     readonly heapBytes: number | null;
+    readonly arrayBufferBytes: number | null;
 }
 
 /**
@@ -102,7 +107,7 @@ export async function measureGroups(
     }
 
     return {
-        schema: 2,
+        schema: 3,
         date,
         runtime: runtime.description,
         options: { ...resolved, filter: options.filter?.source ?? '' },
@@ -130,8 +135,9 @@ export async function measureGroups(
  * warm-up runs several times as fast as the first calls.
  *
  * Then it counts the bytes that each variant's calls allocate on the heap,
- * with the same timer loops, in samples apart from the timed rounds, and
- * compares each variant with the first, as `VariantResult` describes.
+ * and in array buffers outside it, with the same timer loops, in samples
+ * apart from the timed rounds, and compares each variant with the first, as
+ * `VariantResult` describes.
  *
  * @throws {RangeError} If an option is out of its range.
  * @throws {TypeError} If the group has no variants, or two of the same name.
@@ -162,6 +168,7 @@ export async function measureGroup(
 
     const { samples, positions } = await timeRounds(variants, orders, rounds);
     const heap = options.heap ? heapCounterOf(runtime) : undefined;
+    const arrayBuffers = options.heap ? runtime.arrayBuffers : undefined;
 
     const measured: Measured[] = [];
     for (const [i, variant] of variants.entries()) {
@@ -170,7 +177,10 @@ export async function measureGroup(
             samples: samples[i],
             positions: positions[i],
             summary: summarize(samples[i]),
-            heapBytes: (await heap?.bytesPerCall(variant)) ?? null
+            heapBytes: (await heap?.bytesPerCall(variant)) ?? null,
+            arrayBufferBytes: arrayBuffers
+                ? await arrayBufferBytesPerCall(arrayBuffers, variant)
+                : null
         });
     }
 
@@ -266,7 +276,14 @@ async function timeRounds(
 
 /** A variant's results, with its ratio to the reference by the lead */
 function variantResult(
-    { variant, samples, positions, summary, heapBytes }: Measured,
+    {
+        variant,
+        samples,
+        positions,
+        summary,
+        heapBytes,
+        arrayBufferBytes
+    }: Measured,
     reference: Measured,
     lead: Lead
 ): VariantResult {
@@ -289,7 +306,8 @@ function variantResult(
         summary,
         ratio: role === 'reference' ? 1 : ratio,
         interval: role === 'reference' ? null : medianInterval(ratios),
-        heapBytes
+        heapBytes,
+        arrayBufferBytes
     };
 }
 

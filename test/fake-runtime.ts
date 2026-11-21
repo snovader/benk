@@ -1,9 +1,10 @@
 // A runtime whose clock moves only when a call spends time, and whose heap
-// grows only when a fake call allocates, so that tests can check what a
-// measurement makes of known times and allocations. A call that spends no
+// and array buffers grow only when a fake call allocates, so that tests can
+// check what a measurement makes of known times and allocations. A call that spends no
 // time of its own, as benk's empty calls that time the clock, takes
 // `emptyCall` nanoseconds, as no call is free.
 import type {
+    ArrayBufferMeter,
     AsyncTimer,
     AsyncVariant,
     HeapMeter,
@@ -72,6 +73,45 @@ export class FakeHeap implements HeapMeter {
     }
 }
 
+export class FakeArrayBuffers implements ArrayBufferMeter {
+    #allocated = 0;
+    #samples = 0;
+    readonly #collectedAbove: number;
+    readonly #freed: readonly number[];
+
+    /**
+     * `collectedAbove` is the most bytes that a sample allocates without a
+     * garbage collection, which the meter can't count, and `freed` what the
+     * background frees during the samples, in turn
+     */
+    constructor(collectedAbove: number, freed: readonly number[]) {
+        this.#collectedAbove = collectedAbove;
+        this.#freed = freed;
+    }
+
+    allocate(bytes: number): void {
+        this.#allocated += bytes;
+    }
+
+    settle(): Promise<void> {
+        return Promise.resolve();
+    }
+
+    start(): () => number | null {
+        const before = this.#allocated;
+        const freed = this.#freed[this.#samples++ % this.#freed.length];
+
+        return () => {
+            const allocated = this.#allocated - before;
+            const counted = allocated - freed;
+
+            return allocated > this.#collectedAbove || counted < 0
+                ? null
+                : counted;
+        };
+    }
+}
+
 export interface FakeRuntimeOptions {
     /** Whether the runtime counts heap bytes. True by default. */
     readonly heap?: boolean;
@@ -79,6 +119,18 @@ export interface FakeRuntimeOptions {
     readonly heapOverhead?: number;
     /** What the heap samples count wrongly, in turn. None by default. */
     readonly heapErrors?: readonly number[];
+    /** Whether the runtime counts array buffers' bytes. True by default. */
+    readonly arrayBuffers?: boolean;
+    /**
+     * The most bytes of array buffers that a sample allocates without a
+     * garbage collection. No limit by default.
+     */
+    readonly bufferCollectedAbove?: number;
+    /**
+     * The bytes of array buffers that the background frees during the
+     * samples, in turn. None by default.
+     */
+    readonly bufferFrees?: readonly number[];
     /** The nanoseconds between the times that the clock reads. 0 by default. */
     readonly clockTick?: number;
     /**
@@ -108,6 +160,8 @@ export class FakeRuntime implements Runtime {
     readonly clock: FakeClock;
     readonly fakeHeap: FakeHeap;
     readonly heap: HeapMeter | undefined;
+    readonly fakeArrayBuffers: FakeArrayBuffers;
+    readonly arrayBuffers: ArrayBufferMeter | undefined;
     /** The last result of the last loop */
     sink: unknown;
     readonly #emptyCall: number;
@@ -118,6 +172,9 @@ export class FakeRuntime implements Runtime {
         heap = true,
         heapOverhead = 1000,
         heapErrors = [0],
+        arrayBuffers = true,
+        bufferCollectedAbove = Infinity,
+        bufferFrees = [0],
         clockTick = 0,
         emptyCall = 1,
         coldLoops = []
@@ -125,6 +182,11 @@ export class FakeRuntime implements Runtime {
         this.clock = new FakeClock(clockTick);
         this.fakeHeap = new FakeHeap(heapOverhead, heapErrors);
         this.heap = heap ? this.fakeHeap : undefined;
+        this.fakeArrayBuffers = new FakeArrayBuffers(
+            bufferCollectedAbove,
+            bufferFrees
+        );
+        this.arrayBuffers = arrayBuffers ? this.fakeArrayBuffers : undefined;
         this.#emptyCall = emptyCall;
         this.#coldLoops = coldLoops;
     }
@@ -167,25 +229,40 @@ export class FakeRuntime implements Runtime {
         }
     }
 
-    /** A variant whose calls each take `nanoseconds` and allocate `bytes` */
-    variant(name: string, nanoseconds: number, bytes = 0): SyncVariant {
+    /**
+     * A variant whose calls each take `nanoseconds`, and allocate `bytes` on
+     * the heap and `bufferBytes` in array buffers
+     */
+    variant(
+        name: string,
+        nanoseconds: number,
+        bytes = 0,
+        bufferBytes = 0
+    ): SyncVariant {
         return {
             name,
             run: () => {
                 this.clock.spend(nanoseconds);
                 this.fakeHeap.allocate(bytes);
+                this.fakeArrayBuffers.allocate(bufferBytes);
             }
         };
     }
 
-    /** An async variant whose calls each take `nanoseconds` */
-    asyncVariant(name: string, nanoseconds: number, bytes = 0): AsyncVariant {
+    /** An async variant whose calls each take `nanoseconds`, as `variant()`'s */
+    asyncVariant(
+        name: string,
+        nanoseconds: number,
+        bytes = 0,
+        bufferBytes = 0
+    ): AsyncVariant {
         return {
             name,
             async: true,
             run: () => {
                 this.clock.spend(nanoseconds);
                 this.fakeHeap.allocate(bytes);
+                this.fakeArrayBuffers.allocate(bufferBytes);
 
                 return Promise.resolve();
             }

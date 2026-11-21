@@ -14,7 +14,8 @@ const COLUMNS: ReadonlyArray<readonly [title: string, width: number]> = [
     ['spread', 9],
     ['ratio', 9],
     ['95% interval', 15],
-    ['heap', 12]
+    ['heap', 12],
+    ['buffers', 12]
 ];
 
 /** The narrowest column of names */
@@ -72,7 +73,9 @@ export function describeRun(
         `${runtime.name} ${runtime.version}, ${runtime.engine}, ${runtime.platform} ${runtime.arch}, ${runtime.cpu}${flags}.${state}`,
         `Per call, of at least ${rounds} interleaved rounds of ${sampleTime} ms per variant after ${warmupRounds} warm-up rounds, in an order that rotates each variant through each position:`,
         "the fastest and median round, the interquartile range as a share of the median, the ratio to the group's first variant by the statistic that the group leads with, a 95% interval of the median of the per-round ratios" +
-            (heap ? ', and the bytes allocated on the heap.' : '.')
+            (heap
+                ? ', and the bytes allocated on the heap and in array buffers outside it.'
+                : '.')
     ].join('\n');
 }
 
@@ -107,8 +110,13 @@ export function formatGroup({
     ];
 }
 
+/**
+ * A variant's row. A count of bytes that the run didn't make prints as –,
+ * as do the bytes of array buffers in results that a version before
+ * `schema` 3 wrote, which have none.
+ */
 function formatRow(variant: VariantResult, nameWidth: number): string {
-    const { summary, ratio, interval, heapBytes } = variant;
+    const { summary, ratio, interval, heapBytes, arrayBufferBytes } = variant;
     const cells = [
         formatTime(summary.fastest),
         formatTime(summary.median),
@@ -117,7 +125,8 @@ function formatRow(variant: VariantResult, nameWidth: number): string {
         interval == null
             ? ''
             : `${formatRatio(interval[0])}–${formatRatio(interval[1])}`,
-        heapBytes == null ? '–' : formatBytes(heapBytes)
+        heapBytes == null ? '–' : formatBytes(heapBytes),
+        arrayBufferBytes == null ? '–' : formatBytes(arrayBufferBytes)
     ];
 
     return `  ${variant.name.padEnd(nameWidth)}${cells.map((cell, i) => padCell(cell, COLUMNS[i][1])).join('')}`;

@@ -87,6 +87,26 @@ export interface HeapMeter {
 }
 
 /**
+ * Counts the bytes of array buffers' contents that a runtime keeps outside
+ * its heap, as V8 does for a buffer of more than 64 bytes. Where the runtime
+ * can't tell how many it freed meanwhile, a sample counts nothing, and the
+ * core takes another of fewer calls.
+ */
+export interface ArrayBufferMeter {
+    /**
+     * Waits, before a sample, for the runtime to free buffers that it frees
+     * in the background, as V8 does after a garbage collection
+     */
+    settle(): Promise<void>;
+    /**
+     * Starts counting, and returns the function that stops and returns the
+     * bytes allocated since, or null if buffers were freed meanwhile, as a
+     * garbage collection frees them
+     */
+    start(): () => number | null;
+}
+
+/**
  * What a run's results record about the runtime that timed it. A runtime
  * that can't know one of them, as a Worker can't its processor, gives
  * `'unknown'`.
@@ -122,6 +142,11 @@ export interface Runtime {
     createAsyncTimer(): AsyncTimer;
     /** Counts heap allocations, where the runtime can */
     readonly heap: HeapMeter | undefined;
+    /**
+     * Counts the bytes of array buffers outside the heap, where the runtime
+     * can. A runtime without it counts none, as one written before it.
+     */
+    readonly arrayBuffers?: ArrayBufferMeter;
 }
 
 /** Whether a variant is its group's reference, the A/A copy of it, or another */
@@ -194,17 +219,27 @@ export interface VariantResult {
      * take below 0 for a call that allocates nothing.
      */
     readonly heapBytes: number | null;
+    /**
+     * The bytes of array buffers' contents that a call allocated outside the
+     * heap, which `heapBytes` leaves out. It's null where the runtime can't
+     * count them or the run didn't, and where too few samples could be
+     * counted, as when each call starts a garbage collection.
+     */
+    readonly arrayBufferBytes: number | null;
 }
 
 /** Why a group's ratios compare the statistic that they do */
 export type LeadReason =
     /** The group set it */
     | 'set'
-    /** Every call took under 1 µs and allocated under 1 KiB */
+    /**
+     * Every call took under 1 µs and allocated under 1 KiB, on the heap and
+     * in array buffers together
+     */
     | 'short calls'
     /** A call took 1 µs or more */
     | 'long calls'
-    /** A call allocated 1 KiB or more */
+    /** A call allocated 1 KiB or more, on the heap and in array buffers */
     | 'allocating calls';
 
 export interface GroupResult {
@@ -239,7 +274,7 @@ export interface RecordedOptions {
 /** A run's results, which `JSON.stringify` writes as they are */
 export interface RunResult {
     /** The version of this format, which changes when a field does */
-    readonly schema: 2;
+    readonly schema: 3;
     /** When the run started, as an ISO 8601 string */
     readonly date: string;
     readonly runtime: RuntimeDescription;

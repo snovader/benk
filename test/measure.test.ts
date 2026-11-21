@@ -309,23 +309,99 @@ describe('measureGroup', () => {
 
     it('counts no bytes when the run or the runtime does not', async () => {
         const counting = new FakeRuntime();
-        const blind = new FakeRuntime({ heap: false });
+        const blind = new FakeRuntime({ heap: false, arrayBuffers: false });
 
         const off = await measureGroup(
-            { name: 'off', variants: [counting.variant('a', 10, 8)] },
+            { name: 'off', variants: [counting.variant('a', 10, 8, 2048)] },
             { ...QUICK, heap: false, runtime: counting }
         );
         const none = await measureGroup(
-            { name: 'none', variants: [blind.variant('a', 10, 8)] },
+            { name: 'none', variants: [blind.variant('a', 10, 8, 2048)] },
             { ...QUICK, runtime: blind }
         );
 
-        expect([...off.variants, ...none.variants].map(v => v.heapBytes)).toStrictEqual([
-            null,
-            null,
-            null,
-            null
+        expect(
+            [...off.variants, ...none.variants].map(v => [v.heapBytes, v.arrayBufferBytes])
+        ).toStrictEqual([
+            [null, null],
+            [null, null],
+            [null, null],
+            [null, null]
         ]);
+    });
+
+    describe('array buffers', () => {
+        it('counts the bytes of array buffers that a call allocates, apart from its heap bytes', async () => {
+            const runtime = new FakeRuntime();
+            const result = await measureGroup(
+                {
+                    name: 'buffers',
+                    variants: [
+                        runtime.variant('none', 50),
+                        runtime.variant('heap', 50, 48),
+                        runtime.variant('buffers', 50, 0, 1024),
+                        runtime.variant('both', 50, 200, 8192),
+                        runtime.asyncVariant('async', 50, 24, 128)
+                    ]
+                },
+                { ...QUICK, runtime }
+            );
+
+            expect(
+                result.variants.map(v => [v.name, v.heapBytes, v.arrayBufferBytes])
+            ).toStrictEqual([
+                ['none', 0, 0],
+                ['heap', 48, 0],
+                ['buffers', 0, 1024],
+                ['both', 200, 8192],
+                ['async', 24, 128],
+                ['none A/A', 0, 0]
+            ]);
+        });
+
+        it.prop([fc.integer({ min: 1, max: 1e6 }), fc.integer({ min: 0, max: 30 })], {
+            numRuns: 40
+        })(
+            'halves the calls of a sample until one starts no garbage collection',
+            async (bytes, calls) => {
+                // A sample of more than `calls` calls starts a collection
+                const runtime = new FakeRuntime({
+                    heap: false,
+                    bufferCollectedAbove: bytes * calls
+                });
+                const result = await measureGroup(
+                    { name: 'collected', variants: [runtime.variant('a', 50, 0, bytes)] },
+                    { ...QUICK, aa: false, runtime }
+                );
+
+                // Each call starts one when the limit is under a call's bytes
+                expect(result.variants[0].arrayBufferBytes).toBe(calls === 0 ? null : bytes);
+            }
+        );
+
+        it.prop(
+            [
+                fc.integer({ min: 0, max: 1e5 }),
+                fc.array(fc.integer({ min: 1, max: 1e9 }), { minLength: 0, maxLength: 2 }),
+                fc.nat({ max: 4 })
+            ],
+            { numRuns: 60 }
+        )(
+            'counts the median sample, which buffers freed in 2 samples of 5 leave alone',
+            async (bytes, frees, at) => {
+                // Up to 2 samples of each 5 in a row see buffers freed in the
+                // background, which take their count down, or below 0
+                const bufferFrees = [...frees, 0, 0, 0, 0, 0].slice(0, 5);
+                const rotated = [...bufferFrees.slice(at), ...bufferFrees.slice(0, at)];
+                const runtime = new FakeRuntime({ heap: false, bufferFrees: rotated });
+                const result = await measureGroup(
+                    { name: 'freed', variants: [runtime.variant('a', 50, 0, bytes)] },
+                    { ...QUICK, aa: false, runtime }
+                );
+
+                expect(result.variants[0].arrayBufferBytes).toBe(bytes);
+            }
+        );
     });
 
     describe('lead', () => {
@@ -348,6 +424,31 @@ describe('measureGroup', () => {
 
             expect([result.lead, result.leadReason]).toStrictEqual(['median', 'long calls']);
         });
+
+        it.prop([fc.integer({ min: 0, max: 2048 }), fc.integer({ min: 0, max: 2048 })], {
+            numRuns: 40
+        })(
+            'leads with the median round when a call allocates 1 KiB or more on the heap and in array buffers together',
+            async (heap, buffers) => {
+                const runtime = new FakeRuntime();
+                const result = await measureGroup(
+                    {
+                        name: 'allocating',
+                        variants: [
+                            runtime.variant('a', 10),
+                            runtime.variant('b', 10, heap, buffers)
+                        ]
+                    },
+                    { ...QUICK, runtime }
+                );
+
+                expect([result.lead, result.leadReason]).toStrictEqual(
+                    heap + buffers >= 1024
+                        ? ['median', 'allocating calls']
+                        : ['fastest', 'short calls']
+                );
+            }
+        );
 
         it('leads with the median round when a call allocates 1 KiB or more', async () => {
             const runtime = new FakeRuntime();
@@ -424,7 +525,7 @@ describe('measureGroups', () => {
 
         expect(reported).toStrictEqual(['banana', 'blueberry']);
         expect(result.groups.map(group => group.name)).toStrictEqual(['banana', 'blueberry']);
-        expect(result.schema).toBe(2);
+        expect(result.schema).toBe(3);
         expect(result.runtime).toBe(runtime.description);
         expect(result.options).toStrictEqual({
             rounds: 31,
