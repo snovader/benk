@@ -1,4 +1,5 @@
 import oxlint from '@snovader/oxc-config/oxlint';
+import hypotes from '@snovader/oxc-config/oxlint/hypotes';
 import { defineConfig } from 'oxlint';
 
 /** Imports of an entry point by its private path */
@@ -9,7 +10,8 @@ const ENTRY_POINTS = {
 };
 
 export default defineConfig({
-    extends: [oxlint],
+    // The tests run on hypotes, whose rules see what they declare and expect
+    extends: [oxlint, hypotes],
     ignorePatterns: ['.yarn', 'dist'],
     rules: {
         // A module in a parent directory is imported by a private path of
@@ -30,14 +32,6 @@ export default defineConfig({
         'eslint/no-await-in-loop': 'off'
     },
     overrides: [
-        {
-            // node:test's `describe` and `it` return promises, which its
-            // runner awaits
-            files: ['**/*.test.ts'],
-            rules: {
-                'typescript/no-floating-promises': 'off'
-            }
-        },
         {
             // The core runs on any JavaScript runtime: what's particular to
             // Node, such as `node:v8`'s heap statistics and timer loops
