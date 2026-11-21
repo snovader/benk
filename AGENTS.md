@@ -73,8 +73,6 @@ between them: the author does.
 - Index an array where the index is known to be in range, as
   `lines[lines.length - 1]`. Use `.at()` where it may not be, and handle
   the undefined.
-- Declare a top-level function with `function`, and write a nested one as
-  an arrow function.
 - Fix what the linter reports rather than suppressing it. Where the rewrite
   that a rule asks for reads worse, keep the code, with a disable directive
   that gives the reason. A directive that no longer suppresses anything is
