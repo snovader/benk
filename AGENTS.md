@@ -127,9 +127,12 @@ between them: the author does.
 ## Runtimes
 
 - `source/core` runs on any JavaScript runtime and takes a `Runtime`, which
-  creates timer loops and counts heap bytes. What's particular to Node, such
-  as `new Function` and `node:v8`, stays in `source/node`. oxlint rejects
-  imports of Node's modules in the core.
+  creates timer loops and counts heap bytes. What's particular to a host
+  stays in its runtime's folder: Node's, such as `node:v8`, in
+  `source/node`, and d8's, such as its `version()`, in `source/d8`. The
+  core compiles no strings: Node's and d8's runtimes compile their loops
+  with `new Function`, which Workers forbid. oxlint rejects imports of
+  Node's modules in the core and in d8's runtime.
 - A runtime records what it knows of the process that changes what's
   timed in its description's `processState`, as `source/node/runtime.ts`
   records benk's own loading from TypeScript source, whose type stripping
@@ -138,8 +141,11 @@ between them: the author does.
 - `source/index.ts` is the Node entry point, `benk`, which passes Node's
   runtime to the core. `source/core.ts` is the core's entry point,
   `benk/core`, which loads none of Node's modules and requires a runtime.
-  It exports what `benk` does, apart from what needs Node. A runtime for
-  browsers or Workers would be an entry point of its own.
+  It exports what `benk` does, apart from what needs Node.
+  `source/d8.ts` is d8's entry point, `benk/d8`, which exports only its
+  runtime, and loads none of Node's modules: a script in d8 takes the rest
+  from `benk/core`. A runtime for browsers or Workers would be an entry
+  point of its own too.
 - The source of the timer loops is the core's, in `timer-source.ts`, since
   a runtime that can't compile a string writes its loops from it at build
   time. A change to it changes what every runtime times.
@@ -179,13 +185,16 @@ between them: the author does.
   a type, so take a value that may be null through `expectPresent`, of
   `test/expectations.ts`.
 - Import what a test tests by the name that the package exports it under,
-  `benk` or `benk/core`, which `yarn test:dist` runs on the bundle. Import what the package
+  `benk`, `benk/core` or `benk/d8`, which `yarn test:dist` runs on the bundle. Import what the package
   doesn't export by its private path, as `test/statistics.test.ts` imports
   `#source/core/statistics`, which suits modules without state.
 - Time with the fake runtime of `test/fake-runtime.ts`, whose clock moves only
   when a fake call spends time, and whose heap grows only when one
   allocates, so that a test knows what a measurement should report. Tests of
-  `NodeRuntime` check only what doesn't vary between runs.
+  `NodeRuntime` and `D8Runtime` check only what doesn't vary between runs.
+  The tests that run in d8 need `d8` on the PATH, and are skipped without
+  it. CI doesn't install it, so run them locally after changing d8's
+  runtime.
 - Prefer property tests, with `it.prop` of `hypotes/fast-check`, as for the
   rotation's balance and the consistency of summaries with their samples.
   Check that a property test fails against code that loses the property, as
@@ -215,7 +224,7 @@ between them: the author does.
   at the TypeScript lines. `prepack`'s `node scripts/require-yarn.ts` keeps
   Node's own stripping. Import a module in a parent directory by a private path of
   package.json's `imports`, as `#source/core/types`, rather than by `../`,
-  and an entry point by its name, `benk` or `benk/core`. oxlint checks each of these.
+  and an entry point by its name, `benk`, `benk/core` or `benk/d8`. oxlint checks each of these.
 - Name TypeScript and JavaScript files and their folders in kebab-case, as
   `timed-variant.ts`, whatever they export. oxlint checks the files' names.
 - `yarn build` bundles the entry points into `dist/` with rolldown, and tsc

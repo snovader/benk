@@ -32,6 +32,10 @@
     "./core": {
       "benk-dist": "./dist/core.js",
       "default": "./source/core.ts"
+    },
+    "./d8": {
+      "benk-dist": "./dist/d8.js",
+      "default": "./source/d8.ts"
     }
   },
   "imports": {
@@ -47,6 +51,10 @@
       "./core": {
         "types": "./dist/core.d.ts",
         "default": "./dist/core.js"
+      },
+      "./d8": {
+        "types": "./dist/d8.d.ts",
+        "default": "./dist/d8.js"
       }
     },
     "imports": {
