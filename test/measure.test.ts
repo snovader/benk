@@ -207,9 +207,7 @@ describe('measureGroup', () => {
         );
 
         await expect(measurement).rejects.toThrow(TypeError);
-        await expect(measurement).rejects.toThrow(
-            /"unmarked" of group "group" returned a promise/u
-        );
+        await expect(measurement).rejects.toThrow(/"unmarked" of group "group" returned a promise/);
     });
 
     it('rejects with the variant and group of a call that throws, and its error as the cause', async () => {
@@ -232,7 +230,7 @@ describe('measureGroup', () => {
             { ...QUICK, runtime }
         );
 
-        await expect(measurement).rejects.toThrow(/"throws" of group "group" threw/u);
+        await expect(measurement).rejects.toThrow(/"throws" of group "group" threw/);
         // The error itself, rather than one that equals it
         await expect(measurement).rejects.toSatisfy((error: Error) => error.cause === cause);
     });
@@ -419,7 +417,7 @@ describe('measureGroups', () => {
         const result = await measureGroups(groups, {
             ...QUICK,
             // A global expression's test() would skip every other match
-            filter: /^b/gu,
+            filter: /^b/g,
             runtime,
             onGroup: group => reported.push(group.name)
         });

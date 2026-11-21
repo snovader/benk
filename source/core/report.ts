@@ -114,10 +114,10 @@ function formatRow(variant: VariantResult, nameWidth: number): string {
         formatTime(summary.median),
         `${(summary.spread * 100).toFixed(1)}%`,
         `${formatRatio(ratio)}×`,
-        interval === null
+        interval == null
             ? ''
             : `${formatRatio(interval[0])}–${formatRatio(interval[1])}`,
-        heapBytes === null ? '–' : formatBytes(heapBytes)
+        heapBytes == null ? '–' : formatBytes(heapBytes)
     ];
 
     return `  ${variant.name.padEnd(nameWidth)}${cells.map((cell, i) => padCell(cell, COLUMNS[i][1])).join('')}`;
@@ -149,7 +149,7 @@ function formatResolution(
     resolution: number | null | undefined,
     variants: readonly VariantResult[]
 ): string[] {
-    if (resolution === null || resolution === undefined) {
+    if (resolution == null) {
         return [];
     }
 
@@ -170,7 +170,7 @@ function formatResolution(
 
 function formatModes({ name, summary }: VariantResult): string[] {
     const { modes } = summary;
-    if (modes === null) {
+    if (modes == null) {
         return [];
     }
 
@@ -190,7 +190,7 @@ function formatModes({ name, summary }: VariantResult): string[] {
  * The median may then suit the group better as its lead.
  */
 function formatOutside({ name, ratio, interval }: VariantResult): string[] {
-    if (interval === null) {
+    if (interval == null) {
         return [];
     }
 
@@ -262,11 +262,9 @@ export function formatJson(value: unknown): string {
  * inside one, as in a variant's name, is left as it is.
  */
 const STRING_OR_NUMBER_ARRAY =
-    /"(?:[^"\\]|\\.)*"|\[\s+([\d.e+-]+(?:,\s+[\d.e+-]+)*)\s+\]/gu;
+    /"(?:[^"\\]|\\.)*"|\[\s+([\d.e+-]+(?:,\s+[\d.e+-]+)*)\s+\]/g;
 
 /** The numbers of an array on one line, or a string as it was */
 function joinNumbers(match: string, numbers: string | undefined): string {
-    return numbers === undefined
-        ? match
-        : `[${numbers.replaceAll(/,\s+/gu, ', ')}]`;
+    return numbers ? `[${numbers.replaceAll(/,\s+/g, ', ')}]` : match;
 }

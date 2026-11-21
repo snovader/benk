@@ -112,7 +112,7 @@ export async function bench(
         options.print ??
         (toStdout ? printError : (line: string) => console.log(line));
     const runtime = options.runtime ?? defaultRuntime();
-    if (json !== undefined && !toStdout) {
+    if (json != null && !toStdout) {
         await checkDirectory(json);
     }
 
@@ -137,7 +137,7 @@ export async function bench(
 
     if (toStdout) {
         (options.write ?? writeStdout)(formatJson(result));
-    } else if (json !== undefined) {
+    } else if (json != null) {
         await writeFile(json, formatJson(result));
     }
 
@@ -173,7 +173,7 @@ async function checkDirectory(path: string): Promise<void> {
 }
 
 function filterOption(value: string | undefined): RegExp | undefined {
-    if (value === undefined) {
+    if (value == null) {
         return undefined;
     }
 
@@ -195,9 +195,9 @@ function integerOption(
 ): number {
     // Digits only, as Number() reads an empty string as 0
     const number =
-        value === undefined
+        value == null
             ? otherwise
-            : /^\d+$/u.test(value)
+            : /^\d+$/.test(value)
               ? Number(value)
               : Number.NaN;
     if (!Number.isInteger(number) || number < least) {
@@ -210,8 +210,7 @@ function integerOption(
 }
 
 function sampleTimeOption(value: string | undefined): number {
-    const number =
-        value === undefined ? DEFAULT_OPTIONS.sampleTime : Number(value);
+    const number = value == null ? DEFAULT_OPTIONS.sampleTime : Number(value);
     if (!(number > 0 && number < Infinity)) {
         throw new RangeError(
             `Expected --sample-ms to be a positive number, got ${value}`

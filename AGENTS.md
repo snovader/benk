@@ -46,6 +46,40 @@ intent, not a requirement to preserve every detail.
   constraints, algorithms, units, external behavior, or implementation tradeoffs.
   Document public contracts where callers need that information.
 
+## Idioms
+
+The shared lint configuration allows each of these, so that the code says
+what it means rather than what a rule asks for. The linter doesn't choose
+between them: the author does.
+
+- Check a nullable string, number or boolean by its truthiness, as
+  `if (value)`, rather than by `!== undefined` or `=== true`. Do so only
+  where '' and 0 are to be treated as missing too, or can't occur.
+  Otherwise compare, as the command line's options do, where `--json ''`
+  and `--rounds ''` are mistakes to report rather than options left out.
+- Check for a missing value with `== null` or `!= null`, which match both
+  null and undefined. Compare strictly only where the two mean different
+  things, as in `timerResolutionOf()`, whose cache holds null for a clock
+  that read no time, and has undefined for a runtime not yet estimated.
+- Write a default for a nullable value as `a ?? b`. Use `a || b` only where
+  '' or 0 is meant to be replaced too, and then say so.
+- Sort or reverse a copy that the function owns in place, with `.sort()` or
+  `.reverse()`, as `sortedCopy()` does. `toSorted()` and `toReversed()` are
+  for an array that's someone else's, as the rotation's orders, which it
+  returns both forwards and reversed.
+- Give a regular expression a `u` flag only where the pattern needs one: to
+  match by code point beyond the Basic Multilingual Plane, or for `\p{…}`.
+  `--filter` compiles its pattern with one, since group names are any text.
+- Index an array where the index is known to be in range, as
+  `lines[lines.length - 1]`. Use `.at()` where it may not be, and handle
+  the undefined.
+- Declare a top-level function with `function`, and write a nested one as
+  an arrow function.
+- Fix what the linter reports rather than suppressing it. Where the rewrite
+  that a rule asks for reads worse, keep the code, with a disable directive
+  that gives the reason. A directive that no longer suppresses anything is
+  itself an error.
+
 ## Encapsulation and API design
 
 - Prefer private fields and method-style accessors, especially when access
@@ -239,10 +273,14 @@ intent, not a requirement to preserve every detail.
 - The configurations extend the shared ones of `@snovader/tsconfig` and
   `@snovader/oxc-config`, from the repository `snovader/tooling`. benk's
   own files keep only what's particular to benk: the paths that the tools
-  ignore or check, the name that benk imports itself by, its restricted
-  imports, and the rules that it sets or turns off for reasons of its own,
-  each with its comment. Change a setting that suits any project in the
-  shared package instead.
+  ignore or check, the name that benk imports itself by, and in
+  `oxlint.config.ts`, the shared rules for tests on hypotes, and the
+  imports that it restricts, of parent directories, of entry points by
+  their private paths, and of Node's modules in the core. Each has its
+  comment. The shared base already turns off what benk used to turn
+  off itself, such as awaits in loops and type assertions, so don't repeat
+  its rules here. Change a setting that suits any project in the shared
+  package instead.
 - `@snovader/oxc-config` loads only on Node 26 or later, so the format and
   lint checks need Node 26, while the tests run on each version that
   `engines` names.
@@ -253,5 +291,9 @@ intent, not a requirement to preserve every detail.
   `yarn lint:check`, `yarn typecheck`, `yarn test`, and `yarn test:dist`,
   which builds the package and runs the tests on the bundle.
   `.github/workflows/ci.yml` runs the same checks in CI.
+- Yarn installs a version of a package only a day after it's published.
+  `.yarnrc.yml` exempts `hypotes` and `@snovader/*`, the owner's own
+  packages, with `npmPreapprovedPackages`, so that a new version of one
+  installs on the day it's published.
 - Pack and publish only with Yarn, which replaces the exports with those of
   `publishConfig`, as `scripts/require-yarn.ts` checks.

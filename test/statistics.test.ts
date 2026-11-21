@@ -107,9 +107,9 @@ describe('modes', () => {
         expect(modes.fast.rounds).toBe(fastCount);
         expect(modes.slow.rounds).toBe(slowCount);
         expect(modes.fast.median).toBeGreaterThanOrEqual(fast[0]);
-        expect(modes.fast.median).toBeLessThanOrEqual(fast.at(-1)!);
+        expect(modes.fast.median).toBeLessThanOrEqual(fast[fast.length - 1]);
         expect(modes.slow.median).toBeGreaterThanOrEqual(slow[0]);
-        expect(modes.slow.median).toBeLessThanOrEqual(slow.at(-1)!);
+        expect(modes.slow.median).toBeLessThanOrEqual(slow[slow.length - 1]);
     });
 
     it.prop([

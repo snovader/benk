@@ -43,7 +43,7 @@ const TYPESCRIPT_ENTRY = 'entry script from TypeScript source';
  * the file is large enough. The modules that it imports aren't seen.
  */
 function entryFromSource(): boolean {
-    return /\.[cm]?ts$/u.test(process.argv[1] ?? '');
+    return /\.[cm]?ts$/.test(process.argv[1] ?? '');
 }
 
 type AsyncFunctionConstructor = new (...source: string[]) => AsyncTimer;
@@ -118,7 +118,7 @@ function freedBytes({ statistics }: GCProfilerResult): number {
 }
 
 function describeNode(): RuntimeDescription {
-    const nodeOptions = process.env.NODE_OPTIONS ?? '';
+    const nodeOptions = process.env.NODE_OPTIONS;
 
     return {
         name: 'Node',
@@ -129,7 +129,7 @@ function describeNode(): RuntimeDescription {
         cpu: cpus()[0]?.model.trim() ?? 'unknown',
         flags: [
             ...process.execArgv,
-            ...(nodeOptions === '' ? [] : [`NODE_OPTIONS=${nodeOptions}`])
+            ...(nodeOptions ? [`NODE_OPTIONS=${nodeOptions}`] : [])
         ],
         processState: [
             ...(fromSource() ? [TYPESCRIPT_SOURCE] : []),

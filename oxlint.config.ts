@@ -21,15 +21,7 @@ export default defineConfig({
         // An entry point is imported by the name that package.json's
         // `exports` give it, `benk` or `benk/core`, which names the bundle
         // when the tests run on it
-        'eslint/no-restricted-imports': ['error', { patterns: [ENTRY_POINTS] }],
-
-        // Turned off
-
-        // Timer loops compiled with `new Function` are typed by assertion
-        'typescript/no-unsafe-type-assertion': 'off',
-        // Variants are timed one at a time, as timing them concurrently would
-        // time them against each other
-        'eslint/no-await-in-loop': 'off'
+        'eslint/no-restricted-imports': ['error', { patterns: [ENTRY_POINTS] }]
     },
     overrides: [
         {
