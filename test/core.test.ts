@@ -1,11 +1,11 @@
 // The core's entry point, which a script imports where Node's modules are
 // missing. This file imports it only after it has started recording what's
 // loaded, and imports nothing else of benk's that's more than types.
-import assert from 'node:assert/strict';
 import { registerHooks } from 'node:module';
-import { describe, it } from 'node:test';
-import * as fc from 'fast-check';
+import { describe, expect } from 'hypotes';
+import { fc, it } from 'hypotes/fast-check';
 import type { AsyncTimer, Timer } from 'benk/core';
+import { expectClose } from './expectations.ts';
 import { FakeRuntime } from './fake-runtime.ts';
 
 /** The modules of Node that modules other than this file's own imported */
@@ -28,7 +28,7 @@ const QUICK = { sampleTime: 0.01, warmupRounds: 1, rounds: 6, heap: false };
 
 describe('benk/core', () => {
     it("loads none of Node's modules", () => {
-        assert.deepEqual(nodeModules, []);
+        expect(nodeModules).toStrictEqual([]);
     });
 
     it('measures a group with the runtime that its options name', async () => {
@@ -40,14 +40,11 @@ describe('benk/core', () => {
 
         const [a, b, copy] = result.variants;
 
-        assert.deepEqual(
-            result.variants.map(variant => variant.name),
-            ['a', 'b', 'a A/A']
-        );
+        expect(result.variants.map(variant => variant.name)).toStrictEqual(['a', 'b', 'a A/A']);
         // The fake clock's sums round
-        assert.ok(Math.abs(a.summary.median - 100) < 1e-9, `${a.summary.median} ns`);
-        assert.ok(Math.abs(b.ratio - 2) < 1e-9, `${b.ratio}`);
-        assert.ok(Math.abs(copy.ratio - 1) < 1e-9, `${copy.ratio}`);
+        expectClose(a.summary.median, 100);
+        expectClose(b.ratio, 2);
+        expectClose(copy.ratio, 1);
     });
 
     it('records the runtime of a run of groups', async () => {
@@ -60,11 +57,8 @@ describe('benk/core', () => {
             { ...QUICK, filter: /second/u, runtime }
         );
 
-        assert.deepEqual(result.runtime, runtime.description);
-        assert.deepEqual(
-            result.groups.map(group => group.name),
-            ['second']
-        );
+        expect(result.runtime).toStrictEqual(runtime.description);
+        expect(result.groups.map(group => group.name)).toStrictEqual(['second']);
     });
 });
 
@@ -87,8 +81,9 @@ describe('timerSource', () => {
 
         const elapsed = timer(() => ++calls, 1000);
 
-        assert.equal(calls, 1000);
-        assert.ok(elapsed >= 0 && elapsed < 1000, `${elapsed} ms`);
+        expect(calls).toBe(1000);
+        expect(elapsed).toBeGreaterThanOrEqual(0);
+        expect(elapsed).toBeLessThan(1000);
     });
 
     it('is the body of a loop that awaits each call', async () => {
@@ -103,20 +98,20 @@ describe('timerSource', () => {
             pending--;
         }, 100);
 
-        assert.equal(overlapped, false);
-        assert.ok(elapsed >= 0 && elapsed < 1000, `${elapsed} ms`);
+        expect(overlapped).toBe(false);
+        expect(elapsed).toBeGreaterThanOrEqual(0);
+        expect(elapsed).toBeLessThan(1000);
     });
 
-    it('differs for each id, so that no two loops share a source', () => {
-        fc.assert(
-            fc.property(fc.uniqueArray(fc.nat(), { minLength: 2 }), ids => {
-                const sources = new Set([
-                    ...ids.map(id => timerSource(id)),
-                    ...ids.map(id => asyncTimerSource(id))
-                ]);
+    it.prop([fc.uniqueArray(fc.nat(), { minLength: 2 })])(
+        'differs for each id, so that no two loops share a source',
+        ids => {
+            const sources = new Set([
+                ...ids.map(id => timerSource(id)),
+                ...ids.map(id => asyncTimerSource(id))
+            ]);
 
-                assert.equal(sources.size, 2 * ids.length);
-            })
-        );
-    });
+            expect(sources.size).toBe(2 * ids.length);
+        }
+    );
 });

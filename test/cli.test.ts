@@ -1,8 +1,7 @@
-import assert from 'node:assert/strict';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, it } from 'node:test';
+import { describe, expect, it } from 'hypotes';
 import { bench, parseOptions, type Group } from 'benk';
 import { FakeRuntime } from './fake-runtime.ts';
 
@@ -10,7 +9,7 @@ const QUICK = ['--sample-ms', '0.01', '--warmup-rounds', '1', '--rounds', '6'];
 
 describe('parseOptions', () => {
     it('defaults to 31 rounds of 1 ms after 10 warm-up rounds, with an A/A pair and heap bytes', () => {
-        assert.deepEqual(parseOptions([]), {
+        expect(parseOptions([])).toStrictEqual({
             rounds: 31,
             warmupRounds: 10,
             sampleTime: 1,
@@ -36,7 +35,7 @@ describe('parseOptions', () => {
             '--no-heap'
         ]);
 
-        assert.deepEqual(options, {
+        expect(options).toStrictEqual({
             rounds: 51,
             warmupRounds: 0,
             sampleTime: 2.5,
@@ -48,8 +47,8 @@ describe('parseOptions', () => {
     });
 
     it('rejects an unknown option, or one without its value', () => {
-        assert.throws(() => parseOptions(['--round', '3']), TypeError);
-        assert.throws(() => parseOptions(['--rounds']), TypeError);
+        expect(() => parseOptions(['--round', '3'])).toThrow(TypeError);
+        expect(() => parseOptions(['--rounds'])).toThrow(TypeError);
     });
 
     it('rejects numbers out of their range', () => {
@@ -64,15 +63,15 @@ describe('parseOptions', () => {
             ['--sample-ms', 'Infinity'],
             ['--sample-ms', 'soon']
         ]) {
-            assert.throws(() => parseOptions(args), RangeError, args.join(' '));
+            expect(() => parseOptions(args), args.join(' ')).toThrow(RangeError);
         }
     });
 
     it('rejects a filter that is not a regular expression, and names the option', () => {
-        assert.throws(() => parseOptions(['--filter', '[']), {
-            name: 'SyntaxError',
-            message: /--filter.*\[/u
-        });
+        const parse = (): unknown => parseOptions(['--filter', '[']);
+
+        expect(parse).toThrow(SyntaxError);
+        expect(parse).toThrow(/--filter.*\[/u);
     });
 });
 
@@ -94,23 +93,17 @@ describe('bench', () => {
             print: line => lines.push(line)
         });
 
-        assert.match(lines[0], /^Fake 1\.0\.0, none, test none, none\./u);
-        assert.ok(
-            lines.includes(
-                'first: 6 rounds, by the fastest round (every call under 1 µs and 1 KiB)'
-            )
+        const rows = lines
+            .filter(line => line.startsWith('  ') && line.trim() !== '')
+            .map(line => line.trim().split(/\s{2,}/u)[0]);
+
+        expect(lines[0]).toMatch(/^Fake 1\.0\.0, none, test none, none\./u);
+        expect(lines).toContain(
+            'first: 6 rounds, by the fastest round (every call under 1 µs and 1 KiB)'
         );
-        assert.deepEqual(
-            lines
-                .filter(line => line.startsWith('  ') && line.trim() !== '')
-                .map(line => line.trim().split(/\s{2,}/u)[0]),
-            ['fastest', 'a', 'b', 'a A/A']
-        );
-        assert.ok(!lines.some(line => line.startsWith('second')));
-        assert.deepEqual(
-            result.groups.map(group => group.name),
-            ['first']
-        );
+        expect(rows).toStrictEqual(['fastest', 'a', 'b', 'a A/A']);
+        expect(lines.some(line => line.startsWith('second'))).toBe(false);
+        expect(result.groups.map(group => group.name)).toStrictEqual(['first']);
     });
 
     it('writes the results as JSON to a file', async () => {
@@ -124,7 +117,7 @@ describe('bench', () => {
                 print: () => undefined
             });
 
-            assert.deepEqual(JSON.parse(await readFile(path, 'utf8')), result);
+            expect(JSON.parse(await readFile(path, 'utf8'))).toStrictEqual(result);
         } finally {
             await rm(directory, { recursive: true });
         }
@@ -138,15 +131,14 @@ describe('bench', () => {
             const path = join(directory, 'missing', 'results.json');
             const counted = { name: 'counted', run: () => calls++ };
 
-            await assert.rejects(
-                bench([{ name: 'group', variants: [counted] }], {
-                    args: [...QUICK, '--json', path],
-                    runtime,
-                    print: () => undefined
-                }),
-                /directory of --json/u
-            );
-            assert.equal(calls, 0);
+            const run = bench([{ name: 'group', variants: [counted] }], {
+                args: [...QUICK, '--json', path],
+                runtime,
+                print: () => undefined
+            });
+
+            await expect(run).rejects.toThrow(/directory of --json/u);
+            expect(calls).toBe(0);
         } finally {
             await rm(directory, { recursive: true });
         }
@@ -164,8 +156,8 @@ describe('bench', () => {
             write: text => written.push(text)
         });
 
-        assert.equal(written.length, 1);
-        assert.deepEqual(JSON.parse(written[0]), result);
-        assert.ok(printed.some(line => line.startsWith('second: ')));
+        expect(written).toHaveLength(1);
+        expect(JSON.parse(written[0])).toStrictEqual(result);
+        expect(printed.some(line => line.startsWith('second: '))).toBe(true);
     });
 });

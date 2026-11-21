@@ -1,5 +1,4 @@
-import assert from 'node:assert/strict';
-import { describe, it } from 'node:test';
+import { describe, expect, it } from 'hypotes';
 import {
     describeRun,
     formatBytes,
@@ -64,7 +63,7 @@ const group: GroupResult = {
 
 describe('formatGroup', () => {
     it('prints a row for each variant, and a note for each with two modes', () => {
-        assert.deepEqual(formatGroup(group), [
+        expect(formatGroup(group)).toStrictEqual([
             '',
             'record: serialize: 6 rounds, by the fastest round (every call under 1 µs and 1 KiB)',
             '                      fastest     median   spread    ratio   95% interval        heap',
@@ -83,7 +82,7 @@ describe('formatGroup', () => {
         });
         const row = formatGroup({ ...group, variants: [group.variants[0], fast] }).at(-1);
 
-        assert.match(row ?? '', /% 0\.00042× 0\.00039–0\.00046 +0 B$/u);
+        expect(row).toMatch(/% 0\.00042× 0\.00039–0\.00046 +0 B$/u);
     });
 
     it('notes a ratio by the fastest round that lies more than 5% outside its interval', () => {
@@ -94,11 +93,11 @@ describe('formatGroup', () => {
         const variants = [reference, near, below, above];
         const rows = 3 + variants.length;
 
-        assert.deepEqual(formatGroup({ ...group, variants }).slice(rows), [
+        expect(formatGroup({ ...group, variants }).slice(rows)).toStrictEqual([
             '  below: 1.00× by the fastest rounds, but 1.10–1.20× round by round',
             '  above: 2.50× by the fastest rounds, but 1.90–2.10× round by round'
         ]);
-        assert.equal(formatGroup({ ...group, lead: 'median', variants }).length, rows);
+        expect(formatGroup({ ...group, lead: 'median', variants })).toHaveLength(rows);
     });
 
     it("notes median rounds of less than 50 times the timer's resolution", () => {
@@ -113,29 +112,28 @@ describe('formatGroup', () => {
         const rows = 3 + 2;
 
         // 1,000 calls of 1 µs a round, a tick each
-        assert.deepEqual(formatGroup(coarse(1000)).slice(rows), [
+        expect(formatGroup(coarse(1000)).slice(rows)).toStrictEqual([
             "  median rounds are as short as 1 times the timer's resolution, of 1.00 ms: a sample time of 50.0 ms or more gives 50"
         ]);
-        assert.deepEqual(formatGroup(coarse(49_400)).slice(rows), [
+        expect(formatGroup(coarse(49_400)).slice(rows)).toStrictEqual([
             "  median rounds are as short as 49 times the timer's resolution, of 1.00 ms: a sample time of 50.0 ms or more gives 50"
         ]);
-        assert.deepEqual(formatGroup(coarse(50_000)).slice(rows), []);
+        expect(formatGroup(coarse(50_000)).slice(rows)).toStrictEqual([]);
     });
 
     it('has no such note for results without a resolution', () => {
         const rows = formatGroup(group).length;
 
-        assert.equal(formatGroup({ ...group, timerResolution: null }).length, rows);
+        expect(formatGroup({ ...group, timerResolution: null })).toHaveLength(rows);
 
         // As a file of results that a version before schema 2 wrote
         const { timerResolution: _, ...before } = group;
-        assert.equal(formatGroup(before as GroupResult).length, rows);
+        expect(formatGroup(before as GroupResult)).toHaveLength(rows);
     });
 
     it('names the median round when the group leads with it', () => {
         const [, title] = formatGroup({ ...group, lead: 'median', leadReason: 'allocating calls' });
-        assert.equal(
-            title,
+        expect(title).toBe(
             'record: serialize: 6 rounds, by the median round (a call allocating 1 KiB or more)'
         );
     });
@@ -163,38 +161,40 @@ describe('describeRun', () => {
         };
         const [first, second, third] = describeRun(runtime, options).split('\n');
 
-        assert.equal(
-            first,
+        expect(first).toBe(
             'Node v26.0.0, V8 14.6, linux x64, A CPU, with --max-inlined-bytecode-size-cumulative=3000. Process state: benk from TypeScript source.'
         );
-        assert.match(
-            second,
+        expect(second).toMatch(
             /at least 31 interleaved rounds of 1 ms per variant after 10 warm-up rounds/u
         );
-        assert.doesNotMatch(third, /heap/u);
+        expect(third).not.toMatch(/heap/u);
     });
 });
 
 describe('formatting', () => {
     it('writes times to three significant digits in a unit that fits', () => {
-        assert.deepEqual(
-            [0.0042, 0.5, 61.23, 999.4, 1234, 12_345, 123_456, 12_345_678, 2e9].map(formatTime),
-            [
-                '0.0042 ns',
-                '0.50 ns',
-                '61.2 ns',
-                '999 ns',
-                '1.23 µs',
-                '12.3 µs',
-                '123 µs',
-                '12.3 ms',
-                '2.00 s'
-            ]
-        );
+        const times = [0.0042, 0.5, 61.23, 999.4, 1234, 12_345, 123_456, 12_345_678, 2e9];
+
+        expect(times.map(formatTime)).toStrictEqual([
+            '0.0042 ns',
+            '0.50 ns',
+            '61.2 ns',
+            '999 ns',
+            '1.23 µs',
+            '12.3 µs',
+            '123 µs',
+            '12.3 ms',
+            '2.00 s'
+        ]);
     });
 
     it('writes bytes as whole bytes from 0', () => {
-        assert.deepEqual([0, 24.4, 1234.5, -3].map(formatBytes), ['0 B', '24 B', '1,235 B', '0 B']);
+        expect([0, 24.4, 1234.5, -3].map(formatBytes)).toStrictEqual([
+            '0 B',
+            '24 B',
+            '1,235 B',
+            '0 B'
+        ]);
     });
 
     it('writes JSON with each array of numbers on one line', () => {
@@ -208,11 +208,11 @@ describe('formatting', () => {
         };
         const json = formatJson(value);
 
-        assert.deepEqual(JSON.parse(json), value);
-        assert.match(json, /"samples": \[1, 2\.5, -3e-7\]/u);
-        assert.match(json, /"positions": \[0, 1\]/u);
-        assert.match(json, /"names": \[\n {4}"a",/u);
-        assert.ok(json.endsWith('}\n'));
+        expect(JSON.parse(json)).toStrictEqual(value);
+        expect(json).toMatch(/"samples": \[1, 2\.5, -3e-7\]/u);
+        expect(json).toMatch(/"positions": \[0, 1\]/u);
+        expect(json).toMatch(/"names": \[\n {4}"a",/u);
+        expect(json).toMatch(/\}\n$/u);
     });
 
     it('writes an array of negative numbers and a null without backtracking', () => {
@@ -225,7 +225,7 @@ describe('formatting', () => {
         const json = formatJson(value);
         const elapsed = performance.now() - start;
 
-        assert.deepEqual(JSON.parse(json), [...new Array<number>(28).fill(-1), null]);
-        assert.ok(elapsed < 1000, `took ${elapsed.toFixed(0)} ms`);
+        expect(JSON.parse(json)).toStrictEqual([...new Array<number>(28).fill(-1), null]);
+        expect(elapsed).toBeLessThan(1000);
     });
 });

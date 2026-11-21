@@ -73,6 +73,7 @@
     "@snovader/tsconfig": "^0.1.0",
     "@types/node": "^26.6.6",
     "fast-check": "^4.10.2",
+    "hypotes": "^0.3.0",
     "oxfmt": "^0.79.0",
     "oxlint": "^1.94.0",
     "oxlint-tsgolint": "^7.0.2007",

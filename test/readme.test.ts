@@ -1,7 +1,6 @@
-import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { describe, it } from 'node:test';
+import { describe, expect, it } from 'hypotes';
 import * as benk from 'benk';
 import * as core from 'benk/core';
 
@@ -13,7 +12,7 @@ const readme = readFileSync(join(import.meta.dirname, '..', 'README.md'), 'utf8'
 /** The first table after a heading of the README, up to the blank line that ends it */
 function tableAfter(heading: string): string {
     const at = readme.indexOf(`${heading}\n`);
-    assert.notEqual(at, -1, `Expected the README to have the heading "${heading}"`);
+    expect(at, `Expected the README to have the heading "${heading}"`).not.toBe(-1);
 
     const from = readme.indexOf('\n|', at);
     return readme.slice(from, readme.indexOf('\n\n', from));
@@ -28,7 +27,7 @@ describe('README', () => {
     it('describes each export of benk', () => {
         const described = captures(tableAfter('## API'), /^\| `(\w+)/gmu);
 
-        assert.deepEqual(described.toSorted(), Object.keys(benk).toSorted());
+        expect(described.toSorted()).toStrictEqual(Object.keys(benk).toSorted());
     });
 
     it('names each export of benk that benk/core leaves out', () => {
@@ -36,11 +35,8 @@ describe('README', () => {
         const exported = new Set(Object.keys(core));
         const leftOut = Object.keys(benk).filter(name => !exported.has(name));
 
-        assert.deepEqual(named.toSorted(), leftOut.toSorted());
-        assert.deepEqual(
-            Object.keys(core).filter(name => !(name in benk)),
-            []
-        );
+        expect(named.toSorted()).toStrictEqual(leftOut.toSorted());
+        expect(Object.keys(core).filter(name => !(name in benk))).toStrictEqual([]);
     });
 
     it('describes each option of the command line', () => {
@@ -57,6 +53,6 @@ describe('README', () => {
             .filter(([name, value]) => Object.is(value, defaults.get(name)))
             .map(([name]) => name);
 
-        assert.deepEqual(unchanged, []);
+        expect(unchanged).toStrictEqual([]);
     });
 });

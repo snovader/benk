@@ -140,6 +140,12 @@ intent, not a requirement to preserve every detail.
 - Test the public API, not the implementation. Assert what a caller can
   observe, such as the results it gets and the errors raised. Do not assert
   private state or which code path ran.
+- Write tests with hypotes, which has Vitest's `describe`, `it` and `expect`
+  on Node's test runner. Compare objects and arrays with `toStrictEqual`,
+  since `toEqual` takes a field that is undefined for one that is missing,
+  which differ in results that are written as JSON. A matcher doesn't narrow
+  a type, so take a value that may be null through `expectPresent`, of
+  `test/expectations.ts`.
 - Import what a test tests by the name that the package exports it under,
   `benk` or `benk/core`, which `yarn test:dist` runs on the bundle. Import what the package
   doesn't export by its private path, as `test/statistics.test.ts` imports
@@ -148,12 +154,12 @@ intent, not a requirement to preserve every detail.
   when a fake call spends time, and whose heap grows only when one
   allocates, so that a test knows what a measurement should report. Tests of
   `NodeRuntime` check only what doesn't vary between runs.
-- Prefer property tests, with fast-check, as for the rotation's balance and
-  the consistency of summaries with their samples. Check that a property
-  test fails against code that loses the property, as the rotation's tests
-  fail against alternating order.
-- Compare floats with a tolerance where the fake clock's sums round, and by
-  their bits or with `Object.is` otherwise.
+- Prefer property tests, with `it.prop` of `hypotes/fast-check`, as for the
+  rotation's balance and the consistency of summaries with their samples.
+  Check that a property test fails against code that loses the property, as
+  the rotation's tests fail against alternating order.
+- Compare floats with a tolerance where the fake clock's sums round, with
+  `expectClose`, and with `toBe` otherwise, which compares with `Object.is`.
 - Use meaningful test names and keep grouping shallow. Add `describe` blocks
   when they organize related behavior, rather than repeating the file's identity.
 - Run the relevant code and checks, and state anything that could not be run.
@@ -170,9 +176,10 @@ intent, not a requirement to preserve every detail.
   hook strips the types with oxc. Node's own stripping of a module as
   large as benk's source detaches an ArrayBuffer, which in Node 26 slows
   code that reads typed arrays for the rest of the process, as the README
-  measures. `--no-strip-types` came in Node 24.12, so developing benk needs
-  Node 24.12 or later, although the published bundle runs on what `engines`
-  names. The tests add `--enable-source-maps`, so that a stack trace points
+  measures. `--no-strip-types` came in Node 24.12, and hypotes needs Node
+  24.13.1, so developing benk needs Node 24.13.1 or later, although the
+  published bundle runs on what `engines` names. The tests add
+  `--enable-source-maps`, so that a stack trace points
   at the TypeScript lines. `prepack`'s `node scripts/require-yarn.ts` keeps
   Node's own stripping. Import a module in a parent directory by a private path of
   package.json's `imports`, as `#source/core/types`, rather than by `../`,
