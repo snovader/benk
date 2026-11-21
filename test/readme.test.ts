@@ -4,6 +4,7 @@ import { describe, expect, it } from 'hypotes';
 import * as benk from 'benk';
 import * as core from 'benk/core';
 import * as d8 from 'benk/d8';
+import { TRACE_FLAGS } from '#source/node/traced-run';
 
 // The README names the package's exports and the command line's options one
 // by one, which a change to either would leave behind: these compare its
@@ -48,7 +49,7 @@ describe('README', () => {
 
     it('describes each option of the command line', () => {
         // An option with a value, as `--rounds <n>`, has a space after its name
-        const options = new Set(captures(tableAfter('### Options'), /^\| `(--[a-z-]+ ?)/gm));
+        const options = new Set(captures(tableAfter('### Options'), /^\| `(--[a-z\d-]+ ?)/gm));
         const args = Array.from(options).flatMap(option =>
             option.endsWith(' ') ? [option.trimEnd(), '7'] : [option]
         );
@@ -61,5 +62,15 @@ describe('README', () => {
             .map(([name]) => name);
 
         expect(unchanged).toStrictEqual([]);
+    });
+
+    it("names each of V8's flags of the traced run of --v8-report", () => {
+        const at = readme.indexOf('### What the traced run changes\n');
+        expect(at, 'Expected the README to say what the traced run changes').not.toBe(-1);
+
+        const section = readme.slice(at, readme.indexOf('\n### ', at + 1));
+        const named = new Set(captures(section, /`(--[a-z-]+)`/g));
+
+        expect(TRACE_FLAGS.filter(flag => !named.has(flag))).toStrictEqual([]);
     });
 });

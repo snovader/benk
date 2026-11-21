@@ -203,6 +203,12 @@ between them: the author does.
   `expectClose`, and with `toBe` otherwise, which compares with `Object.is`.
 - Use meaningful test names and keep grouping shallow. Add `describe` blocks
   when they organize related behavior, rather than repeating the file's identity.
+- The parsers of `--v8-report` read V8's traces and code log, whose formats
+  V8 changes between versions. Their tests read what traced runs of
+  `test/fixtures/v8/bench.ts` wrote, which `test/fixtures/v8/capture.ts`
+  captures on the Node that runs it. Capture it on each version of Node
+  that the parsers are checked against, as the README lists them, and on a
+  new version before saying that they read it.
 - Run the relevant code and checks, and state anything that could not be run.
 
 ## Package and runtime
