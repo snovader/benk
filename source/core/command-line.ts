@@ -26,9 +26,12 @@ export interface CommandOptions {
     readonly json: string | undefined;
     /**
      * Whether to run the script again with V8's traces, after measuring,
-     * and print a report of its hot functions
+     * and print a report of its hot functions, as `--v8-report` or
+     * `--v8-filter` asks
      */
     readonly v8Report: boolean;
+    /** Selects the functions of V8's report by name, or none if all of them */
+    readonly v8Filter: RegExp | undefined;
 }
 
 /** How `bench()` runs, for a script that runs it other than from the shell */
@@ -59,7 +62,14 @@ type PrintedRunOptions = Required<MeasureOptions> &
 
 /** The command line's options, by their names as arguments */
 const OPTIONS: ArgumentSpec = {
-    values: new Set(['rounds', 'warmup-rounds', 'sample-ms', 'filter', 'json']),
+    values: new Set([
+        'rounds',
+        'warmup-rounds',
+        'sample-ms',
+        'filter',
+        'json',
+        'v8-filter'
+    ]),
     flags: new Set(['aa', 'heap', 'v8-report'])
 };
 
@@ -77,13 +87,15 @@ const OPTIONS: ArgumentSpec = {
  *   in array buffers
  * - `--v8-report`: runs the script again with V8's traces, and prints a
  *   report of its hot functions
+ * - `--v8-filter <regex>`: selects the functions of V8's report by name,
+ *   and implies `--v8-report`
  *
  * It reads them as Node's `parseArgs()` does, on any runtime.
  *
  * @throws {TypeError} If an argument isn't one of the options, or an option
  * has no value.
  * @throws {RangeError} If a number is out of its range.
- * @throws {SyntaxError} If the filter isn't a regular expression.
+ * @throws {SyntaxError} If a filter isn't a regular expression.
  */
 export function parseOptions(args: readonly string[]): CommandOptions {
     const { values, flags } = readArguments(args, OPTIONS);
@@ -104,9 +116,12 @@ export function parseOptions(args: readonly string[]): CommandOptions {
         sampleTime: sampleTimeOption(values.get('sample-ms')),
         aa: flags.get('aa') ?? DEFAULT_OPTIONS.aa,
         heap: flags.get('heap') ?? DEFAULT_OPTIONS.heap,
-        filter: filterOption(values.get('filter')),
+        filter: filterOption(values.get('filter'), '--filter'),
         json: values.get('json'),
-        v8Report: flags.get('v8-report') ?? false
+        v8Report:
+            (flags.get('v8-report') ?? false) ||
+            values.get('v8-filter') != null,
+        v8Filter: filterOption(values.get('v8-filter'), '--v8-filter')
     };
 }
 
@@ -147,7 +162,10 @@ export function measureAndPrint(
     );
 }
 
-function filterOption(value: string | undefined): RegExp | undefined {
+function filterOption(
+    value: string | undefined,
+    name: string
+): RegExp | undefined {
     if (value == null) {
         return undefined;
     }
@@ -156,7 +174,7 @@ function filterOption(value: string | undefined): RegExp | undefined {
         return new RegExp(value, 'u');
     } catch (error) {
         throw new SyntaxError(
-            `Expected --filter to be a regular expression, got ${value}`,
+            `Expected ${name} to be a regular expression, got ${value}`,
             { cause: error }
         );
     }

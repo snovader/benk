@@ -216,6 +216,12 @@ between them: the author does.
   captures on the Node that runs it. Capture it on each version of Node
   that the parsers are checked against, as the README lists them, and on a
   new version before saying that they read it.
+- The tests of the report's source maps read the traced run of a bundle,
+  `test/fixtures/v8/bundled/bench.mjs`, and its map, which
+  `test/fixtures/v8/bundled/capture.ts` bundles with rolldown and traces.
+  Run it from the repository's root, as the bundle's comments name its
+  modules from there. The bundle and its map are committed with the
+  traced run, since the tests read the map from the file.
 - Run the relevant code and checks, and state anything that could not be run.
 
 ## Package and runtime

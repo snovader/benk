@@ -4,16 +4,35 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { describe, expect } from 'hypotes';
 import { fc, it } from 'hypotes/fast-check';
-import { formatV8Report, reportFunctions, type FunctionReport } from '#source/node/v8-report';
-import type {
-    Compilation,
-    Deoptimization,
-    LoggedFunction,
-    SourcePosition,
-    TurbofanCompilation,
-    V8Trace
+import { readSourceMaps, SourceMaps } from '#source/node/source-maps';
+import {
+    formatV8Report,
+    reportFunctions,
+    tracedScripts,
+    type FunctionReport
+} from '#source/node/v8-report';
+import {
+    parseCodeLog,
+    parseTrace,
+    type Compilation,
+    type Deoptimization,
+    type LoggedFunction,
+    type SourcePosition,
+    type TurbofanCompilation,
+    type V8Trace
 } from '#source/node/v8-trace';
-import { traced, BENCH, REPOSITORY, VERSIONS } from './v8-fixtures.ts';
+import {
+    asOnWindows,
+    fixture,
+    traced,
+    BENCH,
+    BUNDLE,
+    BUNDLE_URL,
+    BUNDLED,
+    BUNDLED_VERSION,
+    REPOSITORY,
+    VERSIONS
+} from './v8-fixtures.ts';
 
 /** benk's directory in the fixtures, as `capture.ts` loaded it from its source */
 const BENK_SOURCE = `${pathToFileURL(join(REPOSITORY, 'source')).href}/`;
@@ -84,6 +103,114 @@ describe.each(VERSIONS)('the report of the traced run on Node %s', version => {
 
         expect(loops).toHaveLength(reports.length - 11);
         expect(lines.some(line => line.includes(`, inlined at <anonymous>:`))).toBe(true);
+    });
+});
+
+describe('the report of the bundled traced run', () => {
+    const { trace, logged } = traced(BUNDLED_VERSION, 'bundle');
+    const format = { script: join(REPOSITORY, BUNDLE), directory: REPOSITORY };
+    const SUM = join(BUNDLED, 'sum.ts');
+    const SOURCE = join(BUNDLED, 'bench.ts');
+
+    async function lines(options: { filter?: RegExp } = {}): Promise<string[]> {
+        const sourceMaps = await readSourceMaps(tracedScripts(trace, logged));
+        const reports = reportFunctions(trace, logged, {
+            benkDirectory: BENK_SOURCE,
+            sourceMaps,
+            ...options
+        });
+
+        return formatV8Report(reports, { ...format, sourceMaps, ...options });
+    }
+
+    it('places functions and deoptimizations in the sources that its source map names', async () => {
+        const report = await lines();
+
+        expect(linesOf(report, `sum ${SUM}:6:20, 38 B of bytecode`)).toStrictEqual([
+            `sum ${SUM}:6:20, 38 B of bytecode`,
+            '  compiled to Maglev ×3, Turbofan ×3',
+            `  inlined into run ${SOURCE}:26:22 ×2`,
+            `  deoptimized in Turbofan's code: wrong map (eager), at ${SUM}:8:32 ×2`
+        ]);
+        // `sum` inlined into `mean`, inlined into a variant's `run`
+        expect(linesOf(report, `run ${SOURCE}:21:34, 13 B of bytecode`)).toStrictEqual([
+            `run ${SOURCE}:21:34, 13 B of bytecode`,
+            '  compiled to Maglev ×2',
+            `  deoptimized in Maglev's code: wrong map (eager), at ${SUM}:8:32, inlined at ${SUM}:17:12, inlined at ${SOURCE}:21:40`
+        ]);
+        expect(report.filter(line => line.includes('bench.mjs'))).toStrictEqual([report[1]]);
+    });
+
+    it('lists the functions of the sources by their positions in them', async () => {
+        const named = (await lines())
+            .slice(3)
+            .filter(line => !line.startsWith('  ') && !line.includes('<anonymous>'))
+            .map(line => line.slice(0, line.indexOf(',')));
+
+        expect(named).toStrictEqual([
+            `(anonymous) ${SOURCE}:11:47`,
+            `(anonymous) ${SOURCE}:12:46`,
+            `run ${SOURCE}:20:33`,
+            `run ${SOURCE}:21:34`,
+            `run ${SOURCE}:26:22`,
+            `sum ${SUM}:6:20`
+        ]);
+    });
+
+    it("writes the bundle's own positions without its source map", () => {
+        const reports = reportFunctions(trace, logged, { benkDirectory: BENK_SOURCE });
+
+        expect(formatV8Report(reports, format)[3]).toBe(`sum ${BUNDLE}:4:13, 38 B of bytecode`);
+    });
+
+    it("says why a script's positions are its own, if it places one in a script whose source map couldn't be read", () => {
+        const unread = new Map([
+            [BUNDLE_URL, "its source map, bench.mjs.map, couldn't be read (ENOENT)"],
+            ['file:///project/node_modules/library/index.js', "it couldn't be read (EACCES)"]
+        ]);
+        const sourceMaps = new SourceMaps(new Map(), unread);
+        const reports = reportFunctions(trace, logged, { benkDirectory: BENK_SOURCE, sourceMaps });
+
+        expect(formatV8Report(reports, { ...format, sourceMaps }).slice(0, 5)).toStrictEqual([
+            '',
+            `V8 report of ${BUNDLE}, from a run of it with V8's traces, whose times aren't reported.`,
+            "Per function of the script, and per function that deoptimized in the script's code: the tiers that V8 compiled it to, what Turbofan inlined into it and where it inlined it, with sizes of bytecode, and its deoptimizations.",
+            `Positions in ${BUNDLE} are its own: its source map, bench.mjs.map, couldn't be read (ENOENT).`,
+            `sum ${BUNDLE}:4:13, 38 B of bytecode`
+        ]);
+    });
+
+    it('lists only the functions whose names match the filter, and says so', async () => {
+        expect(await lines({ filter: /^sum$/u })).toStrictEqual([
+            '',
+            `V8 report of ${BUNDLE}, from a run of it with V8's traces, whose times aren't reported.`,
+            "Per function of the script, and per function that deoptimized in the script's code: the tiers that V8 compiled it to, what Turbofan inlined into it and where it inlined it, with sizes of bytecode, and its deoptimizations.",
+            'Only the functions whose names match ^sum$.',
+            `sum ${SUM}:6:20, 38 B of bytecode`,
+            '  compiled to Maglev ×3, Turbofan ×3',
+            `  inlined into run ${SOURCE}:26:22 ×2`,
+            `  deoptimized in Turbofan's code: wrong map (eager), at ${SUM}:8:32 ×2`
+        ]);
+        expect((await lines({ filter: /^nothing$/u })).slice(3)).toStrictEqual([
+            'Only the functions whose names match ^nothing$.',
+            '  No function of the script whose name matches ^nothing$ was optimized.'
+        ]);
+    });
+
+    it('places the same positions of the traces as V8 prints them on Windows', async () => {
+        const windows = {
+            trace: parseTrace(asOnWindows(fixture(BUNDLED_VERSION, 'trace.txt', 'bundle'))),
+            logged: parseCodeLog(
+                fixture(BUNDLED_VERSION, 'code.log', 'bundle').replaceAll('\n', '\r\n')
+            )
+        };
+        const sourceMaps = await readSourceMaps(tracedScripts(windows.trace, windows.logged));
+        const reports = reportFunctions(windows.trace, windows.logged, {
+            benkDirectory: BENK_SOURCE,
+            sourceMaps
+        });
+
+        expect(formatV8Report(reports, { ...format, sourceMaps })).toStrictEqual(await lines());
     });
 });
 
@@ -245,14 +372,22 @@ function turbofanCompilations(
     }));
 }
 
-function report({
-    trace,
-    logged
-}: {
-    trace: V8Trace;
-    logged: Map<string, LoggedFunction>;
-}): FunctionReport[] {
-    return reportFunctions(trace, logged, { benkDirectory: BENK });
+function report(
+    {
+        trace,
+        logged
+    }: {
+        trace: V8Trace;
+        logged: Map<string, LoggedFunction>;
+    },
+    filter?: RegExp
+): FunctionReport[] {
+    return reportFunctions(trace, logged, { benkDirectory: BENK, filter });
+}
+
+/** A function's name, as the report writes it */
+function writtenName({ name, topLevel }: FunctionReport): string {
+    return topLevel ? '(top level)' : name || '(anonymous)';
 }
 
 /** The addresses of a trace's functions, of each kind of line */
@@ -332,4 +467,46 @@ describe('reportFunctions', () => {
             }
         }
     );
+});
+
+describe('reportFunctions with a filter', () => {
+    const filters = fc.constantFrom(
+        /^sum$/u,
+        /run|sum/u,
+        /anonymous/u,
+        /^\(top level\)$/u,
+        /^$/u,
+        /x/u
+    );
+
+    it.prop([runs, filters])(
+        'lists the functions whose names, as the report writes them, match the filter, in the same order',
+        (run, filter) => {
+            const listed = report(run, filter).map(fn => fn.function);
+            const matching = report(run)
+                .filter(fn => filter.test(writtenName(fn)))
+                .map(fn => fn.function);
+
+            expect(listed).toStrictEqual(matching);
+        }
+    );
+});
+
+describe('tracedScripts', () => {
+    it.prop([runs])('names the script of each position that the report has', run => {
+        const scripts = tracedScripts(run.trace, run.logged);
+
+        for (const fn of report(run)) {
+            const positions = [
+                fn.position,
+                ...[...fn.callees, ...fn.callers].map(({ value }) => value.other.position),
+                ...fn.deoptimizations.flatMap(({ value }) => value.positions)
+            ];
+            for (const position of positions) {
+                if (position != null) {
+                    expect(scripts.has(position.url), position.url).toBe(true);
+                }
+            }
+        }
+    });
 });

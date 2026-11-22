@@ -6,7 +6,7 @@ import { promisify } from 'node:util';
 import { describe, expect, it, vi } from 'hypotes';
 import { bench, parseOptions, type Group } from 'benk';
 import { FakeRuntime } from './fake-runtime.ts';
-import { BENCH, REPOSITORY } from './v8-fixtures.ts';
+import { BENCH, BUNDLE, BUNDLED, REPOSITORY } from './v8-fixtures.ts';
 
 const QUICK = ['--sample-ms', '0.01', '--warmup-rounds', '1', '--rounds', '6'];
 
@@ -20,7 +20,8 @@ describe('parseOptions', () => {
             heap: true,
             filter: undefined,
             json: undefined,
-            v8Report: false
+            v8Report: false,
+            v8Filter: undefined
         });
     });
 
@@ -37,7 +38,9 @@ describe('parseOptions', () => {
             'results.json',
             '--no-aa',
             '--no-heap',
-            '--v8-report'
+            '--v8-report',
+            '--v8-filter',
+            '^sum'
         ]);
 
         expect(options).toStrictEqual({
@@ -48,7 +51,15 @@ describe('parseOptions', () => {
             heap: false,
             filter: /^record/u,
             json: 'results.json',
-            v8Report: true
+            v8Report: true,
+            v8Filter: /^sum/u
+        });
+    });
+
+    it('reports on V8 for a filter of its functions, without --v8-report', () => {
+        expect(parseOptions(['--v8-filter', 'sum'])).toMatchObject({
+            v8Report: true,
+            v8Filter: /sum/u
         });
     });
 
@@ -74,10 +85,12 @@ describe('parseOptions', () => {
     });
 
     it('rejects a filter that is not a regular expression, and names the option', () => {
-        const parse = (): unknown => parseOptions(['--filter', '[']);
+        for (const option of ['--filter', '--v8-filter']) {
+            const parse = (): unknown => parseOptions([option, '[']);
 
-        expect(parse).toThrow(SyntaxError);
-        expect(parse).toThrow(/--filter.*\[/);
+            expect(parse).toThrow(SyntaxError);
+            expect(parse).toThrow(new RegExp(`^Expected ${option} .*\\[`));
+        }
     });
 });
 
@@ -188,25 +201,31 @@ describe('bench', () => {
     });
 });
 
+/** The lines that a script prints, with the arguments, from the repository's directory */
+async function runScript(script: string, args: readonly string[]): Promise<string[]> {
+    // Run as the package's scripts run the tests, whose flags the traced run has too
+    const { stdout } = await promisify(execFile)(
+        process.execPath,
+        [
+            '--no-strip-types',
+            '--import',
+            '@snovader/node-hooks/register',
+            script,
+            ...args,
+            '--rounds',
+            '6',
+            '--warmup-rounds',
+            '1'
+        ],
+        { cwd: REPOSITORY }
+    );
+
+    return stdout.split(/\r?\n/);
+}
+
 describe('--v8-report', () => {
     it("runs the script again with V8's traces, and reports its functions", async () => {
-        // Run as the package's scripts run the tests, whose flags the traced run has too
-        const { stdout } = await promisify(execFile)(
-            process.execPath,
-            [
-                '--no-strip-types',
-                '--import',
-                '@snovader/node-hooks/register',
-                BENCH,
-                '--v8-report',
-                '--rounds',
-                '6',
-                '--warmup-rounds',
-                '1'
-            ],
-            { cwd: REPOSITORY }
-        );
-        const lines = stdout.split(/\r?\n/);
+        const lines = await runScript(BENCH, ['--v8-report']);
         const heading = lines.indexOf(
             `V8 report of ${BENCH}, from a run of it with V8's traces, whose times aren't reported.`
         );
@@ -218,4 +237,43 @@ describe('--v8-report', () => {
             true
         );
     });
+
+    it("reports a bundle's functions in its sources, and only those that --v8-filter selects", async () => {
+        const lines = await runScript(BUNDLE, ['--v8-filter', '^sum$']);
+        const heading = lines.indexOf(
+            `V8 report of ${BUNDLE}, from a run of it with V8's traces, whose times aren't reported.`
+        );
+
+        expect(heading).not.toBe(-1);
+        expect(lines[heading + 2]).toBe('Only the functions whose names match ^sum$.');
+        expect(reportedFunctions(lines, heading)).toStrictEqual([
+            `sum ${join(BUNDLED, 'sum.ts')}:6:20`
+        ]);
+    });
+
+    it('reports a bundle in its sources, if the script deletes it after bench()', async () => {
+        const script = join(BUNDLED, 'build-and-bench.ts');
+        const lines = await runScript(script, ['--v8-filter', '^sum$']);
+        const heading = lines.indexOf(
+            `V8 report of ${script}, from a run of it with V8's traces, whose times aren't reported.`
+        );
+
+        // Without a note that the bundle's positions are its own
+        expect(heading).not.toBe(-1);
+        expect(reportedFunctions(lines, heading)).toStrictEqual([
+            `sum ${join(BUNDLED, 'sum.ts')}:6:20`
+        ]);
+    });
 });
+
+/**
+ * The lines of a report with a filter after its heading, but for each
+ * function's lines of detail: its name and position, before the size of its
+ * bytecode, which differs between versions of V8, or a note
+ */
+function reportedFunctions(lines: readonly string[], heading: number): string[] {
+    return lines
+        .slice(heading + 3)
+        .filter(line => !line.startsWith('  ') && line !== '')
+        .map(line => line.split(',', 1)[0]);
+}

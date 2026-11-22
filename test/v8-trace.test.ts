@@ -5,7 +5,7 @@ import { describe, expect } from 'hypotes';
 import { fc, it } from 'hypotes/fast-check';
 import { parseCodeLog, parseTrace, type LoggedFunction } from '#source/node/v8-trace';
 import { expectPresent } from './expectations.ts';
-import { fixture, traced, BENCH_URL as SCRIPT, VERSIONS } from './v8-fixtures.ts';
+import { asOnWindows, fixture, traced, BENCH_URL as SCRIPT, VERSIONS } from './v8-fixtures.ts';
 
 /** The logged function of the script that starts at a line and column */
 function scriptFunction(
@@ -187,21 +187,6 @@ describe.each(VERSIONS)('the traced run on Node %s', version => {
         expect(parseTrace(mixed.join('\n'))).toStrictEqual(trace);
     });
 });
-
-/**
- * A fixture's traces as V8 prints them on Windows: where V8 prints an address
- * with the C library's `%p`, or as a stream's `void*`, the Microsoft runtime
- * writes 16 digits in upper case without `0x`, and lines can end in `\r\n`.
- * The addresses that V8 formats itself, padded after `0x`, stay as they are.
- */
-function asOnWindows(trace: string): string {
-    const pointer = (hex: string): string => hex.toUpperCase().padStart(16, '0');
-
-    return trace
-        .replaceAll(/\(sfi = 0x([\da-f]+)\)/g, (_, hex: string) => `(sfi = ${pointer(hex)})`)
-        .replaceAll(/0x([\da-f]+) \{/g, (_, hex: string) => `${pointer(hex)} {`)
-        .replaceAll('\n', '\r\n');
-}
 
 describe.each(VERSIONS)('the traced run on Node %s, as Windows prints it', version => {
     it('reads the same traces', () => {

@@ -18,7 +18,8 @@ const REFERENCE = {
         json: { type: 'string' },
         aa: { type: 'boolean' },
         heap: { type: 'boolean' },
-        'v8-report': { type: 'boolean' }
+        'v8-report': { type: 'boolean' },
+        'v8-filter': { type: 'string' }
     }
 } as const;
 
@@ -28,7 +29,7 @@ const ENTRY_POINTS = [
 ] as const;
 
 const FLAGS = ['aa', 'heap', 'v8-report'];
-const WITH_VALUES = ['rounds', 'warmup-rounds', 'sample-ms', 'filter', 'json'];
+const WITH_VALUES = ['rounds', 'warmup-rounds', 'sample-ms', 'filter', 'json', 'v8-filter'];
 
 /** Values, of options or not, some of which look like options */
 const value = fc.oneof(
@@ -134,7 +135,7 @@ describe('parseOptions', () => {
         expect(parse).toThrow(TypeError);
         expect(parse).toThrow(/, got --round$/);
         expect(parse).toThrow(
-            /--rounds, --warmup-rounds, --sample-ms, --filter, --json, --\[no-\]aa/
+            /--rounds, --warmup-rounds, --sample-ms, --filter, --json, --v8-filter, --\[no-\]aa/
         );
     });
 

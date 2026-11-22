@@ -19,7 +19,8 @@ out of a comparison, or at least in view:
   table, to compare runs later.
 - **A V8 report of hot functions.** `--v8-report` runs the script again
   with V8's traces, and prints the tiers that V8 compiled each function to,
-  what Turbofan inlined, and the deoptimizations.
+  what Turbofan inlined, and the deoptimizations, in a bundle's sources
+  where it has a source map.
 
 It times one process's variants against each other. It isn't a general
 harness with every statistic: [mitata](https://github.com/evanwashere/mitata)
@@ -118,6 +119,7 @@ node bench.ts --rounds 51 --json results.json
 | `--no-aa`             |         | Leaves out the A/A copies. A group's `aa` overrides it.                                                              |
 | `--no-heap`           |         | Leaves out the counts of bytes allocated, on the heap and in array buffers.                                          |
 | `--v8-report`         |         | Runs the script again with V8's traces, after measuring, and prints [V8's report](#v8s-report) of its hot functions. |
+| `--v8-filter <regex>` |         | Lists only the functions whose name matches in V8's report, and implies `--v8-report`.                               |
 
 A script in d8 takes the same options after `--`, as [d8](#d8) describes.
 
@@ -429,23 +431,161 @@ defaults, as `node --v8-options` prints them:
 A function of Node's or benk's that Turbofan inlined into one of the
 script's, or didn't, is named in that function's lines.
 
+### Selecting functions
+
+`--v8-filter <regex>` lists only the functions above whose name matches.
+It implies `--v8-report`. It's a regular expression, as `--filter` takes,
+with the `u` flag, and matches anywhere in the name as the report writes
+it. An anonymous function's name is `(anonymous)`, and a script's
+top level is `(top level)`. A listed function's lines still name the
+functions that it inlined, or was inlined into.
+
+```sh
+node bench.ts --sample-ms 10 --v8-filter '^sumLoop$'
+```
+
+### Bundles and source maps
+
+A benchmark can time a bundle, as the code is deployed, rather than its
+sources. V8 places the bundle's functions in the bundle, which a build may
+delete after the run. Where the bundle has a source map, the report places
+them in the sources instead.
+
+1. Write the function that the benchmark times in a module of its own, as
+   `sum.ts`:
+
+   ```ts
+   export function sumLoop(values: readonly number[]): number {
+       let sum = 0;
+       for (let i = 0; i < values.length; i++) {
+           sum += values[i];
+       }
+       return sum;
+   }
+   ```
+
+2. Import it in the benchmark, `bench.ts`:
+
+   ```ts
+   import { bench } from 'benk';
+   import { sumLoop } from './sum.ts';
+
+   const numbers = Array.from({ length: 1000 }, (_, i) => Math.sin(i));
+
+   await bench([
+       {
+           name: 'sum 1,000 numbers',
+           variants: [
+               { name: 'for loop', run: () => sumLoop(numbers) },
+               {
+                   name: 'reduce',
+                   run: () => numbers.reduce((sum, x) => sum + x, 0)
+               }
+           ]
+       }
+   ]);
+   ```
+
+3. Bundle it with a source map, here with
+   [rolldown](https://rolldown.rs), which writes `dist/bench.mjs` and
+   `dist/bench.mjs.map`. benk stays an import:
+
+   ```sh
+   npx rolldown bench.ts --file dist/bench.mjs --sourcemap --external benk --platform node
+   ```
+
+4. Run the bundle:
+
+   ```sh
+   node dist/bench.mjs --sample-ms 10 --v8-filter sumLoop
+   ```
+
+   After the tables, it prints:
+
+   ```text
+   V8 report of dist/bench.mjs, from a run of it with V8's traces, whose times aren't reported.
+   Per function of the script, and per function that deoptimized in the script's code: the tiers that V8 compiled it to, what Turbofan inlined into it and where it inlined it, with sizes of bytecode, and its deoptimizations.
+   Only the functions whose names match sumLoop.
+   sumLoop sum.ts:1:24, 38 B of bytecode
+     compiled to Maglev, Turbofan
+     inlined into (anonymous) <anonymous>:1:20 ×2
+   ```
+
+`sumLoop` is at `sum.ts:1:24`, its parameters, where V8 places a function.
+In the bundle, it's at `dist/bench.mjs:3:17`. These are of 3 runs on an
+Apple M2 Pro with Node 26.13.0 and rolldown 1.3.2, whose reports were the
+same.
+
+- benk reads the source map of each script that the traces place a
+  function or a deoptimization in. That's the file that the script's last
+  `//# sourceMappingURL=` comment names, beside the script, or the map
+  inline, as a `data:` URL.
+- The comment has to start its line, as bundlers write it. That tells it
+  from the same text in a string, which V8 doesn't read either. A comment
+  after code on its line, which V8 reads, isn't read.
+- The traced run reads them, before its own `bench()` returns. It runs all
+  of the script, so a script that deletes its bundle after `bench()`
+  deletes it in the traced run too, before benk prints the report. A script
+  that bundled `bench.ts`, imported the bundle and then deleted it still
+  had `sumLoop` at `sum.ts:1:24`.
+- Node's [`SourceMap`](https://nodejs.org/api/module.html#class-modulesourcemap)
+  reads each map. A column after the start of a mapping is as far after
+  the start in the source, as Node's `findOrigin()` takes it.
+- A position before the first mapping of its line stays the bundle's, as
+  in code that the bundler wrote.
+- The names are V8's, as the bundle has them. A bundler can rename a
+  function, as rolldown renames a second `sum` to `sum$1`, and
+  `--v8-filter` matches the bundle's name.
+- A column after a renamed name, or in minified code, is approximate. It's
+  off by what the bundler changed between the mapping and the position.
+  With `a.ts` and `b.ts`, which each export a `sum`, rolldown renamed
+  `a.ts`'s to `sum$1`. The report placed it at `a.ts:1:22`, 2 columns
+  after its parameters, as `sum$1` is 2 characters longer. With
+  `--minify`, it was `t a.ts:1:18`, and each variant's `run` was 1 column
+  before its parameters. Their lines were right.
+
+A script that names a source map that can't be read keeps its own
+positions. The report then says why, after its heading, for each such
+script that it places a function or a deoptimization in. With the map
+deleted, the same run printed:
+
+```text
+Positions in dist/bench.mjs are its own: its source map, bench.mjs.map, couldn't be read (ENOENT).
+sumLoop dist/bench.mjs:3:17, 38 B of bytecode
+```
+
+A script that names no source map, as a TypeScript file that Node runs as
+it is, has its own positions, without a note.
+
 ### What the traced run changes
 
 1. It runs the script with the same arguments. benk sets `BENK_TRACED_RUN`
    in its environment, where `bench()` measures as it does otherwise, so
    that V8 sees the same calls, but prints nothing and writes no JSON. A
    script that does more, such as writing files, does it twice.
-2. V8's flags are `--trace-opt`, `--trace-deopt-verbose` and
+2. Once it has measured, its `bench()` reads the source maps of the
+   scripts that V8 has compiled, for the report. It lists them through
+   Node's [inspector](https://nodejs.org/api/inspector.html), whose
+   debugger it enables only for that, as V8 on Windows keeps its code log
+   to itself until the run exits. In 3 runs of a script that bundled its
+   benchmark with rolldown, on an Apple M2 Pro with each of Node 24.22.3,
+   26.13.0 and 27.0.0-alpha, that took 32 to 39 ms, for 202 or 203
+   scripts. The reports of a script that calls `bench()` twice were the
+   same with it and without it, but for a timer loop whose tiers differed
+   between runs either way. A Node built without the inspector reads the
+   source maps after the run instead, so a deleted bundle keeps its own
+   positions.
+3. V8's flags are `--trace-opt`, `--trace-deopt-verbose` and
    `--trace-turbo-inlining`, whose traces go to the run's stdout, and
    `--log-code` with `--no-logfile-per-isolate`, whose log of each
    function's position and bytecode benk reads from a temporary file. The
    run writes to the first run's stderr.
-3. `--no-concurrent-recompilation` compiles on the main thread, so that a
+4. `--no-concurrent-recompilation` compiles on the main thread, so that a
    compilation's lines come together. In Node 27.0.0-alpha, a background
    compilation's line of inlining was split by another line. V8 then
    installs optimized code as soon as it's compiled, rather than when the
    main thread next checks for it.
-4. It's another process, so V8's decisions can differ from the first run's,
+5. It's another process, so V8's decisions can differ from the first run's,
    as its calls per round can.
 
 ### What it leaves out
@@ -741,7 +881,7 @@ fails to load a value, such as `51`, as another script.
 | `--json <path>`                                                     | Writes the file with d8's `writeFile()`. benk checks the path by writing the file before it measures, as d8 can't check a directory.                  |
 | `--json -`                                                          | Writes the JSON to stdout with d8's `write()`, and the tables to stderr with `printErr()`.                                                            |
 | `--no-heap`                                                         | Changes nothing. d8 counts no bytes, so a run in d8 records `heap: false` with or without it.                                                         |
-| `--v8-report`                                                       | Throws before it measures: [V8's report](#v8s-report) runs the script again in Node. d8 takes V8's trace flags itself, as `d8 --trace-opt bench.mjs`. |
+| `--v8-report`, `--v8-filter`                                        | Throws before it measures: [V8's report](#v8s-report) runs the script again in Node. d8 takes V8's trace flags itself, as `d8 --trace-opt bench.mjs`. |
 
 To check the path of `--json`, benk writes the file again with the bytes
 that d8 reads of it, or empty where there's none. So a run that fails leaves

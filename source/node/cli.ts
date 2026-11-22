@@ -9,8 +9,9 @@ import { measureGroups } from '#source/core/measure';
 import { formatJson } from '#source/core/report';
 import type { Group, RunResult, Runtime } from '#source/core/types';
 import { NodeRuntime } from './runtime.ts';
-import { isTracedRun, runTraced } from './traced-run.ts';
-import { formatV8Report, reportFunctions } from './v8-report.ts';
+import { readSourceMaps } from './source-maps.ts';
+import { isTracedRun, recordSourceMaps, runTraced } from './traced-run.ts';
+import { formatV8Report, reportFunctions, tracedScripts } from './v8-report.ts';
 import { parseCodeLog, parseTrace } from './v8-trace.ts';
 
 /**
@@ -18,15 +19,18 @@ import { parseCodeLog, parseTrace } from './v8-trace.ts';
  * a description of the run, measures each group whose name matches the
  * filter and prints its table, and then writes the results as JSON, if the
  * options ask for it. With `--v8-report`, it then runs the script again
- * with V8's traces, and prints a report of its hot functions.
+ * with V8's traces, and prints a report of its hot functions, or of those
+ * that `--v8-filter` selects.
  *
  * In that traced run, it measures as in any other, but prints nothing,
- * writes no JSON, and doesn't run the script again.
+ * writes no JSON, and doesn't run the script again. It then reads the
+ * source maps of the scripts that V8 compiled, before it returns, for the
+ * report.
  *
  * @throws {TypeError} If an argument isn't one of the options, or a group is
  * malformed, as `measureGroups()` describes.
  * @throws {RangeError} If a number is out of its range.
- * @throws {SyntaxError} If the filter isn't a regular expression.
+ * @throws {SyntaxError} If a filter isn't a regular expression.
  * @throws {Error} If the JSON's directory can't be written to, or
  * `--v8-report` has no script to run again, which it checks before it
  * measures, if the runtime's clock reads no time, if a variant throws, with
@@ -36,13 +40,15 @@ export async function bench(
     groups: Iterable<Group>,
     options: BenchOptions = {}
 ): Promise<RunResult> {
-    const { json, v8Report, ...command } = parseOptions(
+    const { json, v8Report, v8Filter, ...command } = parseOptions(
         options.args ?? process.argv.slice(2)
     );
     const runtime = options.runtime ?? defaultRuntime();
     if (isTracedRun()) {
         // The process that runs this one prints the report, and the results
-        return measureGroups(groups, command, runtime);
+        const result = await measureGroups(groups, command, runtime);
+        await recordSourceMaps();
+        return result;
     }
 
     const toStdout = json === '-';
@@ -63,7 +69,7 @@ export async function bench(
     }
 
     if (script != null) {
-        for (const line of await traceScript(script)) {
+        for (const line of await traceScript(script, v8Filter)) {
             print(line);
         }
     }
@@ -117,14 +123,24 @@ function scriptToTrace(): string {
 
 /**
  * Runs the script again with V8's traces, with the arguments of this
- * process, and returns the lines of the report
+ * process, and returns the lines of the report, of the functions that the
+ * filter selects. It takes the scripts' source maps from the traced run,
+ * which read them before its `bench()` returned. The script's code after
+ * `bench()` runs in the traced run too, and may delete a bundle. It reads
+ * the source maps of other scripts after the run.
  *
  * @throws {Error} If the traced run fails, or its traces have none of V8's
  * compilations, or its log none of its functions, as when V8 changed their
  * formats.
  */
-async function traceScript(script: string): Promise<string[]> {
-    const { output, codeLog } = await runTraced(script, process.argv.slice(2));
+async function traceScript(
+    script: string,
+    filter: RegExp | undefined
+): Promise<string[]> {
+    const { output, codeLog, sourceMapFiles } = await runTraced(
+        script,
+        process.argv.slice(2)
+    );
     const trace = parseTrace(output);
     const logged = parseCodeLog(codeLog);
     if (trace.compilations.length === 0 || logged.size === 0) {
@@ -137,10 +153,21 @@ async function traceScript(script: string): Promise<string[]> {
         );
     }
 
+    const sourceMaps = await readSourceMaps(
+        tracedScripts(trace, logged),
+        sourceMapFiles
+    );
     const reports = reportFunctions(trace, logged, {
-        benkDirectory: benkDirectory()
+        benkDirectory: benkDirectory(),
+        filter,
+        sourceMaps
     });
-    return formatV8Report(reports, { script, directory: process.cwd() });
+    return formatV8Report(reports, {
+        script,
+        directory: process.cwd(),
+        filter,
+        sourceMaps
+    });
 }
 
 /**
