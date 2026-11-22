@@ -727,6 +727,14 @@ sumLoop dist/bench.mjs:3:17, 38 B of bytecode
 A script that names no source map, as a TypeScript file that Node runs as
 it is, has its own positions, without a note.
 
+A hook that rewrites a module without a source map moves its positions.
+V8 compiles the hook's output, so the report has that output's lines. With
+[`@snovader/node-hooks`](https://www.npmjs.com/package/@snovader/node-hooks),
+whose output has fewer lines than the source, the report placed a function
+at line 15 that the file has at line 19. Node's own stripping keeps each
+line, and placed it at line 19. That was
+[`test/fixtures/v8/bench.ts`](test/fixtures/v8/bench.ts) on Node 26.13.0.
+
 ### In d8
 
 [d8](#d8), V8's shell, can have a newer V8 than Node's, which compresses
@@ -1371,9 +1379,9 @@ The count has costs and gaps:
   call of 30 arrays counted, and a call of 100 didn't. In 20 samples of one
   call each, d8's `--trace-gc` printed a scavenge during every call of 100
   arrays, and none during a call of 30. Node counts buffers the same way,
-  so it has the gap too. In 3 runs of the group of 100 arrays alone, Node
-  showed `–` for 2 of the 6 counts of the call and its A/A copy, and d8 for
-  all 6.
+  so it has the gap too, in some of its runs. In 27 runs of the group of
+  100 arrays alone, Node 26.13.0 showed `–` for 8 of the 54 counts of the
+  call and its A/A copy, and d8 for all 6 of 3 runs.
 - **The heap.** A call that allocates only on the heap shows `0 B` of
   buffers, as `slice` does. Its group leads with the fastest round in d8
   where it could lead with the median in Node.
@@ -1512,11 +1520,13 @@ bytes. V8 frees them after the collection, on a background thread, so a
    earlier collections.
 2. A sample in which a collection starts, or whose count falls, doesn't
    count. The next has half as many calls, until a sample allocates too
-   little to start a collection.
+   little to start a collection, or is of one call.
 3. The median of 5 samples that count is the call's bytes. A sample can
    still count too few, when V8 frees buffers during it.
 4. If 5 samples don't count within 40, **buffers** shows `–`, and
-   `arrayBufferBytes` is null.
+   `arrayBufferBytes` is null. A call that starts a collection itself can
+   end there, since a sample of one call doesn't count either, as
+   [Bytes in d8](#bytes-in-d8) measures in Node and in d8.
 
 In Node 24.22.3, 26.13.0 and 27.0.0-alpha on an Apple M2 Pro, 10 counts each
 of 12 calls gave the right bytes, 360 of 360. The calls allocated from no
