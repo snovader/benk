@@ -17,6 +17,9 @@ out of a comparison, or at least in view:
   feedback.
 - **JSON results** with every round's time and position, beside the text
   table, to compare runs later.
+- **A V8 report of hot functions.** `--v8-report` runs the script again
+  with V8's traces, and prints the tiers that V8 compiled each function to,
+  what Turbofan inlined, and the deoptimizations.
 
 It times one process's variants against each other. It isn't a general
 harness with every statistic: [mitata](https://github.com/evanwashere/mitata)
@@ -114,6 +117,7 @@ node bench.ts --rounds 51 --json results.json
 | `--json -`            |         | Writes the JSON to stdout, and the tables to stderr.                                                                 |
 | `--no-aa`             |         | Leaves out the A/A copies. A group's `aa` overrides it.                                                              |
 | `--no-heap`           |         | Leaves out the counts of bytes allocated, on the heap and in array buffers.                                          |
+| `--v8-report`         |         | Runs the script again with V8's traces, after measuring, and prints [V8's report](#v8s-report) of its hot functions. |
 
 ### Variants
 
@@ -327,6 +331,139 @@ them. With `performance.now()` floored to ticks of 1 µs, 5 µs, 20 µs,
 100 µs and 1 ms, 500 estimates of each gave the tick, and so did 30 of
 16 ms. The median estimate took 4.7 ms for ticks of 1 ms, and 111 ms for
 ticks of 16 ms.
+
+## V8's report
+
+`--v8-report` explains a result by what V8 did with the code. After the
+tables, benk runs the script again, in a child Node process, with V8's flags
+that trace its compilers. It then prints, for each function of the script
+that V8 optimized:
+
+- the tiers that V8 compiled it to;
+- what Turbofan inlined into it, and where Turbofan inlined it, with the
+  sizes of their bytecode;
+- its deoptimizations, with their reasons and positions.
+
+```sh
+node bench.ts --v8-report --sample-ms 10
+```
+
+```text
+Node v26.13.0, V8 14.6.202.34-node.40, darwin arm64, Apple M2 Pro. Process state: entry script from TypeScript source.
+Per call, of at least 31 interleaved rounds of 10 ms per variant after 10 warm-up rounds, in an order that rotates each variant through each position:
+the fastest and median round, the interquartile range as a share of the median, the ratio to the group's first variant by the statistic that the group leads with, a 95% interval of the median of the per-round ratios, and the bytes allocated on the heap and in array buffers outside it.
+
+sum 1,000 numbers: 36 rounds, by the median round (a call of 1 µs or more)
+                      fastest     median   spread    ratio   95% interval        heap     buffers
+  for loop             795 ns     817 ns     2.9%    1.00×                       16 B         0 B
+  reduce              7.12 µs    7.26 µs     2.5%    8.93×      8.83–8.98    32,040 B         0 B
+  for loop A/A         799 ns     824 ns     3.1%    1.00×      1.00–1.01        16 B         0 B
+  for loop: two modes, 32 rounds near 816 ns and 4 near 1.45 µs
+  for loop A/A: two modes, 32 rounds near 820 ns and 4 near 1.44 µs
+
+V8 report of bench.ts, from a run of it with V8's traces, whose times aren't reported.
+Per function of the script, and per function that deoptimized in the script's code: the tiers that V8 compiled it to, what Turbofan inlined into it and where it inlined it, with sizes of bytecode, and its deoptimizations.
+(anonymous) bench.ts:3:46, 15 B of bytecode
+  compiled to Maglev
+sumLoop bench.ts:5:17, 38 B of bytecode
+  compiled to Maglev, Turbofan
+  inlined into (anonymous) <anonymous>:1:20 ×2
+run bench.ts:17:38, 13 B of bytecode
+  compiled to Maglev
+  inlined into (anonymous) <anonymous>:1:20 ×2
+run bench.ts:20:22, 24 B of bytecode
+  compiled to Maglev
+(anonymous) bench.ts:20:43, 6 B of bytecode
+  compiled to Maglev ×2, Turbofan
+```
+
+The tables are of the first run. The report is of the traced run, whose
+times it leaves out, as tracing slows it. Here, Turbofan compiled two of
+benk's timer loops, and inlined the for loop's `run`, at line 17, and
+`sumLoop` into each: the for loop's, and its A/A copy's, which calls the
+same `run`. A function that `new Function` compiled, as a timer loop, has no
+file, and the report writes it as `<anonymous>`, as V8's stack traces do.
+
+With the default rounds of 1 ms, the same script's report had no line of
+inlining, as no Turbofan compilation considered `run` or `sumLoop`, and the
+for loop took 1.41 µs rather than 795 ns. These are the fastest rounds of 3
+runs of each, on an Apple M2 Pro with Node 26.13.0, and each sample time's
+3 reports were the same. The two modes with 10 ms are the rounds before
+Turbofan's code: 4 near 1.45 µs.
+
+### Reading the report
+
+These lines are of the report of this repository's
+[`test/fixtures/v8/bench.ts`](test/fixtures/v8/bench.ts), from its directory,
+with Node 26.13.0:
+
+| Line                                                                                              | What it says                                                                                                                   |
+| ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `sum bench.ts:15:13, 38 B of bytecode`                                                            | The function's name, where it starts, and the size of its bytecode, which Turbofan's limits on inlining count.                 |
+| `compiled to Maglev ×3, Turbofan ×3`                                                              | The tiers that V8 compiled it to, and how many times. `(OSR)` marks a compilation of a running loop, by on-stack replacement.  |
+| `inlines sum bench.ts:15:13 (38 B) ×2`                                                            | Turbofan inlined `sum` into this function, in 2 of its compilations.                                                           |
+| `doesn't inline mix bench.ts:23:13 (874 B): exceeds bytecode limit ×2`                            | Turbofan considered `mix`, and didn't inline it, for V8's reason, when V8 gave one.                                            |
+| `inlined into run bench.ts:90:9 ×2`                                                               | The same decisions, in the lines of the function that Turbofan inlined, or didn't, as `not inlined into`.                      |
+| `deoptimized in Turbofan's code: wrong map (eager), at bench.ts:17:29, inlined at bench.ts:90:15` | The function's optimized code deoptimized, for V8's reason, at the first position, in a function that was inlined at the next. |
+
+A line that ends in a count, as `×2`, happened that many times, or in that
+many compilations. Lines that would be alike, as those of two timer loops,
+are counted as one. Turbofan's limits count bytecode. These are V8's
+defaults, as `node --v8-options` prints them:
+
+| Flag                                     | What it limits                                        | V8 13.6, Node 24.22.3 | V8 14.6, Node 26.13.0 | V8 15.6, Node 27.0.0-alpha |
+| ---------------------------------------- | ----------------------------------------------------- | --------------------- | --------------------- | -------------------------- |
+| `--max-inlined-bytecode-size`            | A function that Turbofan inlines                      | 460 B                 | 460 B                 | 460 B                      |
+| `--max-inlined-bytecode-size-cumulative` | The functions that one compilation inlines, in all    | 920 B                 | 920 B                 | 920 B                      |
+| `--max-inlined-bytecode-size-small`      | A small function, which Turbofan inlines beyond 920 B | 27 B                  | 30 B                  | 30 B                       |
+
+### Which functions it lists
+
+- The functions of the script, and of the modules that it imports, other
+  than Node's and benk's.
+- Other functions whose code deoptimized at a position in the script's code,
+  such as benk's timer loops, into which V8 inlines a variant's calls.
+
+A function of Node's or benk's that Turbofan inlined into one of the
+script's, or didn't, is named in that function's lines.
+
+### What the traced run changes
+
+1. It runs the script with the same arguments. benk sets `BENK_TRACED_RUN`
+   in its environment, where `bench()` measures as it does otherwise, so
+   that V8 sees the same calls, but prints nothing and writes no JSON. A
+   script that does more, such as writing files, does it twice.
+2. V8's flags are `--trace-opt`, `--trace-deopt-verbose` and
+   `--trace-turbo-inlining`, whose traces go to the run's stdout, and
+   `--log-code` with `--no-logfile-per-isolate`, whose log of each
+   function's position and bytecode benk reads from a temporary file. The
+   run writes to the first run's stderr.
+3. `--no-concurrent-recompilation` compiles on the main thread, so that a
+   compilation's lines come together. In Node 27.0.0-alpha, a background
+   compilation's line of inlining was split by another line. V8 then
+   installs optimized code as soon as it's compiled, rather than when the
+   main thread next checks for it.
+4. It's another process, so V8's decisions can differ from the first run's,
+   as its calls per round can.
+
+### What it leaves out
+
+- Maglev's inlining. `--trace-maglev-inlining` printed another format in
+  each of V8 13.6, 14.6 and 15.6, and V8 15.6 colours it. Maglev inlines
+  too: a deoptimization of Maglev's code
+  `at bench.ts:17:29, inlined at bench.ts:80:15, inlined at <anonymous>:6:22`
+  was in `sum`, inlined into a variant's `run`, inlined into its timer loop.
+- Sparkplug's compilations, which `--trace-opt` doesn't print.
+- Which variant a timer loop is for, as [Planned](#planned) says.
+- A run in d8, whose script calls `measureGroups()` rather than `bench()`,
+  as [d8](#d8) shows.
+
+V8 doesn't keep the traces' formats stable. The parsers were checked
+against what Node 24.22.3, 26.13.0 and 27.0.0-alpha wrote on macOS, and
+against the same with addresses as Windows prints some of them, without
+`0x`. If the
+traced run's stdout has none of V8's compilations, or its log none of its
+functions, `--v8-report` throws, rather than print an empty report.
 
 ## API
 
@@ -878,6 +1015,15 @@ benk keeps these in view rather than out of the results:
   24.22.3 and 26.13.0, on an Apple M2 Pro, `Buffer.from('abc')` counted 5.8
   to 12.8 bytes, and `Buffer.allocUnsafe(3)` 0 to 8.7.
 
+- **The tier of the timed code.** A variant's calls run in the code of the
+  tier that V8 compiled them to, and rounds of 1 ms can end before Turbofan
+  compiles a timer loop. The quick start's for loop took 1.41 µs with the
+  default sample time, when no Turbofan compilation considered its `run`,
+  and 795 ns with `--sample-ms 10`, when Turbofan inlined `run` and
+  `sumLoop` into its timer loop. These are the fastest rounds of 3 runs of
+  each, on an Apple M2 Pro with Node 26.13.0. [V8's report](#v8s-report)
+  shows the tiers.
+
 ## Planned
 
 Not built yet:
@@ -886,9 +1032,9 @@ Not built yet:
   own, load both in one process, and interleave them as variants, with
   position rotation across processes as well as rounds, since V8's tiering
   can favour the first copy that a process loads.
-- **A V8 report per hot function.** For each variant's hot functions: their
-  bytecode size against TurboFan's inlining budget, what was inlined, and
-  deopts, tied to the result that they explain, with a budget check for CI.
+- **V8's report tied to the results.** Name each timer loop in
+  [V8's report](#v8s-report) by its variant, beside the variant's row, and
+  check functions' bytecode against Turbofan's limits in CI.
 - **A `bench` API in hypotes**, Vitest's `bench()` on node:test, layered over
   benk.
 - **Runtimes for browsers and Workers**, with timer loops written at build

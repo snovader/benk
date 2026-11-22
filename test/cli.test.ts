@@ -1,9 +1,12 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { access, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'hypotes';
+import { promisify } from 'node:util';
+import { describe, expect, it, vi } from 'hypotes';
 import { bench, parseOptions, type Group } from 'benk';
 import { FakeRuntime } from './fake-runtime.ts';
+import { BENCH, REPOSITORY } from './v8-fixtures.ts';
 
 const QUICK = ['--sample-ms', '0.01', '--warmup-rounds', '1', '--rounds', '6'];
 
@@ -16,7 +19,8 @@ describe('parseOptions', () => {
             aa: true,
             heap: true,
             filter: undefined,
-            json: undefined
+            json: undefined,
+            v8Report: false
         });
     });
 
@@ -32,7 +36,8 @@ describe('parseOptions', () => {
             '--json',
             'results.json',
             '--no-aa',
-            '--no-heap'
+            '--no-heap',
+            '--v8-report'
         ]);
 
         expect(options).toStrictEqual({
@@ -42,7 +47,8 @@ describe('parseOptions', () => {
             aa: false,
             heap: false,
             filter: /^record/u,
-            json: 'results.json'
+            json: 'results.json',
+            v8Report: true
         });
     });
 
@@ -157,5 +163,59 @@ describe('bench', () => {
         expect(written).toHaveLength(1);
         expect(JSON.parse(written[0])).toStrictEqual(result);
         expect(printed.some(line => line.startsWith('second: '))).toBe(true);
+    });
+
+    it('measures in the traced run of another process, without printing, writing JSON, or running again', async () => {
+        const runtime = new FakeRuntime();
+        const directory = await mkdtemp(join(tmpdir(), 'benk-'));
+        const lines: string[] = [];
+        vi.stubEnv('BENK_TRACED_RUN', '1');
+        try {
+            const path = join(directory, 'results.json');
+            const result = await bench(groups(runtime), {
+                args: [...QUICK, '--json', path, '--v8-report'],
+                runtime,
+                print: line => lines.push(line)
+            });
+
+            expect(result.groups.map(group => group.name)).toStrictEqual(['first', 'second']);
+            expect(lines).toStrictEqual([]);
+            await expect(access(path)).rejects.toThrow(/ENOENT/);
+        } finally {
+            vi.unstubAllEnvs();
+            await rm(directory, { recursive: true });
+        }
+    });
+});
+
+describe('--v8-report', () => {
+    it("runs the script again with V8's traces, and reports its functions", async () => {
+        // Run as the package's scripts run the tests, whose flags the traced run has too
+        const { stdout } = await promisify(execFile)(
+            process.execPath,
+            [
+                '--no-strip-types',
+                '--import',
+                '@snovader/node-hooks/register',
+                BENCH,
+                '--v8-report',
+                '--rounds',
+                '6',
+                '--warmup-rounds',
+                '1'
+            ],
+            { cwd: REPOSITORY }
+        );
+        const lines = stdout.split(/\r?\n/);
+        const heading = lines.indexOf(
+            `V8 report of ${BENCH}, from a run of it with V8's traces, whose times aren't reported.`
+        );
+
+        // After the tables, and with the function that each variant calls
+        expect(heading).not.toBe(-1);
+        expect(lines.findIndex(line => line.startsWith('sums: '))).toBeLessThan(heading);
+        expect(lines.slice(heading).some(line => line.startsWith(`sum ${BENCH}:15:13, `))).toBe(
+            true
+        );
     });
 });

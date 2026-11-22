@@ -5,6 +5,9 @@ import { measureGroups, DEFAULT_OPTIONS } from '#source/core/measure';
 import { describeRun, formatGroup, formatJson } from '#source/core/report';
 import type { Group, RunResult, Runtime } from '#source/core/types';
 import { NodeRuntime } from './runtime.ts';
+import { isTracedRun, runTraced } from './traced-run.ts';
+import { formatV8Report, reportFunctions } from './v8-report.ts';
+import { parseCodeLog, parseTrace } from './v8-trace.ts';
 
 /** The options of a benchmark script, from its command line */
 export interface CommandOptions {
@@ -17,6 +20,11 @@ export interface CommandOptions {
     readonly filter: RegExp | undefined;
     /** Where to write the results as JSON: a path, `-` for stdout, or none */
     readonly json: string | undefined;
+    /**
+     * Whether to run the script again with V8's traces, after measuring,
+     * and print a report of its hot functions
+     */
+    readonly v8Report: boolean;
 }
 
 /** How `bench()` runs, for a script that runs it other than from the shell */
@@ -45,6 +53,8 @@ export interface BenchOptions {
  * - `--no-aa`: leaves out the A/A copy of each group's first variant
  * - `--no-heap`: leaves out the counts of bytes allocated, on the heap and
  *   in array buffers
+ * - `--v8-report`: runs the script again with V8's traces, and prints a
+ *   report of its hot functions
  *
  * @throws {TypeError} If an argument isn't one of the options, or an option
  * has no value.
@@ -62,7 +72,8 @@ export function parseOptions(args: readonly string[]): CommandOptions {
             filter: { type: 'string' },
             json: { type: 'string' },
             aa: { type: 'boolean', default: DEFAULT_OPTIONS.aa },
-            heap: { type: 'boolean', default: DEFAULT_OPTIONS.heap }
+            heap: { type: 'boolean', default: DEFAULT_OPTIONS.heap },
+            'v8-report': { type: 'boolean', default: false }
         }
     });
 
@@ -83,7 +94,8 @@ export function parseOptions(args: readonly string[]): CommandOptions {
         aa: values.aa,
         heap: values.heap,
         filter: filterOption(values.filter),
-        json: values.json
+        json: values.json,
+        v8Report: values['v8-report']
     };
 }
 
@@ -91,31 +103,42 @@ export function parseOptions(args: readonly string[]): CommandOptions {
  * Runs a benchmark script: reads its options from the command line, prints
  * a description of the run, measures each group whose name matches the
  * filter and prints its table, and then writes the results as JSON, if the
- * options ask for it
+ * options ask for it. With `--v8-report`, it then runs the script again
+ * with V8's traces, and prints a report of its hot functions.
+ *
+ * In that traced run, it measures as in any other, but prints nothing,
+ * writes no JSON, and doesn't run the script again.
  *
  * @throws {TypeError} If an argument isn't one of the options, or a group is
  * malformed, as `measureGroups()` describes.
  * @throws {RangeError} If a number is out of its range.
  * @throws {SyntaxError} If the filter isn't a regular expression.
- * @throws {Error} If the JSON's directory can't be written to, which it
- * checks before it measures, if the runtime's clock reads no time, or if
- * a variant throws, with its error as the cause.
+ * @throws {Error} If the JSON's directory can't be written to, or
+ * `--v8-report` has no script to run again, which it checks before it
+ * measures, if the runtime's clock reads no time, if a variant throws, with
+ * its error as the cause, or if the traced run fails, or writes no traces.
  */
 export async function bench(
     groups: Iterable<Group>,
     options: BenchOptions = {}
 ): Promise<RunResult> {
-    const { json, ...command } = parseOptions(
+    const { json, v8Report, ...command } = parseOptions(
         options.args ?? process.argv.slice(2)
     );
+    const runtime = options.runtime ?? defaultRuntime();
+    if (isTracedRun()) {
+        // The process that runs this one prints the report, and the results
+        return measureGroups(groups, command, runtime);
+    }
+
     const toStdout = json === '-';
     const print =
         options.print ??
         (toStdout ? printError : (line: string) => console.log(line));
-    const runtime = options.runtime ?? defaultRuntime();
     if (json != null && !toStdout) {
         await checkDirectory(json);
     }
+    const script = v8Report ? scriptToTrace() : undefined;
 
     print(
         describeRun(runtime.description, {
@@ -140,6 +163,12 @@ export async function bench(
         (options.write ?? writeStdout)(formatJson(result));
     } else if (json != null) {
         await writeFile(json, formatJson(result));
+    }
+
+    if (script != null) {
+        for (const line of await traceScript(script)) {
+            print(line);
+        }
     }
 
     return result;
@@ -171,6 +200,61 @@ async function checkDirectory(path: string): Promise<void> {
             { cause: error }
         );
     }
+}
+
+/**
+ * The script that `--v8-report` runs again: the process's entry script
+ *
+ * @throws {Error} If the process has none, as in Node's REPL.
+ */
+function scriptToTrace(): string {
+    const script = process.argv.at(1);
+    if (script == null) {
+        throw new Error(
+            'Expected a script to run again for --v8-report, as process.argv[1]'
+        );
+    }
+
+    return script;
+}
+
+/**
+ * Runs the script again with V8's traces, with the arguments of this
+ * process, and returns the lines of the report
+ *
+ * @throws {Error} If the traced run fails, or its traces have none of V8's
+ * compilations, or its log none of its functions, as when V8 changed their
+ * formats.
+ */
+async function traceScript(script: string): Promise<string[]> {
+    const { output, codeLog } = await runTraced(script, process.argv.slice(2));
+    const trace = parseTrace(output);
+    const logged = parseCodeLog(codeLog);
+    if (trace.compilations.length === 0 || logged.size === 0) {
+        // A line that V8 wrote of a compilation, which says what it wrote
+        const line = output
+            .split('\n')
+            .find(text => text.startsWith('[completed compiling'));
+        throw new Error(
+            `Expected V8's compilations and functions in the traced run of ${script}, got ${trace.compilations.length} and ${logged.size}: V8 ${process.versions.v8} may write other formats${line == null ? '' : `, as ${line.trimEnd()}`}`
+        );
+    }
+
+    const reports = reportFunctions(trace, logged, {
+        benkDirectory: benkDirectory()
+    });
+    return formatV8Report(reports, { script, directory: process.cwd() });
+}
+
+/**
+ * The URL of the directory of benk's own modules, whose functions the V8
+ * report leaves out: `dist`, of the bundle, which has this module in it, or
+ * `source`, which has this module's directory in it
+ */
+function benkDirectory(): string {
+    const url = import.meta.url;
+
+    return new URL(url.endsWith('.ts') ? '..' : '.', url).href;
 }
 
 function filterOption(value: string | undefined): RegExp | undefined {
