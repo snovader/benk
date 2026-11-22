@@ -43,7 +43,8 @@ export interface BenchOptions {
  * - `--json <path>`: writes the results as JSON to a file, or to stdout for
  *   `-`, when the tables go to stderr
  * - `--no-aa`: leaves out the A/A copy of each group's first variant
- * - `--no-heap`: leaves out the count of heap bytes
+ * - `--no-heap`: leaves out the counts of bytes allocated, on the heap and
+ *   in array buffers
  *
  * @throws {TypeError} If an argument isn't one of the options, or an option
  * has no value.

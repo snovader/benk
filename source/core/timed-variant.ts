@@ -1,7 +1,6 @@
 import type {
     AsyncTimer,
     AsyncVariant,
-    HeapMeter,
     Role,
     Runtime,
     SyncVariant,
@@ -25,6 +24,14 @@ interface AsyncLoop {
     readonly async: true;
     readonly variant: AsyncVariant;
     readonly timer: AsyncTimer;
+}
+
+/**
+ * What counts something of a loop's calls, such as a `HeapMeter` its bytes
+ * on the heap: from `start()` until the function that it returns is called
+ */
+interface Meter<T> {
+    start(): () => T;
 }
 
 /** Where a variant stands in its group */
@@ -73,7 +80,7 @@ export class TimedVariant {
     /** Times one round's calls, and returns the time per call in nanoseconds */
     time(): number | Promise<number> {
         const repetitions = this.#repetitions;
-        const elapsed = this.#run(repetitions, undefined);
+        const elapsed = this.#run(repetitions);
 
         return typeof elapsed === 'number'
             ? perCall(elapsed, repetitions)
@@ -81,10 +88,11 @@ export class TimedVariant {
     }
 
     /**
-     * The bytes that `repetitions` calls allocate on the heap, setup and
-     * teardown aside, with the loop's own
+     * What a meter counts of a loop of `repetitions` calls, setup and
+     * teardown aside, with the loop's own, such as the bytes that they
+     * allocate
      */
-    allocated(meter: HeapMeter, repetitions: number): number | Promise<number> {
+    allocated<T>(meter: Meter<T>, repetitions: number): T | Promise<T> {
         return this.#run(repetitions, meter);
     }
 
@@ -136,7 +144,7 @@ export class TimedVariant {
      */
     async #double(sampleTime: number): Promise<number> {
         for (let repetitions = 1; ; repetitions *= 2) {
-            const elapsed = await this.#run(repetitions, undefined);
+            const elapsed = await this.#run(repetitions);
 
             if (elapsed >= sampleTime / 4 || repetitions >= CALIBRATION_CALLS) {
                 this.#fit(perCall(elapsed, repetitions), sampleTime);
@@ -158,13 +166,15 @@ export class TimedVariant {
 
     /**
      * Runs a loop of `repetitions` calls between the variant's setup and
-     * teardown, and returns its time in milliseconds, or the bytes that it
-     * allocated when given a meter
+     * teardown, and returns its time in milliseconds, or what a meter
+     * counted when given one
      */
-    #run(
+    #run(repetitions: number): number | Promise<number>;
+    #run<T>(repetitions: number, meter: Meter<T>): T | Promise<T>;
+    #run<T>(
         repetitions: number,
-        meter: HeapMeter | undefined
-    ): number | Promise<number> {
+        meter?: Meter<T>
+    ): number | T | Promise<number | T> {
         const loop = this.#loop;
         if (loop.async) {
             return this.#runAsync(loop, repetitions, meter).catch(
@@ -185,11 +195,11 @@ export class TimedVariant {
         }
     }
 
-    async #runAsync(
+    async #runAsync<T>(
         { variant, timer }: AsyncLoop,
         repetitions: number,
-        meter: HeapMeter | undefined
-    ): Promise<number> {
+        meter: Meter<T> | undefined
+    ): Promise<number | T> {
         await variant.setup?.(repetitions);
         const stop = meter?.start();
         const elapsed = await timer(variant.run, repetitions);

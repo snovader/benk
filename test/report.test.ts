@@ -27,6 +27,7 @@ function variant(
         ratio: 1,
         interval: null,
         heapBytes: 0,
+        arrayBufferBytes: 0,
         ...fields
     };
 }
@@ -45,18 +46,20 @@ const group: GroupResult = {
         variant('tafla-gen', 'variant', bimodal, {
             ratio: 1.39,
             interval: [1.37, 1.95],
-            heapBytes: 24.4
+            heapBytes: 24.4,
+            arrayBufferBytes: 1_048_576
         }),
         variant('tafla A/A', 'aa', steady, {
             ratio: 1.004,
             interval: [0.987, 1.012],
-            heapBytes: -3
+            heapBytes: -3,
+            arrayBufferBytes: -0.4
         }),
         variant(
             'protobuf',
             'variant',
             steady.map(t => t * 20),
-            { ratio: 20, interval: [19.5, 20.5], heapBytes: null }
+            { ratio: 20, interval: [19.5, 20.5], heapBytes: null, arrayBufferBytes: null }
         )
     ]
 };
@@ -66,11 +69,11 @@ describe('formatGroup', () => {
         expect(formatGroup(group)).toStrictEqual([
             '',
             'record: serialize: 6 rounds, by the fastest round (every call under 1 µs and 1 KiB)',
-            '                      fastest     median   spread    ratio   95% interval        heap',
-            '  tafla               61.2 ns    63.0 ns     2.1%    1.00×                        0 B',
-            '  tafla-gen           85.0 ns    85.6 ns    41.0%    1.39×      1.37–1.95        24 B',
-            '  tafla A/A           61.2 ns    63.0 ns     2.1%    1.00×      0.99–1.01         0 B',
-            '  protobuf            1.22 µs    1.26 µs     2.1%    20.0×      19.5–20.5           –',
+            '                      fastest     median   spread    ratio   95% interval        heap     buffers',
+            '  tafla               61.2 ns    63.0 ns     2.1%    1.00×                        0 B         0 B',
+            '  tafla-gen           85.0 ns    85.6 ns    41.0%    1.39×      1.37–1.95        24 B 1,048,576 B',
+            '  tafla A/A           61.2 ns    63.0 ns     2.1%    1.00×      0.99–1.01         0 B         0 B',
+            '  protobuf            1.22 µs    1.26 µs     2.1%    20.0×      19.5–20.5           –           –',
             '  tafla-gen: two modes, 4 rounds near 85.4 ns and 3 near 121 ns'
         ]);
     });
@@ -82,7 +85,7 @@ describe('formatGroup', () => {
         });
         const lines = formatGroup({ ...group, variants: [group.variants[0], fast] });
 
-        expect(lines[lines.length - 1]).toMatch(/% 0\.00042× 0\.00039–0\.00046 +0 B$/);
+        expect(lines[lines.length - 1]).toMatch(/% 0\.00042× 0\.00039–0\.00046 +0 B +0 B$/);
     });
 
     it('notes a ratio by the fastest round that lies more than 5% outside its interval', () => {
@@ -119,6 +122,13 @@ describe('formatGroup', () => {
             "  median rounds are as short as 49 times the timer's resolution, of 1.00 ms: a sample time of 50.0 ms or more gives 50"
         ]);
         expect(formatGroup(coarse(50_000)).slice(rows)).toStrictEqual([]);
+    });
+
+    it('prints no bytes of array buffers for results of schema 2, which have none', () => {
+        const { arrayBufferBytes: _, ...before } = group.variants[1];
+        const lines = formatGroup({ ...group, variants: [before as VariantResult] });
+
+        expect(lines[3]).toMatch(/ 24 B +–$/);
     });
 
     it('has no such note for results without a resolution', () => {
@@ -168,6 +178,9 @@ describe('describeRun', () => {
             /at least 31 interleaved rounds of 1 ms per variant after 10 warm-up rounds/
         );
         expect(third).not.toMatch(/heap/);
+        expect(describeRun(runtime, { ...options, heap: true })).toMatch(
+            /, and the bytes allocated on the heap and in array buffers outside it\.$/
+        );
     });
 });
 

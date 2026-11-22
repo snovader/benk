@@ -76,17 +76,17 @@ node bench.ts
 ```text
 Node v26.13.0, V8 14.6.202.34-node.40, darwin arm64, Apple M2 Pro. Process state: entry script from TypeScript source.
 Per call, of at least 31 interleaved rounds of 1 ms per variant after 10 warm-up rounds, in an order that rotates each variant through each position:
-the fastest and median round, the interquartile range as a share of the median, the ratio to the group's first variant by the statistic that the group leads with, a 95% interval of the median of the per-round ratios, and the bytes allocated on the heap.
+the fastest and median round, the interquartile range as a share of the median, the ratio to the group's first variant by the statistic that the group leads with, a 95% interval of the median of the per-round ratios, and the bytes allocated on the heap and in array buffers outside it.
 
 sum 1,000 numbers: 36 rounds, by the median round (a call of 1 µs or more)
-                      fastest     median   spread    ratio   95% interval        heap
-  for loop            1.41 µs    1.50 µs     3.4%    1.00×                       16 B
-  reduce              7.00 µs    7.47 µs     6.6%    4.95×      4.88–5.01    32,040 B
-  for loop A/A        1.41 µs    1.50 µs     3.8%    1.00×      0.98–1.00        16 B
+                      fastest     median   spread    ratio   95% interval        heap     buffers
+  for loop            1.41 µs    1.43 µs     5.8%    1.00×                       16 B         0 B
+  reduce              6.91 µs    7.19 µs     5.3%    4.96×      4.89–5.09    32,040 B         0 B
+  for loop A/A        1.41 µs    1.43 µs     3.5%    1.00×      0.98–1.01        16 B         0 B
 ```
 
 It prints a description of the run, then each group's table as soon as it's
-measured. Here, `reduce` took 4.95 times as long as the loop, and the A/A
+measured. Here, `reduce` took 4.96 times as long as the loop, and the A/A
 copy of the loop, which benk added, took as long as the loop itself.
 [What the table reports](#what-the-table-reports) describes each column.
 
@@ -112,7 +112,7 @@ node bench.ts --rounds 51 --json results.json
 | `--json <path>`       |         | Writes the results as JSON to a file. benk checks that it can write to the file's directory before it measures.      |
 | `--json -`            |         | Writes the JSON to stdout, and the tables to stderr.                                                                 |
 | `--no-aa`             |         | Leaves out the A/A copies. A group's `aa` overrides it.                                                              |
-| `--no-heap`           |         | Leaves out the count of heap bytes.                                                                                  |
+| `--no-heap`           |         | Leaves out the counts of bytes allocated, on the heap and in array buffers.                                          |
 
 ### Variants
 
@@ -179,10 +179,10 @@ Node 26.13.0, with benk loaded from its source:
 
 ```text
 sort 1,000 numbers: 36 rounds, by the median round (a call of 1 µs or more)
-                      fastest     median   spread    ratio   95% interval        heap
-  Float64Array        21.1 µs    23.7 µs    10.4%    1.00×                        0 B
-  number[]             121 µs     146 µs    19.8%    6.04×      5.53–6.66   171,516 B
-  Float64Array A/A    21.1 µs    23.5 µs     8.9%    1.00×      0.98–1.01         0 B
+                      fastest     median   spread    ratio   95% interval        heap     buffers
+  Float64Array        20.7 µs    22.4 µs     7.4%    1.00×                        0 B         0 B
+  number[]             118 µs     132 µs     6.3%    5.79×      5.55–5.97   171,516 B         0 B
+  Float64Array A/A    20.3 µs    22.7 µs     5.0%    1.01×      0.99–1.02         0 B         0 B
 ```
 
 A variant whose rounds form two clusters gets a note below the table, such
@@ -209,13 +209,18 @@ Per call of each variant:
   rounds. In a group that leads with the fastest round, the ratio compares
   the fastest rounds instead, so the two are different statistics.
 - **heap**: the bytes that a call allocated on V8's heap, from V8's heap
-  statistics and a `GCProfiler`, less what a sample allocates itself. V8
-  allocates the contents of an `ArrayBuffer` of more than 64 bytes outside
-  its heap, so they're left out. The median of 5 samples counts: compiling
-  and deoptimizing allocate in some samples, and in others the heap shrinks
-  by more than the collections report, as when V8 sweeps garbage
-  concurrently. A call that returns a double, such as a sum, can count 16
-  bytes, the size of a boxed number.
+  statistics and a `GCProfiler`, less what a sample allocates itself. The
+  median of 5 samples counts: compiling and deoptimizing allocate in some
+  samples, and in others the heap shrinks by more than the collections
+  report, as when V8 sweeps garbage concurrently. A call that returns a
+  double, such as a sum, can count 16 bytes, the size of a boxed number.
+- **buffers**: the bytes of array buffers' contents that a call allocated
+  outside V8's heap, which **heap** leaves out, as
+  [Array buffers outside the heap](#array-buffers-outside-the-heap)
+  describes. A call that allocates a `Float64Array` of 128 counts its
+  object in **heap**, 200 bytes, and its contents here, 1,024 bytes.
+- **–** in **heap** or **buffers**: a count that the run didn't make, as
+  with `--no-heap`, or that the runtime can't.
 - **median rounds are as short as … times the timer's resolution**: a note
   for a group whose median rounds take less than 50 times the shortest time
   that a timer loop reads, as [JSON results](#json-results) describes it.
@@ -245,9 +250,10 @@ Per call of each variant:
 ### Which statistic leads
 
 A group leads with the **fastest** round when every variant's median call
-takes under 1 µs and allocates under 1 KiB, and with the **median**
-otherwise, unless it sets `lead`. Every variant of a group is compared by the
-same statistic, and the table's title says which, and why.
+takes under 1 µs and allocates under 1 KiB, on the heap and in array buffers
+together, and with the **median** otherwise, unless it sets `lead`. Every
+variant of a group is compared by the same statistic, and the table's title
+says which, and why.
 
 The rounds of a short call that allocates little differ mostly by load from
 other processes and interrupts, which only slow them, so the fastest round
@@ -255,7 +261,8 @@ comes closest to the call's own cost, and varies the least. A long call's
 round holds few calls, and an allocating call's rounds collect garbage in
 some rounds and not in others: their fastest round leaves out work that the
 calls cause, which the median includes, and the spread shows how much it
-varies.
+varies. A call that allocates a typed array allocates in its buffer, as
+[Array buffers outside the heap](#array-buffers-outside-the-heap) measures.
 
 ## JSON results
 
@@ -263,8 +270,8 @@ varies.
 
 ```jsonc
 {
-  "schema": 2,
-  "date": "2026-11-20T18:17:55.544Z",
+  "schema": 3,
+  "date": "2026-11-21T19:16:26.602Z",
   "runtime": { "name": "Node", "version": "v26.13.0", "engine": "V8 14.6.202.34-node.40",
                "platform": "darwin", "arch": "arm64", "cpu": "Apple M2 Pro", "flags": [],
                "processState": ["entry script from TypeScript source"] },
@@ -274,10 +281,10 @@ varies.
     "timerResolution": 124.99999999704414, // nanoseconds: the shortest time that a timer loop read
     "variants": [{
       "name": "for over number[]", "role": "reference", "async": false, "repetitions": 712,
-      "samples": [1421.12, 1405.66, …],   // nanoseconds per call, in the rounds' order
+      "samples": [1405.49, 1429.83, …],   // nanoseconds per call, in the rounds' order
       "positions": [0, 2, 3, 1, …],       // the variant's position in each round
       "summary": { "fastest": …, "q1": …, "median": …, "q3": …, "slowest": …, "spread": …, "modes": null },
-      "ratio": 1, "interval": null, "heapBytes": 16
+      "ratio": 1, "interval": null, "heapBytes": 16, "arrayBufferBytes": 0
     }]
   }]
 }
@@ -400,10 +407,12 @@ All three throw:
 ### Runtimes
 
 benk's measuring isn't particular to Node. It times variants through a
-`Runtime`, which creates the timer loops and counts heap bytes. `NodeRuntime`
-creates the loops with `new Function`, and counts heap bytes with `node:v8`,
-which Workers and browsers don't allow. The `runtime` option takes another
-`Runtime`, such as one with a fake clock for a test.
+`Runtime`, which creates the timer loops and counts the bytes that calls
+allocate. `NodeRuntime` creates the loops with `new Function`, and counts
+heap bytes with `node:v8`, which Workers and browsers don't allow. It counts
+array buffers' bytes with `process.memoryUsage()`. A runtime without
+`arrayBuffers` counts none, as the runtime below. The `runtime` option takes
+another `Runtime`, such as one with a fake clock for a test.
 
 benk has a runtime for Node only. A script for another runtime passes its
 own, and imports `benk/core` rather than `benk`. Importing `benk` loads
@@ -591,6 +600,73 @@ These are the fastest rounds. The await costs about 24 ns a call: three
 times the sync loop's time for a call of a few nanoseconds, and within the
 A/A pair's noise for a call of a few microseconds.
 
+## Array buffers outside the heap
+
+V8 keeps the contents of an `ArrayBuffer` of more than 64 bytes outside its
+heap, and with them those of a typed array or a `Buffer`. The **heap**
+column leaves them out, so benk counts them apart, in the **buffers**
+column. The two count together toward the 1 KiB from which a group leads
+with the median round.
+
+### Why they count toward the lead
+
+[`benchmarks/array-buffers.ts`](benchmarks/array-buffers.ts) times calls
+that allocate typed arrays, each in a group of its own. Before benk counted
+buffers, 3 runs on an Apple M2 Pro with Node 26.13.0, with a load average
+near 2, gave these:
+
+| Call                      | heap    | Lead                 | median ÷ fastest | spread |
+| ------------------------- | ------- | -------------------- | ---------------- | ------ |
+| `number[]` of 128         | 1,074 B | median, by its bytes | 1.22–1.28        | 5–6%   |
+| `Float64Array` of 1 KiB   | 200 B   | fastest              | 1.82–2.57        | 45–88% |
+| `Float64Array` of 8 KiB   | 200 B   | fastest              | 1.15–1.47        | 58–86% |
+| `Float64Array` of 100 KiB | 200 B   | fastest, in 2 runs   | 1.31–2.07        | 18–63% |
+| `Float64Array` of 1 MiB   | 200 B   | median, by its time  | 1.53–1.60        | 11–15% |
+
+The heap column counted only each typed array's object. So the groups of
+up to 100 KiB led with the fastest round, as calls that allocate little.
+Yet their median rounds took up to 2.6 times their fastest, against 1.3
+times at most for an array of 1 KiB on the heap. The fastest round left out
+work that the calls caused, as it does for calls that allocate on the heap.
+The A/A copies' ratios by the fastest round ranged from 0.75 to 1.17. The
+one of 0.75 lay outside its interval of 0.82–1.12, which benk noted.
+
+With the count, 3 more runs gave each typed array's bytes, from 1,024 to
+1,048,576. Each group led with the median round: by its bytes, or by its
+time, as the group of 1 MiB did in each run and that of 100 KiB in one. The
+A/A ratios, now the median of the per-round ratios, were 0.98 to 1.20, and
+each interval held 1.
+
+### How benk counts them
+
+benk reads Node's count of array buffers' bytes,
+`process.memoryUsage().arrayBuffers`, before and after a sample of a
+variant's timer loop, apart from the timed rounds, as for heap bytes. A
+garbage collection frees buffers, which benk can't add back as it does heap
+bytes. V8 frees them after the collection, on a background thread, so a
+`GCProfiler`'s statistics don't include them. So:
+
+1. benk waits 1 ms before each sample, for V8 to free the buffers of
+   earlier collections.
+2. A sample in which a collection starts, or whose count falls, doesn't
+   count. The next has half as many calls, until a sample allocates too
+   little to start a collection.
+3. The median of 5 samples that count is the call's bytes. A sample can
+   still count too few, when V8 frees buffers during it.
+4. If 5 samples don't count within 40, **buffers** shows `–`, and
+   `arrayBufferBytes` is null.
+
+In Node 24.22.3, 26.13.0 and 27.0.0-alpha on an Apple M2 Pro, 10 counts each
+of 12 calls gave the right bytes, 360 of 360. The calls allocated from no
+buffer to 16 MiB of them, some among objects on the heap. 31 of the 1,800
+samples that counted counted too few. Without the wait, 32 of the 360 counts
+ran out of samples, and gave `–`. With it, none did. In Node 24 and 26,
+calls of 64 MiB and 256 MiB were counted right too.
+
+The count adds about 10 ms to each variant. The 7 groups of
+`benchmarks/array-buffers.ts` took 1.50–1.63 s with it, and 1.35–1.47 s
+without, in 3 runs each.
+
 ## Typed arrays and detached buffers
 
 V8 has had a protector, `ArrayBufferDetaching`, since 2016: until any
@@ -691,6 +767,14 @@ benk keeps these in view rather than out of the results:
   turn took 0.99 µs in one run and 1.41 µs in others. A variant that passes
   one of a few inputs in turn times the call more as a caller with varying
   data runs it.
+
+- **Buffers from a pool.** `Buffer.from()` of a short string, and
+  `Buffer.allocUnsafe()` of a few bytes, take their bytes from a pool of
+  64 KiB, which Node allocates anew when it runs out. A sample counts the
+  pool only when it allocates one, so the **buffers** column varies between
+  runs. Each such call takes 8 bytes of the pool. In 3 runs each in Node
+  24.22.3 and 26.13.0, on an Apple M2 Pro, `Buffer.from('abc')` counted 5.8
+  to 12.8 bytes, and `Buffer.allocUnsafe(3)` 0 to 8.7.
 
 ## Planned
 

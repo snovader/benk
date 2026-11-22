@@ -1,10 +1,13 @@
 // What benk needs from Node to time variants: timer loops that `new Function`
-// compiles, and V8's heap statistics. Workers and browsers that forbid
-// `new Function`, and runtimes without `node:v8`, need a runtime of their own.
+// compiles, V8's heap statistics, and Node's count of array buffers. Workers
+// and browsers that forbid `new Function`, and runtimes without `node:v8`,
+// need a runtime of their own.
 import { cpus } from 'node:os';
+import { setTimeout as wait } from 'node:timers/promises';
 import { getHeapStatistics, GCProfiler, type GCProfilerResult } from 'node:v8';
 import { asyncTimerSource, timerSource } from '#source/core/timer-source';
 import type {
+    ArrayBufferMeter,
     AsyncTimer,
     HeapMeter,
     Runtime,
@@ -61,10 +64,15 @@ let timers = 0;
 
 /**
  * Times variants in Node: each in a timer loop of its own, compiled from a
- * unique source, and counts heap bytes with V8's heap statistics
+ * unique source, and counts heap bytes with V8's heap statistics, and the
+ * bytes of array buffers with Node's
  */
 export class NodeRuntime implements Runtime {
     readonly heap: HeapMeter = { start: startCounting };
+    readonly arrayBuffers: ArrayBufferMeter = {
+        settle,
+        start: startCountingBuffers
+    };
 
     /** Node's version and flags, and what benk set in the process */
     get description(): RuntimeDescription {
@@ -103,6 +111,44 @@ function startCounting(): () => number {
     return () => {
         const after = getHeapStatistics().used_heap_size;
         return after - before + freedBytes(profiler.stop());
+    };
+}
+
+/**
+ * The milliseconds that a count of array buffers waits before each sample.
+ * V8 frees the buffers of a collection on a background thread after it, and
+ * Node's count of array buffers falls as it does, which makes a sample
+ * uncountable. In Node 24, 26 and 27 on an Apple M2 Pro, of 10 counts each
+ * of 12 calls that allocated nothing to 16 MiB in buffers, 32 of the 360
+ * ran out of samples without a wait, all of calls of 1 KiB or 8 KiB, and
+ * none with it.
+ */
+const SETTLE_TIME = 1;
+
+function settle(): Promise<void> {
+    return wait(SETTLE_TIME);
+}
+
+/**
+ * Starts counting the bytes of array buffers that Node allocates, outside
+ * V8's heap: what its count of array buffers' bytes grows by. A collection
+ * frees buffers, which a `GCProfiler` can't add back, as `freedBytes()` does
+ * heap bytes: V8 frees them after the collection, so its statistics of V8's
+ * external memory don't change. They changed in 2 of 1,164 collections of
+ * typed arrays in Node 24, 26 and 27. So the count is null if a collection
+ * started, or if the count fell, as when V8 freed the buffers of an earlier
+ * one meanwhile.
+ */
+function startCountingBuffers(): () => number | null {
+    const profiler = new GCProfiler();
+    profiler.start();
+    const before = process.memoryUsage().arrayBuffers;
+
+    return () => {
+        const after = process.memoryUsage().arrayBuffers;
+        const { statistics } = profiler.stop();
+
+        return statistics.length > 0 || after < before ? null : after - before;
     };
 }
 
