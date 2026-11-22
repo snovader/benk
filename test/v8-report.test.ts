@@ -30,6 +30,8 @@ import {
     BUNDLE_URL,
     BUNDLED,
     BUNDLED_VERSION,
+    D8_BUNDLE,
+    D8_VERSION,
     REPOSITORY,
     VERSIONS
 } from './v8-fixtures.ts';
@@ -211,6 +213,72 @@ describe('the report of the bundled traced run', () => {
         });
 
         expect(formatV8Report(reports, { ...format, sourceMaps })).toStrictEqual(await lines());
+    });
+});
+
+describe(`the report of the traced run in d8 ${D8_VERSION}`, () => {
+    // Of the benchmark's bundle, which has benk's source in it
+    const { trace, logged } = traced(D8_VERSION, 'd8');
+    const format = {
+        script: join(REPOSITORY, D8_BUNDLE),
+        directory: REPOSITORY,
+        engine: `d8 ${D8_VERSION}`
+    };
+
+    async function lines(options: { filter?: RegExp } = {}): Promise<string[]> {
+        const sourceMaps = await readSourceMaps(tracedScripts(trace, logged));
+        const reports = reportFunctions(trace, logged, {
+            benkDirectory: BENK_SOURCE,
+            sourceMaps,
+            ...options
+        });
+
+        return formatV8Report(reports, { ...format, sourceMaps, ...options });
+    }
+
+    it('names d8 and its version in the heading', async () => {
+        expect((await lines()).slice(0, 2)).toStrictEqual([
+            '',
+            `V8 report of ${D8_BUNDLE}, from a run of it in d8 ${D8_VERSION} with V8's traces, whose times aren't reported.`
+        ]);
+    });
+
+    it("places the bundle's functions in the benchmark's source, and lists them first", async () => {
+        const named = (await lines())
+            .slice(3)
+            .filter(line => !line.startsWith('  '))
+            .map(line => line.replace(/, [\d,]+ B of bytecode$/, ''));
+
+        expect(named).toStrictEqual([
+            `(anonymous) ${BENCH}:9:47`,
+            `(anonymous) ${BENCH}:10:46`,
+            `sum ${BENCH}:19:13`,
+            `mix ${BENCH}:29:13`,
+            `mixAll ${BENCH}:72:16`,
+            `mean, μ ${BENCH}:83:16`,
+            `run ${BENCH}:92:38`,
+            `run ${BENCH}:93:34`,
+            `run ${BENCH}:98:22`,
+            `run ${BENCH}:100:35`,
+            // Its top level, before the first mapping of its line
+            `(top level) ${D8_BUNDLE}:1:1`,
+            // The timer loops, which deoptimized in the benchmark's code
+            ...Array.from({ length: 4 }, () => '(anonymous) <anonymous>:1:20')
+        ]);
+    });
+
+    it('lists only the functions whose names match the filter, with their inlining and deoptimizations', async () => {
+        expect((await lines({ filter: /^(?:sum|mixAll)$/u })).slice(3)).toStrictEqual([
+            'Only the functions whose names match ^(?:sum|mixAll)$.',
+            `sum ${BENCH}:19:13, 37 B of bytecode`,
+            '  compiled to Maglev ×3, Turbofan ×3',
+            `  inlined into run ${BENCH}:98:22 ×2`,
+            `  deoptimized in Turbofan's code: wrong map (eager), at ${BENCH}:21:32 ×2`,
+            `mixAll ${BENCH}:72:16, 46 B of bytecode`,
+            '  compiled to Maglev ×2, Turbofan ×2',
+            `  doesn't inline mix ${BENCH}:29:13 (858 B): exceeds bytecode limit ×2`,
+            `  deoptimized in Turbofan's code: wrong map (eager), at ${BENCH}:74:32`
+        ]);
     });
 });
 

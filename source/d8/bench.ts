@@ -51,7 +51,9 @@ declare function writeFile(path: string, data: string | ArrayBuffer): void;
  *   check of a directory, so `bench()` checks the path before it measures
  *   by writing the file: with the bytes that it has, or empty.
  * - `--v8-report` is an error, before it measures, as is `--v8-filter`,
- *   which implies it: the report runs the script again in Node.
+ *   which implies it: d8 can't start the process that runs the script
+ *   again. The command `benk-d8` runs a script in d8 from Node, and
+ *   carries them out itself.
  * - A run counts bytes only with a runtime that counts them. `D8Runtime`
  *   counts array buffers only where d8 started with the flags that it
  *   describes, and never heap bytes. A run that counts neither records
@@ -75,7 +77,7 @@ export async function bench(
     );
     if (v8Report) {
         throw new Error(
-            `Expected no --v8-report${v8Filter == null ? '' : ' or --v8-filter'} in d8: V8's report runs the script again in Node`
+            `Expected no --v8-report${v8Filter == null ? '' : ' or --v8-filter'} in d8, which can't run the script again: run it with benk-d8, as benk-d8 bench.mjs -- --v8-report`
         );
     }
     const runtime = options.runtime ?? new D8Runtime();

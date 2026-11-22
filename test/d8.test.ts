@@ -531,11 +531,11 @@ describe.runIf(shell)('benk/d8 in d8', () => {
         }
     );
 
-    it('rejects --v8-report before it measures', async () => {
+    it('rejects --v8-report before it measures, and names benk-d8, which carries it out', async () => {
         const run = await runDriver([...QUICK_ARGS, '--v8-report', '--json', 'results.json']);
 
         expect(driverError(run)).toStrictEqual({
-            error: "Error: Expected no --v8-report in d8: V8's report runs the script again in Node",
+            error: "Error: Expected no --v8-report in d8, which can't run the script again: run it with benk-d8, as benk-d8 bench.mjs -- --v8-report",
             calls: 0
         });
         expect(run.results).toBeUndefined();

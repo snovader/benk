@@ -20,7 +20,8 @@ out of a comparison, or at least in view:
 - **A V8 report of hot functions.** `--v8-report` runs the script again
   with V8's traces, and prints the tiers that V8 compiled each function to,
   what Turbofan inlined, and the deoptimizations, in a bundle's sources
-  where it has a source map.
+  where it has a source map. The command `benk-d8` does the same for a
+  script in d8.
 
 It times one process's variants against each other. It isn't a general
 harness with every statistic: [mitata](https://github.com/evanwashere/mitata)
@@ -395,6 +396,9 @@ runs of each, on an Apple M2 Pro with Node 26.13.0, and each sample time's
 3 reports were the same. The two modes with 10 ms are the rounds before
 Turbofan's code: 4 near 1.45 µs.
 
+A script in d8 gets the same report through the command `benk-d8`, as
+[In d8](#in-d8) describes.
+
 ### Reading the report
 
 These lines are of the report of this repository's
@@ -557,6 +561,144 @@ sumLoop dist/bench.mjs:3:17, 38 B of bytecode
 A script that names no source map, as a TypeScript file that Node runs as
 it is, has its own positions, without a note.
 
+### In d8
+
+[d8](#d8), V8's shell, can have a newer V8 than Node's, which compresses
+pointers, as workerd's and Chrome's do. Its report shows what that V8 does
+with the code. d8 can't start a process, so its `bench()` can't run the
+script again, and `--v8-report` is an error there. `benk-d8`, the
+package's command, runs the script in d8 from Node instead. It takes d8's
+command line:
+
+| Argument       | What it is                                                                            |
+| -------------- | ------------------------------------------------------------------------------------- |
+| `--d8=<path>`  | d8's binary. Without it, `d8` on the PATH.                                            |
+| d8's flags     | Passed to d8 before the script, in both runs. A flag with a value takes it after `=`. |
+| `<script>`     | The script: an ES module that calls `benk/d8`'s `bench()`, as d8 runs it.             |
+| `-- <options>` | The script's [options](#options), after `--`, as d8 passes a script its arguments.    |
+
+1. Write the script, `bench.mjs`, as [d8](#d8) shows.
+
+2. Run it with `npx benk-d8` in place of `d8`:
+
+   ```sh
+   npx benk-d8 bench.mjs -- --sample-ms 10 --v8-report
+   ```
+
+   ```text
+   d8 15.8.62.9, V8 15.8.62.9, macos unknown, unknown, with unknown. Process state: 31-bit small integers.
+   Per call, of at least 31 interleaved rounds of 10 ms per variant after 10 warm-up rounds, in an order that rotates each variant through each position:
+   the fastest and median round, the interquartile range as a share of the median, the ratio to the group's first variant by the statistic that the group leads with, a 95% interval of the median of the per-round ratios.
+
+   sum 1,000 numbers: 36 rounds, by the median round (a call of 1 µs or more)
+                         fastest     median   spread    ratio   95% interval        heap     buffers
+     for loop             791 ns     809 ns     2.5%    1.00×                          –           –
+     reduce              6.35 µs    6.49 µs     1.5%    8.03×      7.89–8.07           –           –
+     for loop A/A         790 ns     811 ns     2.2%    1.01×      1.00–1.01           –           –
+     for loop: two modes, 31 rounds near 806 ns and 5 near 1.44 µs
+     for loop A/A: two modes, 31 rounds near 810 ns and 5 near 1.44 µs
+
+   V8 report of bench.mjs, from a run of it in d8 15.8.62.9 with V8's traces, whose times aren't reported.
+   Per function of the script, and per function that deoptimized in the script's code: the tiers that V8 compiled it to, what Turbofan inlined into it and where it inlined it, with sizes of bytecode, and its deoptimizations.
+   (anonymous) bench.mjs:3:46, 15 B of bytecode
+     compiled to Maglev
+   sumLoop bench.mjs:5:17, 37 B of bytecode
+     compiled to Maglev, Turbofan
+     inlined into (anonymous) <anonymous>:1:20 ×2
+   run bench.mjs:17:38, 11 B of bytecode
+     compiled to Maglev
+     inlined into (anonymous) <anonymous>:1:20 ×2
+   run bench.mjs:20:22, 22 B of bytecode
+     compiled to Maglev
+   (anonymous) bench.mjs:20:43, 6 B of bytecode
+     compiled to Maglev ×2, Turbofan
+   ```
+
+benk-d8 runs the script in d8 first, as `d8 bench.mjs -- --sample-ms 10`
+would, and that run prints the tables. It then runs the script again in d8,
+with V8's trace flags, and prints the report, whose heading names d8's
+version. Here, as in Node, Turbofan inlined the for loop's `run` and
+`sumLoop` into two timer loops. These are of 3 runs on an Apple M2 Pro,
+with Homebrew's d8 15.8.62.9, whose reports were the same. With the
+default rounds of 1 ms, the report had no line of inlining in 3 runs, and
+the for loop's fastest round took 1.41 to 1.49 µs, against 790 or 791 ns
+with 10 ms.
+
+- The first run gets the script's options but `--v8-report` and
+  `--v8-filter`, which benk-d8 carries out. The traced run gets none of
+  those, nor `--json`, so it writes no results.
+- A script in d8 can't read the environment, so the traced run can't tell
+  that it's traced. It prints its tables among the traces, which the
+  report skips.
+- A bundle's source map places its positions, as in Node. A TypeScript
+  `bench.ts` that imported `bench` from `benk/d8` and `sumLoop` from
+  `./sum.ts`, bundled by rolldown 1.3.2 with
+  `rolldown bench.ts --file dist/bench.mjs --sourcemap`, had `sumLoop` at
+  `sum.ts:1:24`, as in Node, in 3 runs.
+- d8 has no inspector, so benk-d8 reads the source maps after the traced
+  run, rather than before its `bench()` returns.
+- The report tells benk's functions by their files: those of benk's
+  bundle, which a script imports from `node_modules/benk/dist`, or which a
+  bundle's source map names. A bundle that has benk in it, without a
+  source map, can't tell them from the script's.
+
+d8 counts array buffers only with the three flags of
+[Bytes in d8](#bytes-in-d8), so **buffers** shows `–` without them.
+benk-d8 doesn't add them. They change the flags of the timed run, and the
+count takes time before each sample. Give them before the script, as any
+of d8's flags, and both runs get them. This runs `copy.mjs`, of
+[Bytes in d8](#bytes-in-d8):
+
+```sh
+npx benk-d8 --expose-statistics --expose-gc --allow-natives-syntax copy.mjs -- --v8-report
+```
+
+```text
+d8 15.8.62.9, V8 15.8.62.9, macos unknown, unknown, with --allow-natives-syntax --expose-gc --expose-statistics unknown. Process state: 31-bit small integers.
+Per call, of at least 31 interleaved rounds of 1 ms per variant after 10 warm-up rounds, in an order that rotates each variant through each position:
+the fastest and median round, the interquartile range as a share of the median, the ratio to the group's first variant by the statistic that the group leads with, a 95% interval of the median of the per-round ratios, and the bytes allocated on the heap and in array buffers outside it.
+
+copy 1,000 numbers: 36 rounds, by the median round (a call allocating 1 KiB or more)
+                       fastest     median   spread    ratio   95% interval        heap     buffers
+  slice                 188 ns     207 ns    34.6%    1.00×                          –         0 B
+  Float64Array.from     693 ns     923 ns    26.4%    4.30×      3.83–4.56           –     8,000 B
+  slice A/A             187 ns     253 ns    29.6%    1.03×      0.99–1.24           –         0 B
+
+V8 report of copy.mjs, from a run of it in d8 15.8.62.9 with V8's traces, whose times aren't reported.
+Per function of the script, and per function that deoptimized in the script's code: the tiers that V8 compiled it to, what Turbofan inlined into it and where it inlined it, with sizes of bytecode, and its deoptimizations.
+(anonymous) copy.mjs:3:46, 15 B of bytecode
+  compiled to Maglev
+run copy.mjs:9:35, 13 B of bytecode
+  compiled to Maglev
+  inlined into (anonymous) <anonymous>:1:20 ×2
+run copy.mjs:10:47, 18 B of bytecode
+  compiled to Maglev
+```
+
+This is one of 3 runs on an Apple M2 Pro, with Homebrew's d8 15.8.62.9 and
+a load average near 4. Each led with the median round, and the ratios of
+`Float64Array.from` were 4.58, 4.30 and 3.95. In 3 runs without the flags,
+**buffers** showed `–`, and the group led with the fastest round. The
+report was the same in all 6 runs.
+
+When a step fails, benk-d8 prints an error, rather than an empty report:
+
+| What fails                                                              | What benk-d8 does                                                                                |
+| ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| No `d8` on the PATH, or at the path of `--d8`                           | Says how to install d8, and exits with 1.                                                        |
+| The command line, or the script's options                               | Says what's wrong, as `bench()` would, before d8 runs, and exits with 1.                         |
+| The script, in the first run                                            | d8 prints the error. benk-d8 exits with d8's code, without the traced run.                       |
+| d8 warns that it doesn't know a trace flag, as an older d8 may          | Names the flag, and exits with 1, rather than report without its lines.                          |
+| The traced run exits with another code than 0                           | Prints d8's stderr and the last lines of its stdout, where d8 writes an error, and exits with 1. |
+| The traced run writes no code log, or none of the lines that benk reads | Says which, and exits with 1.                                                                    |
+
+What the report can't show in d8:
+
+- What workerd or a browser does with the code. Their V8 can be d8's
+  version, but they run it with flags, snapshots and APIs of their own.
+- What the report leaves out in Node, as
+  [What it leaves out](#what-it-leaves-out) lists.
+
 ### What the traced run changes
 
 1. It runs the script with the same arguments. benk sets `BENK_TRACED_RUN`
@@ -597,14 +739,14 @@ it is, has its own positions, without a note.
   was in `sum`, inlined into a variant's `run`, inlined into its timer loop.
 - Sparkplug's compilations, which `--trace-opt` doesn't print.
 - Which variant a timer loop is for, as [Planned](#planned) says.
-- A run in d8, where `--v8-report` is an error, as [d8](#d8) describes.
 
 V8 doesn't keep the traces' formats stable. The parsers were checked
-against what Node 24.22.3, 26.13.0 and 27.0.0-alpha wrote on macOS, and
-against the same with addresses as Windows prints some of them, without
-`0x`. If the
-traced run's stdout has none of V8's compilations, or its log none of its
-functions, `--v8-report` throws, rather than print an empty report.
+against what Node 24.22.3, 26.13.0 and 27.0.0-alpha and d8 15.8.62.9
+wrote on macOS, and against the same with addresses as Windows prints some
+of them, without `0x`. d8 15.8 wrote the formats of Node 27.0.0-alpha's
+V8 15.6, but named a script by its path. If the traced run's stdout has
+none of V8's compilations, or its log none of its functions,
+`--v8-report` throws, rather than print an empty report.
 
 ## API
 
@@ -875,13 +1017,13 @@ fails to load a value, such as `51`, as another script.
 
 #### Options in d8
 
-| Option                                                              | In d8                                                                                                                                                 |
-| ------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--rounds`, `--warmup-rounds`, `--sample-ms`, `--filter`, `--no-aa` | As in Node.                                                                                                                                           |
-| `--json <path>`                                                     | Writes the file with d8's `writeFile()`. benk checks the path by writing the file before it measures, as d8 can't check a directory.                  |
-| `--json -`                                                          | Writes the JSON to stdout with d8's `write()`, and the tables to stderr with `printErr()`.                                                            |
-| `--no-heap`                                                         | Turns off the count of array buffers, where d8 counts them, as [Bytes in d8](#bytes-in-d8) describes. Otherwise it changes nothing.                   |
-| `--v8-report`, `--v8-filter`                                        | Throws before it measures: [V8's report](#v8s-report) runs the script again in Node. d8 takes V8's trace flags itself, as `d8 --trace-opt bench.mjs`. |
+| Option                                                              | In d8                                                                                                                                   |
+| ------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `--rounds`, `--warmup-rounds`, `--sample-ms`, `--filter`, `--no-aa` | As in Node.                                                                                                                             |
+| `--json <path>`                                                     | Writes the file with d8's `writeFile()`. benk checks the path by writing the file before it measures, as d8 can't check a directory.    |
+| `--json -`                                                          | Writes the JSON to stdout with d8's `write()`, and the tables to stderr with `printErr()`.                                              |
+| `--no-heap`                                                         | Turns off the count of array buffers, where d8 counts them, as [Bytes in d8](#bytes-in-d8) describes. Otherwise it changes nothing.     |
+| `--v8-report`, `--v8-filter`                                        | Throws before it measures, as d8 can't run the script again. [`benk-d8`](#in-d8) runs the script in d8 from Node, and carries them out. |
 
 To check the path of `--json`, benk writes the file again with the bytes
 that d8 reads of it, or empty where there's none. So a run that fails leaves

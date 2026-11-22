@@ -24,6 +24,9 @@
   "engines": {
     "node": ">=24"
   },
+  "bin": {
+    "benk-d8": "./source/benk-d8.ts"
+  },
   "exports": {
     ".": {
       "benk-dist": "./dist/index.js",
@@ -43,6 +46,9 @@
     "#test/*": "./test/*.ts"
   },
   "publishConfig": {
+    "bin": {
+      "benk-d8": "./dist/benk-d8.js"
+    },
     "exports": {
       ".": {
         "types": "./dist/index.d.ts",
