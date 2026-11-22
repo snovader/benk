@@ -991,25 +991,41 @@ the object. Without them it counts no buffers, and **buffers** shows `–`.
 
 In 3 runs each of [`benchmarks/allocations/`](benchmarks/allocations/), on
 an Apple M2 Pro, d8 15.8.62.9 counted the same buffers as Node 26.13.0, in
-every run:
+every run, but for a call that starts a collection itself:
 
-| Call                     | heap in Node | buffers in Node | buffers in d8 |
-| ------------------------ | ------------ | --------------- | ------------- |
-| nothing                  | 0 B          | 0 B             | 0 B           |
-| a small object           | 32 B         | 0 B             | 0 B           |
-| a heap number            | 16 B         | 0 B             | 0 B           |
-| `Uint8Array` of 64 B     | 280 B        | 0 B             | 0 B           |
-| `Float64Array` of 1 KiB  | 200 B        | 1,024 B         | 1,024 B       |
-| `Float64Array` of 64 KiB | 200 B        | 65,536 B        | 65,536 B      |
-| `Float64Array` of 1 MiB  | 200 B        | 1,048,576 B     | 1,048,576 B   |
+| Call                             | heap in Node  | buffers in Node | buffers in d8 |
+| -------------------------------- | ------------- | --------------- | ------------- |
+| nothing                          | 0 B           | 0 B             | 0 B           |
+| a small object                   | 32 B          | 0 B             | 0 B           |
+| a heap number                    | 16 B          | 0 B             | 0 B           |
+| `Uint8Array` of 64 B             | 280 B         | 0 B             | 0 B           |
+| `Float64Array` of 1 KiB          | 200 B         | 1,024 B         | 1,024 B       |
+| `Float64Array` of 64 KiB         | 200 B         | 65,536 B        | 65,536 B      |
+| `Float64Array` of 1 MiB          | 200 B         | 1,048,576 B     | 1,048,576 B   |
+| 30 arrays of 1 MiB and a buffer  | 31,459,528 B  | 1,048,576 B     | 1,048,576 B   |
+| 100 arrays of 1 MiB and a buffer | 104,865,016 B | 1,048,576 B     | –             |
+
+Each array holds 131,072 numbers, and the buffer is a `Float64Array` of
+1 MiB.
 
 The count has costs and gaps:
 
 - **Time.** Before each sample, benk runs a scavenge and reads V8's
-  statistics twice, and each read walks the heap. The 7 groups of
-  `benchmarks/allocations/` took 0.77–0.80 s with the count, and
-  0.65–0.66 s without, in 3 runs each: about 9 ms a variant. A walk takes
+  statistics twice, and each read walks the heap. The 7 groups of small
+  calls in `benchmarks/allocations/` took 0.77–0.80 s with the count, and
+  0.68 s without, in 3 runs each: about 8 ms a variant. A walk takes
   longer as the heap grows, 10 ms with 40 MB alive.
+- **A call that collects.** A sample during which a collection starts
+  doesn't count, and benk halves the calls until a sample allocates too
+  little to start one. A call that allocates more on the heap than V8's
+  young generation holds starts a collection itself. Then even a sample of
+  one call doesn't count, and **buffers** shows `–`. In the runs above, a
+  call of 30 arrays counted, and a call of 100 didn't. In 20 samples of one
+  call each, d8's `--trace-gc` printed a scavenge during every call of 100
+  arrays, and none during a call of 30. Node counts buffers the same way,
+  so it has the gap too. In 3 runs of the group of 100 arrays alone, Node
+  showed `–` for 2 of the 6 counts of the call and its A/A copy, and d8 for
+  all 6.
 - **The heap.** A call that allocates only on the heap shows `0 B` of
   buffers, as `slice` does. Its group leads with the fastest round in d8
   where it could lead with the median in Node.
