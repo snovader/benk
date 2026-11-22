@@ -1,21 +1,39 @@
-// The parsers of V8's traces and code log, on what Node wrote in the traced
-// runs of the fixtures. The traced run differs between versions of Node, as
-// V8's decisions do.
+// The parsers of V8's traces and code log, on what Node and d8 wrote in the
+// traced runs of the fixtures. The traced run differs between versions of
+// Node, as V8's decisions do.
+import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { describe, expect } from 'hypotes';
 import { fc, it } from 'hypotes/fast-check';
-import { parseCodeLog, parseTrace, type LoggedFunction } from '#source/node/v8-trace';
+import {
+    parseCodeLog,
+    parseLoggedVersion,
+    parseTrace,
+    type LoggedFunction
+} from '#source/node/v8-trace';
 import { expectPresent } from './expectations.ts';
-import { asOnWindows, fixture, traced, BENCH_URL as SCRIPT, VERSIONS } from './v8-fixtures.ts';
+import {
+    asOnWindows,
+    escapeLog,
+    fixture,
+    traced,
+    D8_BUNDLE_URL,
+    D8_VERSION,
+    REPOSITORY,
+    BENCH_URL as SCRIPT,
+    VERSIONS
+} from './v8-fixtures.ts';
 
-/** The logged function of the script that starts at a line and column */
+/** The logged function of a script that starts at a line and column */
 function scriptFunction(
     logged: Map<string, LoggedFunction>,
     line: number,
-    column: number
+    column: number,
+    script = SCRIPT
 ): LoggedFunction {
     const found = Array.from(logged.values()).find(
         ({ position }) =>
-            position.url === SCRIPT && position.line === line && position.column === column
+            position.url === script && position.line === line && position.column === column
     );
 
     return expectPresent(found, `Expected a function at ${line}:${column}`);
@@ -188,6 +206,167 @@ describe.each(VERSIONS)('the traced run on Node %s', version => {
     });
 });
 
+describe(`the traced run in d8 ${D8_VERSION}`, () => {
+    // Of the bundle of the benchmark, at its positions in the bundle
+    const { trace, logged } = traced(D8_VERSION, 'd8');
+    const sum = scriptFunction(logged, 828, 13, D8_BUNDLE_URL);
+    const mix = scriptFunction(logged, 833, 13, D8_BUNDLE_URL);
+    const mixAll = scriptFunction(logged, 873, 16, D8_BUNDLE_URL);
+    const switching = scriptFunction(logged, 893, 9, D8_BUNDLE_URL);
+
+    it("names the bundle by its file's URL, which d8 names by its path", () => {
+        const { name, topLevel, position, bytecodeSize } = sum;
+        const paths = Array.from(logged.values()).filter(fn => fn.position.url.startsWith('/'));
+
+        expect({ name, topLevel, position, bytecodeSize }).toStrictEqual({
+            name: 'sum',
+            topLevel: false,
+            position: { url: D8_BUNDLE_URL, line: 828, column: 13 },
+            bytecodeSize: 37
+        });
+        expect(paths).toStrictEqual([]);
+    });
+
+    it('reads the compilations by Maglev and Turbofan, and by on-stack replacement', () => {
+        const tiers = trace.compilations
+            .filter(compilation => compilation.function === sum.function)
+            .map(({ tier }) => tier);
+        const topLevel = Array.from(logged.values()).find(
+            fn => fn.topLevel && fn.position.url === D8_BUNDLE_URL
+        );
+        const { function: address } = expectPresent(topLevel);
+
+        expect(tiers).toStrictEqual([
+            'MAGLEV',
+            'TURBOFAN_JS',
+            'MAGLEV',
+            'TURBOFAN_JS',
+            'MAGLEV',
+            'TURBOFAN_JS'
+        ]);
+        expect(
+            trace.compilations.filter(compilation => compilation.function === address)
+        ).toStrictEqual([{ function: address, name: '', tier: 'MAGLEV', osr: true }]);
+    });
+
+    it("reads a deoptimization's positions, in the bundle and in a timer loop", () => {
+        const deoptimizations = trace.deoptimizations.filter(
+            ({ function: fn }) => fn === switching.function
+        );
+        const inLoops = trace.deoptimizations.filter(
+            ({ positions }) => positions.at(-1)?.url === ''
+        );
+
+        expect(deoptimizations).toStrictEqual([
+            {
+                function: switching.function,
+                name: 'run',
+                tier: 'TURBOFAN_JS',
+                kind: 'deopt-eager',
+                reason: 'wrong map',
+                positions: [
+                    { url: D8_BUNDLE_URL, line: 830, column: 29 },
+                    { url: D8_BUNDLE_URL, line: 893, column: 15 }
+                ]
+            }
+        ]);
+        expect(inLoops.length).toBeGreaterThan(0);
+    });
+
+    it("reads what Turbofan inlined, and why it didn't", () => {
+        const candidates = trace.turbofan.flatMap(compilation =>
+            compilation.candidates.map(candidate => [compilation.name, candidate])
+        );
+
+        expect(candidates).toStrictEqual([
+            [
+                'mixAll',
+                {
+                    function: mix.function,
+                    name: 'mix',
+                    bytecodeSize: undefined,
+                    inlined: false,
+                    reason: 'exceeds bytecode limit'
+                }
+            ],
+            [
+                'run',
+                {
+                    function: sum.function,
+                    name: 'sum',
+                    bytecodeSize: 37,
+                    inlined: true,
+                    reason: undefined
+                }
+            ],
+            [
+                'mixAll',
+                {
+                    function: mix.function,
+                    name: 'mix',
+                    bytecodeSize: undefined,
+                    inlined: false,
+                    reason: 'exceeds bytecode limit'
+                }
+            ],
+            [
+                'run',
+                {
+                    function: sum.function,
+                    name: 'sum',
+                    bytecodeSize: 37,
+                    inlined: true,
+                    reason: undefined
+                }
+            ]
+        ]);
+        expect(trace.turbofan.filter(({ function: fn }) => fn === mixAll.function)).toHaveLength(2);
+    });
+
+    it('names each function by the address that the code log names it by', () => {
+        const named = [
+            ...trace.compilations,
+            ...trace.deoptimizations,
+            ...trace.turbofan,
+            ...trace.turbofan.flatMap(({ candidates }) => candidates)
+        ];
+
+        for (const { function: address, name } of named) {
+            const { name: loggedName, topLevel } = expectPresent(logged.get(address), name);
+            expect(topLevel ? '' : loggedName).toBe(name);
+        }
+        expect(scriptFunction(logged, 878, 33, D8_BUNDLE_URL).name).toBe('mean, μ');
+    });
+
+    it('reads the same traces as Windows would print them', () => {
+        const text = fixture(D8_VERSION, 'trace.txt', 'd8');
+
+        expect(parseTrace(asOnWindows(text))).toStrictEqual(trace);
+    });
+});
+
+describe('parseLoggedVersion', () => {
+    it("reads V8's version from the code log, with Node's embedder's string", () => {
+        const versions = [
+            ...VERSIONS.map(version => fixture(version, 'code.log')),
+            fixture(D8_VERSION, 'code.log', 'd8')
+        ];
+
+        expect(versions.map(parseLoggedVersion)).toStrictEqual([
+            '13.6.233.17-node.63',
+            '14.6.202.34-node.40',
+            '15.6.75.25-node.10',
+            D8_VERSION
+        ]);
+    });
+
+    it('reads none from a log without it', () => {
+        expect(
+            parseLoggedVersion('code-creation,Builtin,2,7542,0x1053f5e40,1112,ArrayPrototypePush')
+        ).toBeUndefined();
+    });
+});
+
 describe.each(VERSIONS)('the traced run on Node %s, as Windows prints it', version => {
     it('reads the same traces', () => {
         const trace = fixture(version, 'trace.txt');
@@ -214,6 +393,35 @@ describe('parseCodeLog', () => {
             'file:///project/a,b%20%C3%BC/x.mjs'
         );
     });
+
+    // A directory's name with what a path can have, and the log escapes
+    const directory = fc
+        .stringMatching(/^[\w ,.ü-]{1,12}$/)
+        .filter(name => name.trim() !== '' && !/^\.+$/.test(name.trim()));
+    // A name without a space before a `/`, which would read as a path
+    const name = fc.string({ maxLength: 12 }).filter(text => !/[\n\r]| \//.test(text));
+
+    it.prop([directory, name])(
+        "reads a script that d8 names by its path, which can have spaces, as its file's URL",
+        (folder, functionName) => {
+            const path = join(REPOSITORY, folder, 'bench.mjs');
+            const log = `code-creation,JS,10,15097,0x2173010411ac,38,${functionName} ${escapeLog(path)}:2:15,0x217301022880,~`;
+            const trace = `[bailout (kind: deopt-eager, reason: wrong map): begin. deoptimizing 0x1 <JSFunction run (sfi = 0x217301022881)>, 0x3 <Code MAGLEV>, opt id 2]\n            ;;; deoptimize at <${path}:3:4> inlined at <unknown:6:22>`;
+            const url = pathToFileURL(path).href;
+
+            expect(parseCodeLog(log).get('0x217301022880')).toStrictEqual({
+                function: '0x217301022880',
+                name: functionName,
+                topLevel: false,
+                position: { url, line: 2, column: 15 },
+                bytecodeSize: 38
+            });
+            expect(parseTrace(trace).deoptimizations[0].positions).toStrictEqual([
+                { url, line: 3, column: 4 },
+                { url: '', line: 6, column: 22 }
+            ]);
+        }
+    );
 
     it('skips lines of other events, and code without a position', () => {
         const log = [

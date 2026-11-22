@@ -921,6 +921,8 @@ __metadata:
     oxlint-tsgolint: "npm:^7.0.2007"
     rolldown: "npm:^1.3.2"
     typescript: "npm:^7.0.2"
+  bin:
+    benk-d8: ./source/benk-d8.ts
   languageName: unknown
   linkType: soft
 

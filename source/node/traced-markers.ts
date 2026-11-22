@@ -77,8 +77,8 @@ export interface TracedBench {
     readonly groups: readonly TracedGroup[] | undefined;
 }
 
-/** What a traced run's stdout has */
-export interface TracedOutput {
+/** What a traced run's stdout has, placed by its markers */
+export interface MarkedOutput {
     /** All of V8's traces */
     readonly trace: V8Trace;
     /** Each `bench()` call's, by its number */
@@ -130,7 +130,7 @@ export function markersInOrder(): boolean {
 export function readTracedOutput(
     output: string,
     inOrder: boolean = markersInOrder()
-): TracedOutput {
+): MarkedOutput {
     const { pieces, markers } = cutMarkers(output);
     const placed = inOrder && markers.every(marker => marker.atLineStart);
     const segments = new Segments(placed);
@@ -258,7 +258,7 @@ class Segments {
         }
     }
 
-    build(): TracedOutput {
+    build(): MarkedOutput {
         this.#close();
 
         const trace = joined(this.#segments.map(segment => segment.trace));

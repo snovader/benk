@@ -1,25 +1,45 @@
 // The traced run of `--v8-report`: the benchmark script run again, in a
-// child Node process, with V8's flags that trace what its compilers do.
-// `v8-trace.ts` parses what the run writes, and `v8-report.ts` reports it.
-// The run records the source maps of its scripts before its `bench()`
-// returns, as `source-maps.ts` reads them.
+// child process of Node or of d8, the V8 shell, with V8's flags that trace
+// what its compilers do. `v8-trace.ts` parses what the run writes, and
+// `v8-report.ts` reports it, as `reportTracedRun()` puts them together. A run
+// in Node records the source maps of its scripts before its `bench()`
+// returns, as `source-maps.ts` reads them, and marks its calls of `bench()`
+// among the traces, as `traced-markers.ts` describes.
 import { spawn } from 'node:child_process';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { readSourceMapFile, type SourceMapFile } from './source-maps.ts';
+import {
+    readSourceMapFile,
+    readSourceMaps,
+    type SourceMapFile,
+    type SourceMaps
+} from './source-maps.ts';
+import { readTracedOutput, type MarkedOutput } from './traced-markers.ts';
+import {
+    formatV8Report,
+    isScriptUrl,
+    reportFunctions,
+    tracedScripts,
+    type FunctionReport
+} from './v8-report.ts';
+import {
+    parseCodeLog,
+    type FunctionAddress,
+    type LoggedFunction
+} from './v8-trace.ts';
 
 /**
- * The environment variable that marks the traced run. `bench()` measures in
- * it as in any other run, so that V8 sees the same calls, but prints
+ * The environment variable that marks the traced run in Node. `bench()`
+ * measures in it as in any other run, so that V8 sees the same calls, but prints
  * nothing, writes no JSON, and doesn't run the script again for
  * `--v8-report`. It then records the source maps of the run's scripts.
  */
 export const TRACED_RUN = 'BENK_TRACED_RUN';
 
 /**
- * V8's flags of the traced run. The traces go to stdout, among what the
- * script writes there, and the code log to a file of its own.
+ * V8's flags of the traced run, in Node and in d8. The traces go to stdout,
+ * among what the script writes there, and the code log to a file of its own.
  *
  * - `--trace-opt`: the compilations by Maglev and Turbofan.
  * - `--trace-deopt-verbose`: the deoptimizations, with their positions.
@@ -47,6 +67,16 @@ const LOGFILE = '--logfile=';
 
 /** The file beside the code log that the traced run records source maps in */
 const SOURCE_MAPS = 'source-maps.json';
+
+/**
+ * d8's warning of a flag that it doesn't know, on stderr, as `Warning:
+ * unknown flag --trace-foo.`, which captures the flag as it was given, with
+ * any value. d8 then runs without it.
+ */
+const UNKNOWN_FLAG = /^Warning: unknown flag (--.*?)\.?\r?$/gm;
+
+/** The lines of a failed run's stdout that its error names, at most */
+const FAILED_LINES = 20;
 
 /** What a traced run wrote */
 export interface TracedOutput {
@@ -145,14 +175,14 @@ async function recordSourceMap(script: string): Promise<void> {
  * flags that this process was started with, which come first so that the
  * trace flags override them. The child's stderr is this process's.
  *
- * @throws {Error} If the child exits with another code than 0.
+ * @throws {Error} If the child exits with another code than 0, or writes no
+ * code log.
  */
-export async function runTraced(
+export function runTraced(
     script: string,
     args: readonly string[]
 ): Promise<TracedOutput> {
-    const directory = await mkdtemp(join(tmpdir(), 'benk-'));
-    try {
+    return inTemporaryDirectory(async directory => {
         const log = join(directory, 'code.log');
         const output = await runChild(script, [
             ...process.execArgv,
@@ -164,11 +194,260 @@ export async function runTraced(
 
         return {
             output,
-            codeLog: await readFile(log, 'utf8'),
+            codeLog: await readCodeLog(log, 'Node'),
             sourceMapFiles: await readRecorded(join(directory, SOURCE_MAPS))
         };
+    });
+}
+
+/** A script's run in d8, the V8 shell */
+export interface D8Run {
+    /** d8's binary: a name that the PATH has, as `d8`, or a path */
+    readonly d8: string;
+    /** d8's flags, which come before the script */
+    readonly flags: readonly string[];
+    /** The script's path: an ES module, which d8 loads by its path */
+    readonly script: string;
+    /** The script's arguments, which d8 passes it after `--` */
+    readonly args: readonly string[];
+}
+
+/**
+ * Runs a script in d8 with V8's trace flags, after the run's own flags, so
+ * that the trace flags override them, as `runTraced()` runs one in Node.
+ * d8 has no environment to mark the run with, so the script runs as it does
+ * otherwise, and its output comes among the traces, whose parsers skip it.
+ * d8 has no inspector, so the run records no source maps: they're read
+ * after it.
+ *
+ * d8 writes errors to stdout, and its warnings to stderr, which this
+ * collects, apart from this process's stderr.
+ *
+ * @throws {Error} If d8 can't be started, as when the PATH has no `d8`; if
+ * it exits with another code than 0, with what it wrote to stderr and the
+ * last lines of stdout, where it writes an uncaught error; if it warns of a
+ * trace flag that it doesn't know, as an older d8, or one built without
+ * them, may; or if it writes no code log.
+ */
+export function runTracedInD8({
+    d8,
+    flags,
+    script,
+    args
+}: D8Run): Promise<TracedOutput> {
+    return inTemporaryDirectory(async directory => {
+        const log = join(directory, 'code.log');
+        const traceFlags = [...TRACE_FLAGS, `${LOGFILE}${log}`];
+        const run = await collect(d8, [
+            ...flags,
+            ...traceFlags,
+            script,
+            '--',
+            ...args
+        ]);
+
+        checkD8Run(run, script, traceFlags);
+        return {
+            output: run.stdout,
+            codeLog: await readCodeLog(log, 'd8'),
+            sourceMapFiles: new Map()
+        };
+    });
+}
+
+/** What a process wrote, and how it exited */
+interface CollectedRun {
+    readonly stdout: string;
+    readonly stderr: string;
+    /** Its exit code, or the signal that ended it */
+    readonly exit: number | NodeJS.Signals | null;
+}
+
+/**
+ * Checks that d8's traced run exited with 0, and knew each trace flag
+ *
+ * @throws {Error} If it didn't.
+ */
+function checkD8Run(
+    { stdout, stderr, exit }: CollectedRun,
+    script: string,
+    traceFlags: readonly string[]
+): void {
+    if (exit !== 0) {
+        const lines = stdout.trimEnd().split(/\r?\n/).slice(-FAILED_LINES);
+        throw new Error(
+            [
+                `Expected the traced run of ${script} in d8 to exit with 0, got ${exit}. Its stderr, and the last lines of its stdout:`,
+                stderr.trimEnd(),
+                ...lines
+            ].join('\n')
+        );
+    }
+
+    const named = new Set(traceFlags.map(flagName));
+    const unknown = Array.from(
+        stderr.matchAll(UNKNOWN_FLAG),
+        ([, flag]) => flag
+    ).filter(flag => named.has(flagName(flag)));
+    if (unknown.length > 0) {
+        throw new Error(
+            `Expected d8 to know each of V8's flags of the traced run, got a warning that it doesn't know ${unknown.join(', ')}: an older d8, or one built without them, may not have them`
+        );
+    }
+}
+
+/** A flag's name, without its value, as `--logfile` of `--logfile=code.log` */
+function flagName(flag: string): string {
+    const equals = flag.indexOf('=');
+
+    return equals === -1 ? flag : flag.slice(0, equals);
+}
+
+/** Which functions `reportTracedRun()` lists, and what its heading names */
+export interface TracedReportOptions {
+    /** Selects the functions by their names, or none if it lists all */
+    readonly filter?: RegExp;
+    /**
+     * The engine of the traced run, as `d8 15.8.62.9`, or none for a run in
+     * this process's Node
+     */
+    readonly engine?: string;
+}
+
+/**
+ * The lines of V8's report of a traced run of a script, of the functions
+ * that the filter selects, with the positions of its scripts in the
+ * sources that their source maps name: those that the run recorded, and
+ * those that are read now. The heading names the engine of a run in d8.
+ *
+ * @throws {Error} If the traces have none of V8's compilations, or the log
+ * none of its functions, as when V8 changed their formats.
+ */
+export async function reportTracedRun(
+    script: string,
+    traced: TracedOutput,
+    options: TracedReportOptions
+): Promise<string[]> {
+    const { reports, sourceMaps } = await readTracedReport(
+        script,
+        traced,
+        options
+    );
+
+    return formatV8Report(reports, {
+        ...options,
+        script,
+        directory: process.cwd(),
+        sourceMaps
+    });
+}
+
+/** What a traced run says, as V8's report reads it */
+export interface TracedReport {
+    /** V8's traces, placed by the run's markers where they're in order */
+    readonly marked: MarkedOutput;
+    /** The functions of V8's code log, by their addresses */
+    readonly logged: ReadonlyMap<FunctionAddress, LoggedFunction>;
+    readonly sourceMaps: SourceMaps;
+    /** The functions that the report lists, which the filter selects */
+    readonly reports: FunctionReport[];
+    /**
+     * Whether a script is the benchmark's, or a module that it imports,
+     * rather than Node's own, benk's, or code compiled from a string
+     */
+    readonly isScript: (url: string) => boolean;
+}
+
+/**
+ * Reads a traced run's traces and code log, and the source maps of its
+ * scripts, and lists the functions of the report, as `reportTracedRun()`
+ * reports them. The markers of a run in Node place its traces, as
+ * `readTracedOutput()` describes. A run in d8 writes none.
+ *
+ * @throws {Error} If the traces have none of V8's compilations, or the log
+ * none of its functions, as when V8 changed their formats.
+ */
+export async function readTracedReport(
+    script: string,
+    { output, codeLog, sourceMapFiles }: TracedOutput,
+    { filter, engine }: TracedReportOptions
+): Promise<TracedReport> {
+    const marked = readTracedOutput(output);
+    const { trace } = marked;
+    const logged = parseCodeLog(codeLog);
+    if (trace.compilations.length === 0 || logged.size === 0) {
+        // A line that V8 wrote of a compilation, which says what it wrote
+        const line = output
+            .split('\n')
+            .find(text => text.startsWith('[completed compiling'));
+        const writer = engine ?? `V8 ${process.versions.v8}`;
+        throw new Error(
+            `Expected V8's compilations and functions in the traced run of ${script}, got ${trace.compilations.length} and ${logged.size}: ${writer} may write other formats${line == null ? '' : `, as ${line.trimEnd()}`}`
+        );
+    }
+
+    const sourceMaps = await readSourceMaps(
+        tracedScripts(trace, logged),
+        sourceMapFiles
+    );
+    const benk = benkDirectory();
+    const reports = reportFunctions(trace, logged, {
+        benkDirectory: benk,
+        filter,
+        sourceMaps
+    });
+
+    return {
+        marked,
+        logged,
+        sourceMaps,
+        reports,
+        isScript: url => isScriptUrl(url, benk)
+    };
+}
+
+/**
+ * The URL of the directory of benk's own modules, whose functions the V8
+ * report leaves out: `dist`, of the bundle, which has this module in it, or
+ * `source`, which has this module's directory in it
+ */
+function benkDirectory(): string {
+    const url = import.meta.url;
+
+    return new URL(url.endsWith('.ts') ? '..' : '.', url).href;
+}
+
+/**
+ * Runs a function with a temporary directory, which it removes after, as
+ * the traced run writes its log there
+ */
+async function inTemporaryDirectory<T>(
+    use: (directory: string) => Promise<T>
+): Promise<T> {
+    const directory = await mkdtemp(join(tmpdir(), 'benk-'));
+    try {
+        return await use(directory);
     } finally {
         await rm(directory, { recursive: true, force: true });
+    }
+}
+
+/**
+ * The code log of a traced run
+ *
+ * @throws {Error} If the run wrote none.
+ */
+async function readCodeLog(path: string, engine: string): Promise<string> {
+    try {
+        return await readFile(path, 'utf8');
+    } catch (error) {
+        if (isMissing(error)) {
+            throw new Error(
+                `Expected ${engine} to write V8's code log in the traced run, got none`,
+                { cause: error }
+            );
+        }
+        throw error;
     }
 }
 
@@ -219,6 +498,42 @@ function runChild(script: string, args: readonly string[]): Promise<string> {
                     )
                 );
             }
+        });
+    });
+}
+
+/**
+ * Runs a command with the arguments, and collects what it writes to stdout
+ * and stderr, and how it exits
+ *
+ * @throws {Error} If it can't be started.
+ */
+function collect(
+    command: string,
+    args: readonly string[]
+): Promise<CollectedRun> {
+    return new Promise((resolve, reject) => {
+        const child = spawn(command, args, {
+            stdio: ['ignore', 'pipe', 'pipe']
+        });
+        const stdout: string[] = [];
+        const stderr: string[] = [];
+
+        child.stdout.setEncoding('utf8');
+        child.stdout.on('data', (chunk: string) => {
+            stdout.push(chunk);
+        });
+        child.stderr.setEncoding('utf8');
+        child.stderr.on('data', (chunk: string) => {
+            stderr.push(chunk);
+        });
+        child.on('error', reject);
+        child.on('close', (code, signal) => {
+            resolve({
+                stdout: stdout.join(''),
+                stderr: stderr.join(''),
+                exit: code ?? signal
+            });
         });
     });
 }

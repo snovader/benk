@@ -20,13 +20,13 @@ import type {
 } from '#source/core/types';
 import { functionPositions } from './function-positions.ts';
 import { NodeRuntime } from './runtime.ts';
-import { readSourceMaps } from './source-maps.ts';
+import { writeMarker, type TracedGroup } from './traced-markers.ts';
 import {
-    readTracedOutput,
-    writeMarker,
-    type TracedGroup
-} from './traced-markers.ts';
-import { isTracedRun, recordSourceMaps, runTraced } from './traced-run.ts';
+    isTracedRun,
+    readTracedReport,
+    recordSourceMaps,
+    runTraced
+} from './traced-run.ts';
 import { checkFunctions } from './v8-check.ts';
 import { readInliningLimits } from './v8-limits.ts';
 import {
@@ -34,15 +34,11 @@ import {
     formatLimits,
     formatV8Report,
     formatVariants,
-    isScriptUrl,
-    reportFunctions,
-    tracedScripts,
     type FormatOptions,
     type FunctionReport,
     type VariantFormat
 } from './v8-report.ts';
 import { plainReport, variantsV8 } from './v8-results.ts';
-import { parseCodeLog } from './v8-trace.ts';
 
 /**
  * The exit code of a run whose V8 check failed, which `bench()` sets. It
@@ -301,38 +297,13 @@ async function traceScript(
     measured: RunResult,
     { call, filter, check, maxBytecodeSize }: TraceOptions
 ): Promise<{ result: RunResult; lines: string[] }> {
-    const { output, codeLog, sourceMapFiles } = await runTraced(
-        script,
-        process.argv.slice(2)
-    );
-    const traced = readTracedOutput(output);
-    const { trace } = traced;
-    const logged = parseCodeLog(codeLog);
-    if (trace.compilations.length === 0 || logged.size === 0) {
-        // A line that V8 wrote of a compilation, which says what it wrote
-        const line = output
-            .split('\n')
-            .find(text => text.startsWith('[completed compiling'));
-        throw new Error(
-            `Expected V8's compilations and functions in the traced run of ${script}, got ${trace.compilations.length} and ${logged.size}: V8 ${process.versions.v8} may write other formats${line == null ? '' : `, as ${line.trimEnd()}`}`
-        );
-    }
-
-    const sourceMaps = await readSourceMaps(
-        tracedScripts(trace, logged),
-        sourceMapFiles
-    );
-    const benk = benkDirectory();
-    const isScript = (url: string): boolean => isScriptUrl(url, benk);
-    const reports = reportFunctions(trace, logged, {
-        benkDirectory: benk,
-        filter,
-        sourceMaps
-    });
+    const traced = await runTraced(script, process.argv.slice(2));
+    const { marked, logged, sourceMaps, reports, isScript } =
+        await readTracedReport(script, traced, { filter });
     const limits = await inliningLimits(check);
 
     // This call's part of the traced run, of its own groups
-    const bench = traced.benches.get(call);
+    const bench = marked.benches.get(call);
     const variants =
         bench == null
             ? undefined
@@ -420,17 +391,6 @@ function withReport(
             }))
         }))
     };
-}
-
-/**
- * The URL of the directory of benk's own modules, whose functions the V8
- * report leaves out: `dist`, of the bundle, which has this module in it, or
- * `source`, which has this module's directory in it
- */
-function benkDirectory(): string {
-    const url = import.meta.url;
-
-    return new URL(url.endsWith('.ts') ? '..' : '.', url).href;
 }
 
 function printError(line: string): void {

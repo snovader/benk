@@ -146,13 +146,21 @@ between them: the author does.
   and its `bench()`, and loads none of Node's modules: a script in d8 takes
   the rest from `benk/core`. A runtime for browsers or Workers would be an
   entry point of its own too.
+- `source/benk-d8.ts` is the entry point of the package's command,
+  `benk-d8`, which runs a script in d8 from Node, so that `--v8-report` can
+  run it again in d8, as d8 can't start a process. `source/node/d8-command.ts`
+  reads its command line, which is d8's, and `source/node/traced-run.ts`
+  runs d8 with the trace flags. package.json's `bin` names its source, and
+  `publishConfig`'s its bundle.
 - The command line is the core's, in `command-line.ts`: the options, which
   `arguments.ts` reads as Node's `parseArgs()` does, since `node:util` is
   Node's, and the run that prints the description and the tables. Each
   entry point's `bench()` passes its host's arguments and output, and
   decides what each option means there. An option that a host can't carry
-  out is an error there, as `--v8-report` is in d8, and a new option needs
-  a decision for each host, which the README's table for d8 records.
+  out is an error there, as `--v8-report` is in d8's `bench()`, which
+  `benk-d8` carries out instead, and a new option needs a decision for each
+  host, which the README's table for d8 records. `benk-d8` passes d8 the
+  script's options, but those that it carries out.
 - The source of the timer loops is the core's, in `timer-source.ts`, since
   a runtime that can't compile a string writes its loops from it at build
   time. A change to it changes what every runtime times.
@@ -201,7 +209,9 @@ between them: the author does.
   `NodeRuntime` and `D8Runtime` check only what doesn't vary between runs.
   The tests that run in d8 need `d8` on the PATH, and are skipped without
   it. CI doesn't install it, so run them locally after changing d8's
-  runtime.
+  runtime, `benk-d8`, or the traced run. The tests of what `benk-d8` does
+  with d8's output run `test/fake-d8.ts` in its place, through a shell
+  script, which Windows can't run, so CI runs them on Linux and macOS.
 - Prefer property tests, with `it.prop` of `hypotes/fast-check`, as for the
   rotation's balance and the consistency of summaries with their samples.
   Check that a property test fails against code that loses the property, as
@@ -222,6 +232,12 @@ between them: the author does.
   Run it from the repository's root, as the bundle's comments name its
   modules from there. The bundle and its map are committed with the
   traced run, since the tests read the map from the file.
+- The tests of the report in d8 read the traced run of
+  `test/fixtures/v8/d8/bench.mjs`, the bundle of `test/fixtures/v8/bench.ts`
+  with `benk/d8` in it, which `test/fixtures/v8/d8/capture.ts` bundles and
+  traces on the d8 on the PATH, as `benk-d8` does. Capture it on each
+  version of d8 that the parsers are checked against. d8 names a script by
+  its path, which the parsers turn into its file's URL.
 - Run the relevant code and checks, and state anything that could not be run.
 
 ## Package and runtime
@@ -246,11 +262,11 @@ between them: the author does.
   and an entry point by its name, `benk`, `benk/core` or `benk/d8`. oxlint checks each of these.
 - Name TypeScript and JavaScript files and their folders in kebab-case, as
   `timed-variant.ts`, whatever they export. oxlint checks the files' names.
-- `yarn build` bundles the entry points into `dist/` with rolldown, and tsc
-  writes the declarations. In this repository, the package's exports name the
-  source, or the bundle with the `benk-dist` condition, which
-  `yarn test:dist` runs the tests on; the published package's, in
-  `publishConfig`, name the bundle.
+- `yarn build` bundles the entry points and `benk-d8` into `dist/` with
+  rolldown, and tsc writes the declarations. In this repository, the
+  package's exports name the source, or the bundle with the `benk-dist`
+  condition, which `yarn test:dist` runs the tests on; the published
+  package's, in `publishConfig`, name the bundle.
 - benk has no runtime dependencies. Adding one needs strong justification.
 
 ## Documentation
