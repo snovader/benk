@@ -14,7 +14,8 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { describe, expect } from 'hypotes';
 import { fc, it } from 'hypotes/fast-check';
-import { parseOptions } from 'benk';
+import { build } from 'rolldown';
+import { parseOptions, type RunResult } from 'benk';
 import { TRACE_FLAGS } from '#source/node/traced-run';
 import { BENCH, D8_BUNDLE, D8_VERSION, REPOSITORY } from './v8-fixtures.ts';
 
@@ -312,6 +313,42 @@ function d8Version(): string | undefined {
 
 const version = d8Version();
 
+/** The flags of d8 that `D8Runtime`'s count of array buffers needs */
+const BUFFER_FLAGS = ['--allow-natives-syntax', '--expose-gc', '--expose-statistics'];
+
+/** A script that fills a `Float64Array` of 1,000 numbers in each call */
+const BUFFERS_SCRIPT = `import { bench } from 'benk/d8';
+
+function fillNumbers() {
+    return new Float64Array(1000).fill(1);
+}
+
+await bench([{ name: 'buffers', variants: [{ name: 'fill', run: fillNumbers }] }]);
+`;
+
+/**
+ * Writes `BUFFERS_SCRIPT` to the directory, bundled with `benk/d8` as this
+ * process resolves it, from its source or from its bundle, as d8 runs a
+ * script of one module, and returns the bundle's path
+ */
+async function writeBuffersScript(directory: string): Promise<string> {
+    const source = join(directory, 'buffers-source.mjs');
+    const script = join(directory, 'buffers.mjs');
+    await writeFile(source, BUFFERS_SCRIPT);
+
+    await build({
+        input: source,
+        output: { file: script },
+        platform: 'neutral',
+        resolve: {
+            alias: { 'benk/d8': fileURLToPath(import.meta.resolve('benk/d8')) }
+        },
+        logLevel: 'silent'
+    });
+
+    return script;
+}
+
 describe.runIf(version)('benk-d8 in d8', () => {
     const QUICK = ['--rounds', '6', '--warmup-rounds', '1'];
 
@@ -351,6 +388,33 @@ describe.runIf(version)('benk-d8 in d8', () => {
         expect(result.runtime.name).toBe('d8');
         expect(stderr).toContain('\nsums: ');
         expect(reportOf(stderr)[0]).toMatch(/^V8 report of /);
+    });
+
+    it('counts array buffers with the flags of d8 that the count needs, and reports with them', async () => {
+        await inDirectory(async directory => {
+            const script = await writeBuffersScript(directory);
+
+            const { status, stdout, stderr } = await runCommand([
+                ...BUFFER_FLAGS,
+                script,
+                '--',
+                ...QUICK,
+                '--json',
+                '-',
+                '--v8-filter',
+                '^fillNumbers$'
+            ]);
+            const result = JSON.parse(stdout) as RunResult;
+            const report = reportOf(stderr);
+
+            expect(status, stderr).toBe(0);
+            expect(result.runtime.flags).toStrictEqual([...BUFFER_FLAGS, 'unknown']);
+            expect(
+                result.groups[0].variants.map(({ arrayBufferBytes }) => arrayBufferBytes)
+            ).toStrictEqual([8000, 8000]);
+            expect(report[2]).toBe('Only the functions whose names match ^fillNumbers$.');
+            expect(report[3]).toMatch(/^fillNumbers \S+buffers\.mjs:\d+:\d+, \d+ B of bytecode$/);
+        });
     });
 
     it("exits with d8's code, and traces nothing, when the script throws in d8", async () => {

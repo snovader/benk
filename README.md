@@ -642,6 +642,45 @@ with 10 ms.
   bundle's source map names. A bundle that has benk in it, without a
   source map, can't tell them from the script's.
 
+d8 counts array buffers only with the three flags of
+[Bytes in d8](#bytes-in-d8), so **buffers** shows `–` without them.
+benk-d8 doesn't add them. They change the flags of the timed run, and the
+count takes time before each sample. Give them before the script, as any
+of d8's flags, and both runs get them. This runs `copy.mjs`, of
+[Bytes in d8](#bytes-in-d8):
+
+```sh
+npx benk-d8 --expose-statistics --expose-gc --allow-natives-syntax copy.mjs -- --v8-report
+```
+
+```text
+d8 15.8.62.9, V8 15.8.62.9, macos unknown, unknown, with --allow-natives-syntax --expose-gc --expose-statistics unknown. Process state: 31-bit small integers.
+Per call, of at least 31 interleaved rounds of 1 ms per variant after 10 warm-up rounds, in an order that rotates each variant through each position:
+the fastest and median round, the interquartile range as a share of the median, the ratio to the group's first variant by the statistic that the group leads with, a 95% interval of the median of the per-round ratios, and the bytes allocated on the heap and in array buffers outside it.
+
+copy 1,000 numbers: 36 rounds, by the median round (a call allocating 1 KiB or more)
+                       fastest     median   spread    ratio   95% interval        heap     buffers
+  slice                 188 ns     207 ns    34.6%    1.00×                          –         0 B
+  Float64Array.from     693 ns     923 ns    26.4%    4.30×      3.83–4.56           –     8,000 B
+  slice A/A             187 ns     253 ns    29.6%    1.03×      0.99–1.24           –         0 B
+
+V8 report of copy.mjs, from a run of it in d8 15.8.62.9 with V8's traces, whose times aren't reported.
+Per function of the script, and per function that deoptimized in the script's code: the tiers that V8 compiled it to, what Turbofan inlined into it and where it inlined it, with sizes of bytecode, and its deoptimizations.
+(anonymous) copy.mjs:3:46, 15 B of bytecode
+  compiled to Maglev
+run copy.mjs:9:35, 13 B of bytecode
+  compiled to Maglev
+  inlined into (anonymous) <anonymous>:1:20 ×2
+run copy.mjs:10:47, 18 B of bytecode
+  compiled to Maglev
+```
+
+This is one of 3 runs on an Apple M2 Pro, with Homebrew's d8 15.8.62.9 and
+a load average near 4. Each led with the median round, and the ratios of
+`Float64Array.from` were 4.58, 4.30 and 3.95. In 3 runs without the flags,
+**buffers** showed `–`, and the group led with the fastest round. The
+report was the same in all 6 runs.
+
 When a step fails, benk-d8 prints an error, rather than an empty report:
 
 | What fails                                                              | What benk-d8 does                                                                                |
