@@ -509,7 +509,10 @@ if one fails:
 
 A script's top level isn't checked for its size, as it isn't inlined.
 `--v8-filter` selects the functions that it checks, as it selects those that
-the report lists.
+the report lists. On Windows, it doesn't check for deoptimizations, as the
+report can't place the timed rounds among V8's traces there, as
+[What the traced run changes](#what-the-traced-run-changes) describes. It
+says so in a line after its result.
 
 A run whose check fails exits with 2. A run that throws exits with 1, as
 Node exits on an error. `bench()` sets `process.exitCode`, unless the script
@@ -562,14 +565,14 @@ With `--v8-report`, the results have the report too, so `bench()` writes
 the JSON after the traced run. If the traced run fails, it writes the
 results without the report, and then throws.
 
-| Field                | What it has                                                                                                                                                                                                                                 |
-| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `v8Report.script`    | The path of the script that was traced.                                                                                                                                                                                                     |
-| `v8Report.filter`    | The source of `--v8-filter`, or `''`.                                                                                                                                                                                                       |
-| `v8Report.limits`    | Turbofan's limits, as `maxInlinedBytecodeSize`, `maxInlinedBytecodeSizeCumulative` and `maxInlinedBytecodeSizeSmall`, or `null` where `node --v8-options` didn't print them.                                                                |
-| `v8Report.functions` | The functions that the report lists: each one's `name`, `position` and `bytecodeSize`, its `tiers` and `deoptimizations`, and Turbofan's decisions of its `callees` and `callers`.                                                          |
-| `v8Report.check`     | Whether it `passed`, the `maxBytecodeSize` of `--v8-max-bytecode`, and the `failures`, of the `kind` `'over budget'`, `'over limit'` or `'deoptimized'`. `null` without `--v8-check`.                                                       |
-| A variant's `v8`     | Its `run`, its `runTiers`, its `loops` and their `loopTiers`, Turbofan's decisions of `inlining` into them, the `deoptimizations` of each `code`, `'run'` or `'loop'`, with how many were `timed`, and the variants that it's `sharedWith`. |
+| Field                | What it has                                                                                                                                                                                                                                                       |
+| -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `v8Report.script`    | The path of the script that was traced.                                                                                                                                                                                                                           |
+| `v8Report.filter`    | The source of `--v8-filter`, or `''`.                                                                                                                                                                                                                             |
+| `v8Report.limits`    | Turbofan's limits, as `maxInlinedBytecodeSize`, `maxInlinedBytecodeSizeCumulative` and `maxInlinedBytecodeSizeSmall`, or `null` where `node --v8-options` didn't print them.                                                                                      |
+| `v8Report.functions` | The functions that the report lists: each one's `name`, `position` and `bytecodeSize`, its `tiers` and `deoptimizations`, and Turbofan's decisions of its `callees` and `callers`.                                                                                |
+| `v8Report.check`     | Whether it `passed`, whether `deoptimizationsChecked`, the `maxBytecodeSize` of `--v8-max-bytecode`, and the `failures`, of the `kind` `'over budget'`, `'over limit'` or `'deoptimized'`. `null` without `--v8-check`.                                           |
+| A variant's `v8`     | Its `run`, its `runTiers`, its `loops` and their `loopTiers`, Turbofan's decisions of `inlining` into them, the `deoptimizations` of each `code`, `'run'` or `'loop'`, with how many were `timed`, or `null` on Windows, and the variants that it's `sharedWith`. |
 
 A position has its script's `url`, as V8 names it, and a `line` and a
 `column` from 1, in the source that a source map names. A `bytecodeSize` or
@@ -721,11 +724,21 @@ it is, has its own positions, without a note.
    script that does more, such as writing files, does it twice.
 2. Its `bench()` writes a line to stdout, among V8's traces, as each call
    of it starts and ends measuring, and as each group's timed rounds start
-   and end. V8 writes its traces while JavaScript waits, so such a line
-   falls between two of V8's. Of 300 functions made hot between two such
-   lines, each of the 1,050 compilations and deoptimizations fell between
-   the right two, in Node 24.22.3, 26.13.0 and 27.0.0-alpha on macOS. The
-   report leaves the lines out of the traces.
+   and end. The report cuts the lines out of the traces, wherever they
+   fall.
+   - On macOS and Linux, Node turns off the C runtime's buffering of
+     stdout, which V8 prints its traces through. V8 writes them while
+     JavaScript waits, so such a line falls between two of V8's. Of 300
+     functions made hot between two such lines, each of the 1,050
+     compilations and deoptimizations fell between the right two, in Node
+     24.22.3, 26.13.0 and 27.0.0-alpha on macOS.
+   - On Windows, Node leaves the buffering on, as `src/node.cc` turns it
+     off for POSIX only. V8's lines reach stdout in chunks of the buffer,
+     and a line of benk's falls between two chunks, before lines of V8's
+     that came before it, and often within one. The report then places no
+     trace by the lines: a variant's `timed` is `null`, and the check
+     doesn't check for deoptimizations, and says so. With several calls of
+     `bench()`, each call's variants are tied to the loops of all of them.
 3. Once it has measured, its `bench()` reads where each variant's `run`
    starts, and the source maps of the scripts that V8 has compiled, for the
    report. It reads them through Node's
@@ -768,6 +781,8 @@ it is, has its own positions, without a note.
 - Sparkplug's compilations, which `--trace-opt` doesn't print.
 - A timer loop that the traces don't tie to its variant, as
   [By variant](#by-variant) describes.
+- Where the timed rounds were among V8's traces, on Windows, as
+  [What the traced run changes](#what-the-traced-run-changes) describes.
 - A run in d8, where `--v8-report` is an error, as [d8](#d8) describes.
 
 V8 doesn't keep the traces' formats stable. The parsers were checked

@@ -43,19 +43,24 @@ export interface CheckOptions {
  *   taken.
  *
  * A script's top level, which isn't inlined, isn't checked for its size.
+ * Without the traces of the timed rounds, as on Windows, where the traces
+ * can't place them, it doesn't check for deoptimizations, and says so.
  */
 export function checkFunctions(
     listed: readonly FunctionReport[],
-    timed: readonly TimedGroup[],
+    timed: readonly TimedGroup[] | undefined,
     options: CheckOptions
 ): V8Check {
     const failures = [
         ...listed.flatMap(report => sizeFailures(report, options)),
-        ...deoptimizationFailures(listed, timed, options.sourceMaps)
+        ...(timed == null
+            ? []
+            : deoptimizationFailures(listed, timed, options.sourceMaps))
     ];
 
     return {
         passed: failures.length === 0,
+        deoptimizationsChecked: timed != null,
         maxBytecodeSize: options.maxBytecodeSize ?? null,
         failures
     };

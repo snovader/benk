@@ -381,8 +381,12 @@ export interface V8VariantDeoptimization extends V8Deoptimization {
     /** Whose code deoptimized: the variant's `run`'s, or a timer loop's */
     readonly code: 'run' | 'loop';
     readonly count: number;
-    /** How many of them were in the timed rounds of the variant's group */
-    readonly timed: number;
+    /**
+     * How many of them were in the timed rounds of the variant's group, or
+     * null where the traces can't place the timed rounds, as on Windows,
+     * where V8's traces reach stdout in chunks of the C runtime's buffer
+     */
+    readonly timed: number | null;
 }
 
 /**
@@ -469,6 +473,11 @@ export type V8Failure = V8SizeFailure | V8DeoptimizationFailure;
 export interface V8Check {
     /** Whether no function failed it */
     readonly passed: boolean;
+    /**
+     * Whether it checked for deoptimizations in the timed rounds, which it
+     * can't where the traces can't place them, as on Windows
+     */
+    readonly deoptimizationsChecked: boolean;
     /** The user's limit of `--v8-max-bytecode`, or null */
     readonly maxBytecodeSize: number | null;
     readonly failures: readonly V8Failure[];

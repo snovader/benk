@@ -2,23 +2,22 @@
 // traces, so that the process that runs it can place them: which `bench()`
 // call each compilation and deoptimization was in, which group's timed
 // rounds, and where each variant's `run` starts. A marker is a line of its
-// own, which `parseTrace()` skips.
+// own, which the reader cuts out of the output before it parses V8's lines.
 //
 // V8 writes its traces on the main thread, while JavaScript waits, and the
-// traced run compiles on it too. So a marker that JavaScript writes falls
-// between two of V8's lines, rather than within one. Of 300 functions, each
-// made hot between two markers, all 1,050 compilations and deoptimizations
-// were between the right markers, on Node 24.22.3, 26.13.0 and
-// 27.0.0-alpha on macOS.
+// traced run compiles on it too. Where V8's stdout isn't buffered, a marker
+// that JavaScript writes falls between two of V8's lines, after those that
+// V8 wrote before it. Of 300 functions, each made hot between two markers,
+// all 1,050 compilations and deoptimizations were between the right
+// markers, on Node 24.22.3, 26.13.0 and 27.0.0-alpha on macOS. Where it's
+// buffered, as on Windows, `markersInOrder()` says why the markers fall
+// elsewhere, and the reader uses only what they say, not where they are.
 import { writeSync } from 'node:fs';
 import type { Role } from '#source/core/types';
 import { parseTrace, type SourcePosition, type V8Trace } from './v8-trace.ts';
 
 /** What starts a marker's line, before its JSON */
 const PREFIX = 'benk-traced-run ';
-
-/** A break between lines, as `v8-trace.ts` splits them */
-const LINE_BREAK = /\r?\n/;
 
 /** A variant as the traced run measured it */
 export interface TracedVariant {
@@ -63,14 +62,17 @@ export type Marker =
 
 /** What a traced run's stdout has of a `bench()` call of it */
 export interface TracedBench {
-    /** V8's traces from the call's start to its end */
+    /**
+     * V8's traces from the call's start to its end, or all of them where the
+     * markers don't place them
+     */
     readonly trace: V8Trace;
     /**
      * The traces of each group's timed rounds, by the group's index: parts
      * of `trace`, with the same objects of its compilations and
-     * deoptimizations
+     * deoptimizations. None where the markers don't place them.
      */
-    readonly timed: readonly V8Trace[];
+    readonly timed: readonly V8Trace[] | undefined;
     /** Its groups, as the run measured them, or none if it didn't say */
     readonly groups: readonly TracedGroup[] | undefined;
 }
@@ -106,33 +108,93 @@ export function writeMarker(marker: Marker): void {
 }
 
 /**
- * Reads V8's traces from a traced run's stdout, and places them by its
- * markers: each `bench()` call's, and each of its groups' timed rounds'
+ * Whether the traced run's markers fall among V8's lines where V8 wrote
+ * them. V8 prints its traces through the C runtime's `stdout`, whose
+ * buffering Node turns off on POSIX only, in `src/node.cc`. On Windows, V8's
+ * lines reach the pipe in chunks of that buffer, and a marker falls between
+ * two chunks: before lines that V8 wrote before it, and often within one.
+ * Node has no function that empties the buffer.
  */
-export function readTracedOutput(output: string): TracedOutput {
-    const segments = new Segments();
+export function markersInOrder(): boolean {
+    return process.platform !== 'win32';
+}
 
-    for (const line of output.split(LINE_BREAK)) {
-        const marker = markerOf(line);
-        if (marker == null) {
-            segments.add(line);
-        } else {
-            segments.mark(marker);
-        }
+/**
+ * Reads V8's traces from a traced run's stdout, with its markers cut out of
+ * them, wherever they fall. Where the markers fall in order, it places the
+ * traces by them: each `bench()` call's, and each of its groups' timed
+ * rounds'. It doesn't where they don't, or where a marker fell within a
+ * line of V8's, which shows that they didn't: each call then has all of the
+ * traces, and none of timed rounds.
+ */
+export function readTracedOutput(
+    output: string,
+    inOrder: boolean = markersInOrder()
+): TracedOutput {
+    const { pieces, markers } = cutMarkers(output);
+    const placed = inOrder && markers.every(marker => marker.atLineStart);
+    const segments = new Segments(placed);
+
+    for (const [i, { marker }] of markers.entries()) {
+        segments.add(pieces[i]);
+        segments.mark(marker);
     }
+    segments.add(pieces[markers.length]);
 
     return segments.build();
 }
 
-/** The marker of a line, or none if it isn't one */
-function markerOf(line: string): Marker | undefined {
-    if (!line.startsWith(PREFIX)) {
-        return undefined;
-    }
+/** A marker, and whether it starts a line of the output */
+interface CutMarker {
+    readonly marker: Marker;
+    readonly atLineStart: boolean;
+}
 
+/**
+ * The markers of an output, and the pieces of the output around them: the
+ * text before each marker, and then the text after the last
+ */
+function cutMarkers(output: string): {
+    pieces: string[];
+    markers: CutMarker[];
+} {
+    const pieces: string[] = [];
+    const markers: CutMarker[] = [];
+    let from = 0;
+    let atLineStart = true;
+
+    for (
+        let at = output.indexOf(PREFIX);
+        at !== -1;
+        at = output.indexOf(PREFIX, at + 1)
+    ) {
+        // A marker's JSON has no line break in it
+        const end = output.indexOf('\n', at);
+        const marker = markerOf(
+            output.slice(at + PREFIX.length, end === -1 ? undefined : end)
+        );
+        if (marker == null) {
+            continue;
+        }
+
+        const piece = output.slice(from, at);
+        if (piece !== '') {
+            atLineStart = piece.endsWith('\n');
+        }
+        pieces.push(piece);
+        markers.push({ marker, atLineStart });
+        from = end === -1 ? output.length : end + 1;
+    }
+    pieces.push(output.slice(from));
+
+    return { pieces, markers };
+}
+
+/** The marker of a marker's JSON, or none if it isn't one */
+function markerOf(json: string): Marker | undefined {
     try {
         // Written by `writeMarker()`, unless the script wrote the same start
-        return JSON.parse(line.slice(PREFIX.length)) as Marker;
+        return JSON.parse(json) as Marker;
     } catch {
         return undefined;
     }
@@ -145,19 +207,36 @@ interface Segment {
     readonly trace: V8Trace;
 }
 
-/** The parts of a traced run's output, as its lines come */
+/**
+ * The parts of a traced run's output between its markers, as they come, or
+ * all of it as one, where the markers don't place it
+ */
 class Segments {
+    readonly #placed: boolean;
     readonly #segments: Segment[] = [];
     readonly #groups = new Map<number, readonly TracedGroup[]>();
-    #lines: string[] = [];
+    readonly #benches = new Set<number>();
+    #text = '';
     #bench: number | undefined;
     #group: number | undefined;
 
-    add(line: string): void {
-        this.#lines.push(line);
+    constructor(placed: boolean) {
+        this.#placed = placed;
+    }
+
+    add(text: string): void {
+        this.#text += text;
     }
 
     mark(marker: Marker): void {
+        this.#benches.add(marker.bench);
+        if (!this.#placed) {
+            if (marker.event === 'variants') {
+                this.#groups.set(marker.bench, marker.groups);
+            }
+            return;
+        }
+
         this.#close();
 
         switch (marker.event) {
@@ -182,30 +261,35 @@ class Segments {
     build(): TracedOutput {
         this.#close();
 
+        const trace = joined(this.#segments.map(segment => segment.trace));
         const benches = new Map<number, TracedBench>();
-        for (const bench of new Set(this.#segments.map(s => s.bench))) {
-            if (bench != null) {
-                benches.set(bench, this.#benchOf(bench));
-            }
+        for (const bench of this.#benches) {
+            benches.set(
+                bench,
+                this.#placed
+                    ? this.#benchOf(bench)
+                    : {
+                          trace,
+                          timed: undefined,
+                          groups: this.#groups.get(bench)
+                      }
+            );
         }
 
-        return {
-            trace: joined(this.#segments.map(segment => segment.trace)),
-            benches
-        };
+        return { trace, benches };
     }
 
     /**
-     * Parses the lines since the last marker, which a compilation or a
+     * Parses the text since the last marker, which a compilation or a
      * deoptimization doesn't span, as V8 writes each while JavaScript waits
      */
     #close(): void {
         this.#segments.push({
             bench: this.#bench,
             group: this.#group,
-            trace: parseTrace(this.#lines.join('\n'))
+            trace: parseTrace(this.#text)
         });
-        this.#lines = [];
+        this.#text = '';
     }
 
     #benchOf(bench: number): TracedBench {

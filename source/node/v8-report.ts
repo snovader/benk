@@ -355,9 +355,12 @@ function formatTiers(tiers: ReadonlyArray<V8Counted<V8Tier>>): string[] {
           ];
 }
 
-/** How many of a variant's deoptimizations were in its timed rounds */
+/**
+ * How many of a variant's deoptimizations were in its timed rounds, or
+ * nothing if none were, or the traces can't say
+ */
 function formatTimed({ count, timed }: V8VariantDeoptimization): string {
-    if (timed === 0) {
+    if (timed == null || timed === 0) {
         return '';
     }
 
@@ -380,16 +383,28 @@ export function formatLimits(limits: InliningLimits | null): string {
     return `Turbofan's limits, from V8's flags: ${formatBytes(maxInlinedBytecodeSize)} of bytecode for a function that it inlines, ${formatBytes(maxInlinedBytecodeSizeCumulative)} for the functions that one compilation inlines, in all, and ${formatBytes(maxInlinedBytecodeSizeSmall)} for a small function, which it inlines beyond that.`;
 }
 
-/** The lines of the check: whether it passed, and each failure */
+/**
+ * The lines of the check: whether it passed, and each failure, and that it
+ * didn't check for deoptimizations, where it didn't
+ */
 export function formatCheck(check: V8Check, directory: string): string[] {
+    const unchecked = check.deoptimizationsChecked
+        ? []
+        : [
+              "  Deoptimizations weren't checked: V8's traces reached stdout in chunks of the C runtime's buffer, as Node buffers it on Windows, so the timed rounds can't be placed among them."
+          ];
     if (check.passed) {
         const user =
             check.maxBytecodeSize == null
                 ? ''
                 : ` or ${formatBytes(check.maxBytecodeSize)}`;
+        const deoptimized = check.deoptimizationsChecked
+            ? ', and none deoptimized in the timed rounds'
+            : '';
         return [
             '',
-            `V8 check passed: no hot function of the report is over Turbofan's limit${user}, and none deoptimized in the timed rounds.`
+            `V8 check passed: no hot function of the report is over Turbofan's limit${user}${deoptimized}.`,
+            ...unchecked
         ];
     }
 
@@ -401,7 +416,8 @@ export function formatCheck(check: V8Check, directory: string): string[] {
                 text: formatFailure(failure, directory),
                 count: failure.kind === 'deoptimized' ? failure.count : 1
             }))
-        )
+        ),
+        ...unchecked
     ];
 }
 

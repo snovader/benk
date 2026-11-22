@@ -337,9 +337,10 @@ async function traceScript(
         bench == null
             ? undefined
             : variantsV8(measured.groups, bench, logged, sourceMaps);
-    const timed = measured.groups.map((group, i) => ({
-        name: group.name,
-        trace: bench?.timed[i] ?? EMPTY_TRACE
+    // Each group's timed rounds, where the traces place them
+    const timed = bench?.timed?.map((trace, i) => ({
+        name: measured.groups.at(i)?.name ?? '',
+        trace
     }));
 
     const v8Report: V8Report = {
@@ -403,8 +404,6 @@ function reportLines(
         ...(check == null ? [] : formatCheck(check, directory))
     ];
 }
-
-const EMPTY_TRACE = { compilations: [], deoptimizations: [], turbofan: [] };
 
 /** The results with each variant's part of V8's report */
 function withReport(

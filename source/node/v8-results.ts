@@ -224,8 +224,12 @@ class Attribution {
         loops: ReadonlySet<FunctionAddress>,
         group: number
     ): V8VariantDeoptimization[] {
-        // Parts of the call's traces, of the same deoptimizations
-        const timed = new Set(this.#bench.timed[group]?.deoptimizations);
+        // Parts of the call's traces, of the same deoptimizations, where the
+        // traces place the timed rounds
+        const timed =
+            this.#bench.timed == null
+                ? undefined
+                : new Set(this.#bench.timed[group]?.deoptimizations);
         const counts = new Map<string, V8VariantDeoptimization>();
 
         for (const deoptimization of this.#bench.trace.deoptimizations) {
@@ -246,7 +250,11 @@ class Attribution {
             counts.set(key, {
                 ...plain,
                 count: (known?.count ?? 0) + 1,
-                timed: (known?.timed ?? 0) + Number(timed.has(deoptimization))
+                timed:
+                    timed == null
+                        ? null
+                        : (known?.timed ?? 0) +
+                          Number(timed.has(deoptimization))
             });
         }
 

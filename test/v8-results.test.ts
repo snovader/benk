@@ -5,7 +5,12 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { describe, expect } from 'hypotes';
 import { fc, it } from 'hypotes/fast-check';
-import { measureGroups, type GroupResult, type VariantV8 } from 'benk';
+import {
+    measureGroups,
+    type GroupResult,
+    type V8VariantDeoptimization,
+    type VariantV8
+} from 'benk';
 import { functionPositions } from '#source/node/function-positions';
 import { readTracedOutput, type TracedGroup } from '#source/node/traced-markers';
 import { checkFunctions } from '#source/node/v8-check';
@@ -254,13 +259,48 @@ describe('readTracedOutput', () => {
                 ...lines.slice(end)
             ].join('\n');
 
-            const read = readTracedOutput(marked);
+            const read = readTracedOutput(marked, true);
             const bench = expectPresent(read.benches.get(0));
 
             expect(read.trace).toStrictEqual(parseTrace(output));
             expect(bench.trace).toStrictEqual(parseTrace(lines.slice(start, end).join('\n')));
             expect(bench.timed).toStrictEqual([parseTrace(lines.slice(timed, done).join('\n'))]);
             expect(bench.groups).toStrictEqual([]);
+        }
+    );
+
+    // As Node writes V8's traces on Windows: in chunks of the C runtime's
+    // buffer, of 4,096 bytes, among which a marker falls, within a line
+    const chunked = fc
+        .uniqueArray(fc.integer({ min: 1, max: output.length - 1 }), {
+            minLength: 5,
+            maxLength: 5
+        })
+        .map(chosen => chosen.toSorted((a, b) => a - b));
+
+    it.prop([chunked, fc.boolean()])(
+        "cuts out markers that fall within V8's lines, and doesn't place the traces by them",
+        (at, inOrder) => {
+            const events = [
+                marker({ bench: 0, event: 'start' }),
+                marker({ bench: 0, event: 'timed', group: 0 }),
+                marker({ bench: 0, event: 'done', group: 0 }),
+                marker({ bench: 0, event: 'end' }),
+                marker({ bench: 0, event: 'variants', groups: tracedGroups() })
+            ];
+            const marked = events
+                .map((event, i) => `${output.slice(at[i - 1] ?? 0, at[i])}${event}\n`)
+                .join('');
+            const read = readTracedOutput(`${marked}${output.slice(at[4])}`, inOrder);
+            const bench = expectPresent(read.benches.get(0));
+
+            expect(read.trace).toStrictEqual(parseTrace(output));
+            expect(bench.trace).toStrictEqual(read.trace);
+            expect(bench.groups).toStrictEqual(tracedGroups());
+            // Unless each marker started a line, which shows nothing
+            if (!inOrder || at.some(i => output[i - 1] !== '\n')) {
+                expect(bench.timed).toBeUndefined();
+            }
         }
     );
 
@@ -279,19 +319,26 @@ describe('readTracedOutput', () => {
             marker({ bench: 0, event: 'end' }),
             marker({ bench: 0, event: 'variants', groups: tracedGroups() })
         ].join('\n');
-        const bench = expectPresent(readTracedOutput(marked).benches.get(0));
+        const deoptimizationsOf = (inOrder: boolean): V8VariantDeoptimization[] => {
+            const bench = expectPresent(readTracedOutput(marked, inOrder).benches.get(0));
+            const [variants] = variantsV8(results, bench, logged, undefined);
 
-        const [variants] = variantsV8(results, bench, logged, undefined);
-        const deoptimizations = variants.flatMap(v8 => expectPresent(v8).deoptimizations);
+            return variants.flatMap(v8 => expectPresent(v8).deoptimizations);
+        };
 
+        const deoptimizations = deoptimizationsOf(true);
         expect(deoptimizations.length).toBeGreaterThan(0);
         for (const { count, timed: inTimedRounds } of deoptimizations) {
             expect(inTimedRounds).toBe(done === 0 ? 0 : count);
         }
+        // Where the markers aren't in order, as on Windows, the traces can't say
+        expect(
+            deoptimizationsOf(false).map(({ timed: inTimedRounds }) => inTimedRounds)
+        ).toStrictEqual(deoptimizations.map(() => null));
     });
 
     it('reads a line that only starts as a marker as one of the script', () => {
-        const read = readTracedOutput(`benk-traced-run {not JSON\n${output}`);
+        const read = readTracedOutput(`benk-traced-run {not JSON\n${output}`, true);
 
         expect(read.trace).toStrictEqual(parseTrace(output));
         expect(read.benches.size).toBe(0);
@@ -341,9 +388,27 @@ describe('checkFunctions', () => {
             checkFunctions(reports, [], { limits, maxBytecodeSize: undefined, isScript })
         ).toStrictEqual({
             passed: true,
+            deoptimizationsChecked: true,
             maxBytecodeSize: null,
             failures: []
         });
+    });
+
+    it("says that it didn't check for deoptimizations without the timed rounds' traces", () => {
+        const { reports } = listed('26.13.0');
+        const check = checkFunctions(reports, undefined, {
+            limits: LIMITS,
+            maxBytecodeSize: undefined,
+            isScript
+        });
+
+        expect(check.deoptimizationsChecked).toBe(false);
+        expect(check.failures.map(failure => failure.kind)).toStrictEqual(['over budget']);
+        expect(formatCheck({ ...check, passed: true, failures: [] }, REPOSITORY)).toStrictEqual([
+            '',
+            "V8 check passed: no hot function of the report is over Turbofan's limit.",
+            "  Deoptimizations weren't checked: V8's traces reached stdout in chunks of the C runtime's buffer, as Node buffers it on Windows, so the timed rounds can't be placed among them."
+        ]);
     });
 
     it.prop([fc.constantFrom(...VERSIONS), fc.integer({ min: 1, max: 1000 })])(
@@ -440,7 +505,10 @@ describe('checkFunctions', () => {
             `  mix ${BENCH}:23:13 deoptimized in Turbofan's code: not a Smi (eager), at ${BENCH}:24:15, in the timed rounds of sums ×2`
         ]);
         expect(
-            formatCheck({ passed: true, maxBytecodeSize: 400, failures: [] }, REPOSITORY)
+            formatCheck(
+                { passed: true, deoptimizationsChecked: true, maxBytecodeSize: 400, failures: [] },
+                REPOSITORY
+            )
         ).toStrictEqual([
             '',
             "V8 check passed: no hot function of the report is over Turbofan's limit or 400 B, and none deoptimized in the timed rounds."

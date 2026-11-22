@@ -310,9 +310,12 @@ describe('--v8-check', () => {
             '^nothing$'
         ]);
 
+        // Windows buffers V8's traces, among which the timed rounds can't be placed
         expect(code).toBe(0);
         expect(lines).toContain(
-            "V8 check passed: no hot function of the report is over Turbofan's limit, and none deoptimized in the timed rounds."
+            process.platform === 'win32'
+                ? "V8 check passed: no hot function of the report is over Turbofan's limit."
+                : "V8 check passed: no hot function of the report is over Turbofan's limit, and none deoptimized in the timed rounds."
         );
     });
 
