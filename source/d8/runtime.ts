@@ -1,9 +1,11 @@
 // What benk needs from d8, the V8 shell, to time variants: timer loops that
-// `new Function` compiles, as Node's are, and what d8 knows of itself from
-// the globals that it adds. d8 has no `node:v8`, so the runtime counts no
-// heap bytes.
+// `new Function` compiles, as Node's are, what d8 knows of itself from the
+// globals that it adds, and, with three of its flags, the bytes of array
+// buffers. d8 has no `node:v8`, and nothing that adds back the heap bytes
+// that a collection frees, so the runtime counts no heap bytes.
 import { asyncTimerSource, timerSource } from '#source/core/timer-source';
 import type {
+    ArrayBufferMeter,
     AsyncTimer,
     Runtime,
     RuntimeDescription,
@@ -72,15 +74,32 @@ let timers = 0;
 /**
  * Times variants in d8, the V8 shell: each in a timer loop of its own,
  * compiled from a unique source, as `NodeRuntime` does. It counts no heap
- * bytes, which d8 has no API for, and its description reads d8's globals,
- * so it describes only a run in d8.
+ * bytes, which d8 has no API for. It counts the bytes of array buffers
+ * where d8 started with `--expose-statistics`, `--expose-gc` and
+ * `--allow-natives-syntax`, which it checks when it's created, and none
+ * otherwise. Its description reads d8's globals, so it describes only a
+ * run in d8.
  */
 export class D8Runtime implements Runtime {
     readonly heap = undefined;
+    readonly arrayBuffers: ArrayBufferMeter | undefined;
 
-    /** d8's version, its platform, and the bits of V8's small integers */
+    constructor() {
+        const collector = collectorOfShell();
+        this.arrayBuffers =
+            collector &&
+            ({
+                settle: settled,
+                start: () => startCountingBuffers(collector)
+            } satisfies ArrayBufferMeter);
+    }
+
+    /**
+     * d8's version, its platform, and the bits of V8's small integers, and
+     * the flags that the count of array buffers needs, where it has them
+     */
     get description(): RuntimeDescription {
-        return describeD8();
+        return describeD8(this.arrayBuffers != null);
     }
 
     createTimer(): Timer {
@@ -101,7 +120,7 @@ export class D8Runtime implements Runtime {
     }
 }
 
-function describeD8(): RuntimeDescription {
+function describeD8(countsBuffers: boolean): RuntimeDescription {
     const v8 = version();
 
     return {
@@ -110,10 +129,179 @@ function describeD8(): RuntimeDescription {
         version: v8,
         engine: `V8 ${v8}`,
         platform: os.name,
-        // d8 knows neither, nor the flags that it started with
+        // d8 knows neither, nor the flags that it started with, but for
+        // those whose functions the count of array buffers found
         arch: 'unknown',
         cpu: 'unknown',
-        flags: ['unknown'],
+        flags: [...(countsBuffers ? BUFFER_FLAGS : []), 'unknown'],
         processState: [`${smallIntegerBits()}-bit small integers`]
+    };
+}
+
+/** The flags of d8 that add the functions that a count of buffers needs */
+const BUFFER_FLAGS = [
+    '--allow-natives-syntax',
+    '--expose-gc',
+    '--expose-statistics'
+];
+
+/** What the runtime reads of the object that `getV8Statistics()` returns */
+interface V8Statistics {
+    /**
+     * The bytes outside its heap that V8 keeps account of, among them the
+     * contents of array buffers and WebAssembly's memories, but not those
+     * of a `SharedArrayBuffer`. V8 adds a buffer's bytes when it allocates
+     * them, and takes them off after a collection, when it has swept the
+     * buffers that the collection found dead.
+     */
+    readonly amount_of_external_allocated_memory: number;
+}
+
+/** The functions of d8 that a count of array buffers needs */
+interface Collector {
+    /**
+     * `getV8Statistics()`, which `--expose-statistics` adds. After it reads
+     * the statistics, it walks the heap, which first finishes V8's sweeping
+     * of array buffers.
+     */
+    readonly statistics: () => V8Statistics;
+    /**
+     * `gc()`, which `--expose-gc` adds: a full collection, or a scavenge of
+     * the young generation with `{ type: 'minor' }`
+     */
+    readonly collect: (options?: { readonly type: 'minor' }) => void;
+    /** `%InYoungGeneration()`, which `--allow-natives-syntax` parses */
+    readonly isYoung: (value: object) => boolean;
+}
+
+const MINOR = { type: 'minor' } as const;
+
+/**
+ * d8's functions that a count of array buffers needs, or undefined where d8
+ * started without one of the flags that add them, or its collections don't
+ * move objects as the count needs
+ */
+function collectorOfShell(): Collector | undefined {
+    const shell = globalThis as {
+        readonly getV8Statistics?: unknown;
+        readonly gc?: unknown;
+    };
+    const { getV8Statistics, gc } = shell;
+    const isYoung = compileIsYoung();
+    if (
+        typeof getV8Statistics !== 'function' ||
+        typeof gc !== 'function' ||
+        isYoung == null
+    ) {
+        return undefined;
+    }
+
+    const collector = {
+        statistics: getV8Statistics as Collector['statistics'],
+        collect: gc as Collector['collect'],
+        isYoung
+    };
+    const { amount_of_external_allocated_memory: external } =
+        collector.statistics();
+
+    return Number.isFinite(external) && movesSurvivors(collector)
+        ? collector
+        : undefined;
+}
+
+/**
+ * `%InYoungGeneration()` of V8's natives, or undefined where d8 started
+ * without `--allow-natives-syntax`, which a natives call needs to parse
+ */
+function compileIsYoung(): Collector['isYoung'] | undefined {
+    try {
+        // oxlint-disable-next-line typescript/no-implied-eval -- A natives call, which parses only with --allow-natives-syntax
+        return new Function(
+            'value',
+            'return %InYoungGeneration(value)'
+        ) as Collector['isYoung'];
+    } catch {
+        return undefined;
+    }
+}
+
+/**
+ * Whether V8 moves an object out of its young generation at each collection
+ * once the object has survived a scavenge, which is how a count sees that a
+ * collection happened. A scavenge keeps an object that it finds alive for
+ * the first time in the young generation, and promotes it to the old at the
+ * second, and a full collection promotes every young object that's alive.
+ * With `--minor-ms`, V8 collects the young generation without moving its
+ * objects, and a count couldn't see those collections.
+ */
+function movesSurvivors({ collect, isYoung }: Collector): boolean {
+    const scavenged = {};
+    collect(MINOR);
+    const keptYoung = isYoung(scavenged);
+    collect(MINOR);
+    const promoted = !isYoung(scavenged);
+
+    const collected = {};
+    collect(MINOR);
+    collect();
+    return keptYoung && promoted && !isYoung(collected);
+}
+
+/**
+ * A count of array buffers has nothing to wait for: `startCountingBuffers()`
+ * finishes V8's sweeping of buffers itself, after the variant's setup, which
+ * can collect too.
+ */
+function settled(): Promise<void> {
+    return Promise.resolve();
+}
+
+/**
+ * Starts counting the bytes of array buffers that V8 allocates outside its
+ * heap: what its account of external bytes grows by. V8 takes the bytes of
+ * the buffers that a collection found dead off that account after the
+ * collection, when it next allocates a buffer and its sweeping of buffers
+ * has finished. So a sample in which a collection happens can count too
+ * few, or less than none. In d8 15.8.62.9 on an Apple M2 Pro, 83 of 100
+ * samples of 100,000 calls that each allocated a 1 KiB `Uint8Array` counted
+ * 353 bytes a call. d8 can't tell how many bytes V8 took off, as Node's
+ * `GCProfiler` can't, so a count is null if a collection happened.
+ *
+ * A sentinel object shows whether one did. It survives a scavenge before
+ * the sample, so that any collection during the sample moves it out of the
+ * young generation, as `movesSurvivors()` checks. That scavenge also
+ * empties the young generation, so that fewer samples start one. In the
+ * same d8, of 4,254 samples of calls that allocated from nothing to 16 MiB
+ * of buffers, V8's `--trace-gc` printed collections in 1,975, of which 157
+ * had a mark-compact, and the sentinel had moved in each of them. The 2,016
+ * samples that counted were each right. Two other signs of a collection
+ * miss some: a `WeakRef` made before the sample, to an object that only it
+ * held, missed 50 of 2,213 samples with collections, and V8's count of the
+ * heap's bytes after the last collection, with `--map-counters`, missed 3,
+ * where two collections left the same bytes. A sample that they miss can
+ * count wrong, as 23 of the `WeakRef`'s 50 did.
+ *
+ * A count is null too if the account fell without a collection that the
+ * sentinel saw, as when the variant detaches a buffer.
+ */
+function startCountingBuffers({
+    statistics,
+    collect,
+    isYoung
+}: Collector): () => number | null {
+    const sentinel = {};
+    collect(MINOR);
+
+    // Each read walks the heap after it reads, which finishes the sweeping
+    // of buffers that the scavenge found dead, so the second reads after it
+    statistics();
+    const before = statistics().amount_of_external_allocated_memory;
+    const survived = isYoung(sentinel);
+
+    return () => {
+        const after = statistics().amount_of_external_allocated_memory;
+        const collected = !survived || !isYoung(sentinel);
+
+        return collected || after < before ? null : after - before;
     };
 }

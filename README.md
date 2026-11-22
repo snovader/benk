@@ -813,10 +813,10 @@ do, and Node 26.13.0 has small integers of 32 bits.
 `benk/d8` exports d8's `bench()` and runtime, and loads none of Node's
 modules:
 
-| Export                    | What it does                                                                                               |
-| ------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| `bench(groups, options?)` | Runs a benchmark script in d8, as `benk`'s `bench()` does in Node, with the options that d8 can carry out. |
-| `D8Runtime`               | Times variants in d8, each in a timer loop that `new Function` compiles, as in Node.                       |
+| Export                    | What it does                                                                                                                                   |
+| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `bench(groups, options?)` | Runs a benchmark script in d8, as `benk`'s `bench()` does in Node, with the options that d8 can carry out.                                     |
+| `D8Runtime`               | Times variants in d8, each in a timer loop that `new Function` compiles, as in Node, and with three of d8's flags counts array buffers' bytes. |
 
 d8 reads an import as a path, not as a package's name. So a script imports
 benk's bundle from `node_modules`, as this one, `bench.mjs`, does:
@@ -880,7 +880,7 @@ fails to load a value, such as `51`, as another script.
 | `--rounds`, `--warmup-rounds`, `--sample-ms`, `--filter`, `--no-aa` | As in Node.                                                                                                                                           |
 | `--json <path>`                                                     | Writes the file with d8's `writeFile()`. benk checks the path by writing the file before it measures, as d8 can't check a directory.                  |
 | `--json -`                                                          | Writes the JSON to stdout with d8's `write()`, and the tables to stderr with `printErr()`.                                                            |
-| `--no-heap`                                                         | Changes nothing. d8 counts no bytes, so a run in d8 records `heap: false` with or without it.                                                         |
+| `--no-heap`                                                         | Turns off the count of array buffers, where d8 counts them, as [Bytes in d8](#bytes-in-d8) describes. Otherwise it changes nothing.                   |
 | `--v8-report`, `--v8-filter`                                        | Throws before it measures: [V8's report](#v8s-report) runs the script again in Node. d8 takes V8's trace flags itself, as `d8 --trace-opt bench.mjs`. |
 
 To check the path of `--json`, benk writes the file again with the bytes
@@ -890,15 +890,17 @@ none.
 
 What a run in d8 reports differs from Node's:
 
-- **heap** and **buffers**: d8 has no API that counts bytes, so the columns
-  show `–`, and `heapBytes` and `arrayBufferBytes` are null. `bench()`
-  records `heap: false`, so the description leaves the bytes out. A script
-  that calls `measureGroups()` with a `D8Runtime` records its `heap` option,
+- **heap** shows `–`, and `heapBytes` is null. **buffers** shows `–` too,
+  and `arrayBufferBytes` is null, unless d8 started with the three flags of
+  [Bytes in d8](#bytes-in-d8). Where it counts neither, `bench()` records
+  `heap: false`, so the description leaves the bytes out. A script that
+  calls `measureGroups()` with a `D8Runtime` records its `heap` option,
   which is on by default, and its description lists the bytes anyway.
 - **The runtime's description** gives `unknown` for the architecture, the
-  processor and the flags that d8 started with, which d8 can't read. The
-  platform is d8's name for the operating system, such as `macos`, where
-  Node's is `darwin`.
+  processor and the flags that d8 started with, which d8 can't read. Where
+  it counts array buffers, the flags are the three that the count needs,
+  and `unknown` for any others. The platform is d8's name for the operating
+  system, such as `macos`, where Node's is `darwin`.
 - **The process state** records the bits of the small integers. d8 has no
   property that says, but its serializer writes 2³⁰ as an integer where they
   have 32 bits, and as a double where they have 31. With 31, integers from
@@ -920,6 +922,105 @@ needs bundling into one module first. A `bench.ts` that did so ran as
 ```sh
 rolldown bench.ts --file bench.mjs
 ```
+
+#### Bytes in d8
+
+d8 counts no heap bytes. A collection during a sample frees bytes, which
+Node's runtime adds back from a `GCProfiler`. d8 has nothing that reports
+what a collection freed. V8's statistics give the heap's used bytes, which
+fall at each scavenge. In d8 15.8.62.9, calls that each allocated an object
+of 20 bytes counted 20.15 bytes a call in samples of 10,000 calls, and
+−78.13 in one during which a scavenge ran. Samples of 100,000 calls or
+more, each with scavenges, counted from −0.62 to 0.12.
+
+d8 counts array buffers' bytes when it starts with three of its flags. This
+script, `copy.mjs`, copies an array, on the heap and into a typed array:
+
+```js
+import { bench } from './node_modules/benk/dist/d8.js';
+
+const numbers = Array.from({ length: 1000 }, (_, i) => Math.sin(i));
+
+await bench([
+    {
+        name: 'copy 1,000 numbers',
+        variants: [
+            { name: 'slice', run: () => numbers.slice() },
+            { name: 'Float64Array.from', run: () => Float64Array.from(numbers) }
+        ]
+    }
+]);
+```
+
+Run it with the flags before the script:
+
+```sh
+d8 --expose-statistics --expose-gc --allow-natives-syntax copy.mjs
+```
+
+```text
+d8 15.8.62.9, V8 15.8.62.9, macos unknown, unknown, with --allow-natives-syntax --expose-gc --expose-statistics unknown. Process state: 31-bit small integers.
+Per call, of at least 31 interleaved rounds of 1 ms per variant after 10 warm-up rounds, in an order that rotates each variant through each position:
+the fastest and median round, the interquartile range as a share of the median, the ratio to the group's first variant by the statistic that the group leads with, a 95% interval of the median of the per-round ratios, and the bytes allocated on the heap and in array buffers outside it.
+
+copy 1,000 numbers: 36 rounds, by the median round (a call allocating 1 KiB or more)
+                       fastest     median   spread    ratio   95% interval        heap     buffers
+  slice                 171 ns     199 ns    24.5%    1.00×                          –         0 B
+  Float64Array.from     652 ns     790 ns    37.4%    3.90×      3.58–4.40           –     8,000 B
+  slice A/A             165 ns     234 ns    29.6%    1.00×      0.99–1.22           –         0 B
+```
+
+This is one of 3 runs on an Apple M2 Pro, with Homebrew's d8 15.8.62.9 and
+a load average near 8. The ratios of `Float64Array.from` were 4.04, 3.81
+and 3.90. Without the flags, the group led with the fastest round, as calls
+under 1 µs that allocate little.
+
+What each flag adds:
+
+| Flag                     | What the count takes from it                                                                         |
+| ------------------------ | ---------------------------------------------------------------------------------------------------- |
+| `--expose-statistics`    | `getV8Statistics()`, whose account of the bytes outside V8's heap holds the contents of the buffers. |
+| `--expose-gc`            | `gc()`, which runs a scavenge before each sample, so that an object of benk's survives one.          |
+| `--allow-natives-syntax` | `%InYoungGeneration()`, which shows whether that object has moved, as any collection moves it.       |
+
+V8 takes the bytes of dead buffers off its account after a collection, so a
+sample during which one ran can count too few. As in Node, such a sample
+doesn't count, and the next has half as many calls. `D8Runtime` looks for
+the three functions when it's created, and checks that a collection moves
+the object. Without them it counts no buffers, and **buffers** shows `–`.
+
+In 3 runs each of [`benchmarks/allocations/`](benchmarks/allocations/), on
+an Apple M2 Pro, d8 15.8.62.9 counted the same buffers as Node 26.13.0, in
+every run:
+
+| Call                     | heap in Node | buffers in Node | buffers in d8 |
+| ------------------------ | ------------ | --------------- | ------------- |
+| nothing                  | 0 B          | 0 B             | 0 B           |
+| a small object           | 32 B         | 0 B             | 0 B           |
+| a heap number            | 16 B         | 0 B             | 0 B           |
+| `Uint8Array` of 64 B     | 280 B        | 0 B             | 0 B           |
+| `Float64Array` of 1 KiB  | 200 B        | 1,024 B         | 1,024 B       |
+| `Float64Array` of 64 KiB | 200 B        | 65,536 B        | 65,536 B      |
+| `Float64Array` of 1 MiB  | 200 B        | 1,048,576 B     | 1,048,576 B   |
+
+The count has costs and gaps:
+
+- **Time.** Before each sample, benk runs a scavenge and reads V8's
+  statistics twice, and each read walks the heap. The 7 groups of
+  `benchmarks/allocations/` took 0.77–0.80 s with the count, and
+  0.65–0.66 s without, in 3 runs each: about 9 ms a variant. A walk takes
+  longer as the heap grows, 10 ms with 40 MB alive.
+- **The heap.** A call that allocates only on the heap shows `0 B` of
+  buffers, as `slice` does. Its group leads with the fastest round in d8
+  where it could lead with the median in Node.
+- **What V8 accounts.** The count reads all of V8's account of bytes
+  outside its heap, which differs from Node's count of array buffers:
+
+  | Allocation                                    | In d8       | In Node     |
+  | --------------------------------------------- | ----------- | ----------- |
+  | `SharedArrayBuffer` of 1 KiB                  | not counted | 1,024 B     |
+  | `WebAssembly.Memory` of 1 page                | 65,536 B    | not counted |
+  | resizable `ArrayBuffer` of 1 KiB, up to 4 KiB | 1,024 B     | not counted |
 
 ### Groups apart from the run
 

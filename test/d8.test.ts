@@ -1,11 +1,12 @@
 // d8's entry point, `benk/d8`: its runtime, which times variants in d8, the
 // V8 shell, and its `bench()`. The runtime's timer loops run in Node too,
 // and so does `bench()` with the arguments, runtime and output that a test
-// passes it, where the first tests run them. The runtime's description, and
-// `bench()`'s defaults, read d8's globals, so the others bundle
-// `d8-driver.ts` and run it in d8. They need `d8` on the PATH, as
-// `brew install v8` puts it, and are skipped without it, as in CI. Times
-// vary, so they check only what doesn't.
+// passes it, where the first tests run them. The runtime's description, its
+// count of array buffers, and `bench()`'s defaults, read d8's globals, so
+// the others bundle `d8-driver.ts` or `d8-buffers-driver.ts` and run it in
+// d8. They need `d8` on the PATH, as `brew install v8` puts it, and are
+// skipped without it, as in CI. Times vary, so they check only what
+// doesn't.
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -21,6 +22,9 @@ import { FakeRuntime } from './fake-runtime.ts';
 
 const QUICK = { sampleTime: 0.2, warmupRounds: 2, rounds: 6 };
 const QUICK_ARGS = ['--sample-ms', '0.2', '--warmup-rounds', '2', '--rounds', '6'];
+
+/** The flags of d8 that its runtime's count of array buffers needs */
+const BUFFER_FLAGS = ['--allow-natives-syntax', '--expose-gc', '--expose-statistics'];
 
 /** What d8 says of itself, and whether 2³⁰ is a small integer in it */
 interface Shell {
@@ -61,19 +65,23 @@ interface DriverError {
     readonly calls: number;
 }
 
-/** `d8-driver.ts`, bundled once */
-let driver: Promise<string> | undefined;
+/** A script that the tests run in d8 */
+type Driver = 'd8-driver' | 'd8-buffers-driver';
+
+/** The drivers, each bundled once */
+const drivers = new Map<Driver, Promise<string>>();
 
 /**
- * Bundles `d8-driver.ts` with benk as this process resolves it, from its
- * source or from its bundle
+ * Bundles a driver with benk as this process resolves it, from its source
+ * or from its bundle
  */
-async function bundleDriver(): Promise<string> {
+async function bundleDriver(name: Driver): Promise<string> {
     const { output } = await build({
-        input: join(import.meta.dirname, 'd8-driver.ts'),
+        input: join(import.meta.dirname, `${name}.ts`),
         platform: 'neutral',
         resolve: {
             alias: {
+                'benk/core': fileURLToPath(import.meta.resolve('benk/core')),
                 'benk/d8': fileURLToPath(import.meta.resolve('benk/d8'))
             }
         },
@@ -84,25 +92,38 @@ async function bundleDriver(): Promise<string> {
     return output[0].code;
 }
 
+interface DriverOptions {
+    /** `d8-driver.ts` by default */
+    readonly driver?: Driver;
+    /** d8's own flags, before the script */
+    readonly flags?: readonly string[];
+    /** The text or bytes of a `results.json` that the directory has before the run */
+    readonly results?: string | Uint8Array;
+}
+
 /**
- * Runs `d8-driver.ts` in d8, in a directory of its own, with the arguments
- * after `--`, and returns what it printed and wrote. `results` is the text
- * or bytes of a `results.json` that the directory has before the run.
+ * Runs a driver in d8, in a directory of its own, with d8's flags, and the
+ * arguments after `--`, and returns what it printed and wrote
  */
 async function runDriver(
     args: readonly string[],
-    results?: string | Uint8Array
+    { driver = 'd8-driver', flags = [], results }: DriverOptions = {}
 ): Promise<DriverRun> {
-    const code = await (driver ??= bundleDriver());
+    let code = drivers.get(driver);
+    if (code == null) {
+        code = bundleDriver(driver);
+        drivers.set(driver, code);
+    }
+
     const directory = mkdtempSync(join(tmpdir(), 'benk-d8-'));
     const resultsPath = join(directory, 'results.json');
     try {
-        writeFileSync(join(directory, 'driver.mjs'), code);
+        writeFileSync(join(directory, 'driver.mjs'), await code);
         if (results != null) {
             writeFileSync(resultsPath, results);
         }
 
-        const run = spawnSync('d8', ['driver.mjs', '--', ...args], {
+        const run = spawnSync('d8', [...flags, 'driver.mjs', '--', ...args], {
             cwd: directory,
             encoding: 'utf8'
         });
@@ -171,7 +192,7 @@ describe('D8Runtime', () => {
         }
     );
 
-    it('times sync and async calls, and counts no heap bytes', async () => {
+    it('times sync and async calls, and counts no bytes outside d8', async () => {
         let count = 0;
         const runtime = new D8Runtime();
         const result = await measureGroup(
@@ -186,10 +207,11 @@ describe('D8Runtime', () => {
         );
 
         expect(runtime.heap).toBeUndefined();
-        for (const { summary, heapBytes } of result.variants) {
+        expect(runtime.arrayBuffers).toBeUndefined();
+        for (const { summary, heapBytes, arrayBufferBytes } of result.variants) {
             expect(summary.fastest).toBeGreaterThan(0);
             expect(summary.fastest).toBeLessThan(1e6);
-            expect(heapBytes).toBeNull();
+            expect([heapBytes, arrayBufferBytes]).toStrictEqual([null, null]);
         }
         expect(expectPresent(result.timerResolution)).toBeGreaterThan(0);
     });
@@ -392,7 +414,7 @@ describe.runIf(shell)('benk/d8 in d8', () => {
         const missing = await runDriver([...QUICK_ARGS, '--json', 'missing/results.json']);
         const failed = await runDriver(
             [...QUICK_ARGS, '--filter', 'throws', '--json', 'results.json'],
-            'earlier'
+            { results: 'earlier' }
         );
 
         expect(driverError(missing)).toStrictEqual({
@@ -413,12 +435,101 @@ describe.runIf(shell)('benk/d8 in d8', () => {
         ]);
         const failed = await runDriver(
             [...QUICK_ARGS, '--filter', 'throws', '--json', 'results.json'],
-            earlier
+            { results: earlier }
         );
 
         expect(driverError(failed).error).toMatch(/throw/);
         expect(failed.results).toStrictEqual(earlier);
     });
+
+    it('counts the bytes of array buffers with the flags that it needs, and lists them', async () => {
+        const { version, platform, smallIntegerBits } = expectPresent(shell);
+        const { stdout, stderr } = await runDriver(
+            [...QUICK_ARGS, '--filter', '^buffers$', '--json', '-'],
+            { flags: BUFFER_FLAGS }
+        );
+        const result = JSON.parse(stdout) as RunResult;
+        const lines = stderr.split('\n');
+
+        expect(result.runtime.flags).toStrictEqual([...BUFFER_FLAGS, 'unknown']);
+        expect(result.options.heap).toBe(true);
+        expect(
+            result.groups[0].variants.map(({ heapBytes, arrayBufferBytes }) => [
+                heapBytes,
+                arrayBufferBytes
+            ])
+        ).toStrictEqual([
+            [null, 1024],
+            [null, 1024]
+        ]);
+        expect(result.groups[0]).toMatchObject({
+            lead: 'median',
+            leadReason: 'allocating calls'
+        });
+        expect(lines[0]).toBe(
+            `d8 ${version}, V8 ${version}, ${platform} unknown, unknown, with ${BUFFER_FLAGS.join(' ')} unknown. Process state: ${smallIntegerBits}-bit small integers.`
+        );
+        expect(lines[2]).toMatch(/in array buffers outside it\.$/);
+        expect(lines.find(line => line.startsWith('  Float64Array  '))).toMatch(/–\s+1,024 B$/);
+    });
+
+    it('counts no array buffers with --no-heap, or without one of the flags', async () => {
+        const runs = [
+            { flags: BUFFER_FLAGS, args: ['--no-heap'] },
+            ...BUFFER_FLAGS.map(left => ({
+                flags: BUFFER_FLAGS.filter(flag => flag !== left),
+                args: []
+            }))
+        ];
+
+        for (const { flags, args } of runs) {
+            const { stdout } = await runDriver(
+                [...QUICK_ARGS, '--filter', '^buffers$', '--json', '-', ...args],
+                { flags }
+            );
+            const result = JSON.parse(stdout) as RunResult;
+            const label = [...flags, ...args].join(' ');
+
+            expect(result.options.heap, label).toBe(false);
+            expect(result.groups[0].variants[0].arrayBufferBytes, label).toBeNull();
+            expect(result.runtime.flags, label).toStrictEqual(
+                args.length > 0 ? [...BUFFER_FLAGS, 'unknown'] : ['unknown']
+            );
+        }
+    });
+
+    it.prop(
+        [
+            fc.uniqueArray(
+                fc.record({
+                    length: fc.oneof(
+                        fc.integer({ min: 0, max: 128 }),
+                        fc.integer({ min: 0, max: 1 << 20 })
+                    ),
+                    objects: fc.integer({ min: 0, max: 200 })
+                }),
+                {
+                    minLength: 1,
+                    maxLength: 4,
+                    selector: ({ length, objects }) => `${length}x${objects}`
+                }
+            )
+        ],
+        { numRuns: 5 }
+    )(
+        "counts each call's bytes of array buffers, of more than 64, among scavenges",
+        async variants => {
+            const { stdout } = await runDriver(
+                variants.map(({ length, objects }) => `${length}x${objects}`),
+                { driver: 'd8-buffers-driver', flags: BUFFER_FLAGS }
+            );
+            const result = JSON.parse(stdout) as RunResult;
+
+            expect(
+                result.groups[0].variants.map(({ arrayBufferBytes }) => arrayBufferBytes)
+            ).toStrictEqual(variants.map(({ length }) => (length > 64 ? length : 0)));
+        }
+    );
 
     it('rejects --v8-report before it measures', async () => {
         const run = await runDriver([...QUICK_ARGS, '--v8-report', '--json', 'results.json']);
