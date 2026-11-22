@@ -226,6 +226,14 @@ export interface VariantResult {
      * counted, as when each call starts a garbage collection.
      */
     readonly arrayBufferBytes: number | null;
+    /**
+     * What V8 did with the variant's code in the traced run of
+     * `--v8-report`, as `VariantV8` describes. It's null where no report was
+     * made: without `--v8-report`, from `measureGroups()` and
+     * `measureGroup()`, in d8, and where the traced run had no group or
+     * variant of the same name.
+     */
+    readonly v8: VariantV8 | null;
 }
 
 /** Why a group's ratios compare the statistic that they do */
@@ -274,10 +282,217 @@ export interface RecordedOptions {
 /** A run's results, which `JSON.stringify` writes as they are */
 export interface RunResult {
     /** The version of this format, which changes when a field does */
-    readonly schema: 3;
+    readonly schema: 4;
     /** When the run started, as an ISO 8601 string */
     readonly date: string;
     readonly runtime: RuntimeDescription;
     readonly options: RecordedOptions;
     readonly groups: readonly GroupResult[];
+    /**
+     * V8's report of the run's traced run, which Node's `bench()` makes with
+     * `--v8-report`. It's null where no report was made: without the
+     * option, from `measureGroups()`, and in d8.
+     */
+    readonly v8Report: V8Report | null;
+}
+
+// V8's report, from a traced run of the script in another process, which
+// only Node's `bench()` makes. Its fields are plain data too: a size or a
+// position that V8 didn't give is null.
+
+/** A position in a script, with a line and column from 1 */
+export interface V8Position {
+    /** The script's URL, or '' for code compiled from a string */
+    readonly url: string;
+    readonly line: number;
+    readonly column: number;
+}
+
+/** A function, as V8's code log describes it */
+export interface V8Function {
+    /** Its name, or '' */
+    readonly name: string;
+    /** Whether it's a script's top level, rather than a function in it */
+    readonly topLevel: boolean;
+    /**
+     * Where it starts, in the source that its script's source map names, or
+     * null where V8's log hasn't the function
+     */
+    readonly position: V8Position | null;
+    /** The size of its bytecode, which Turbofan's limits count */
+    readonly bytecodeSize: number | null;
+}
+
+/** Something that happened, and how many times */
+export type V8Counted<T> = T & { readonly count: number };
+
+/** A tier that V8 compiled a function to */
+export interface V8Tier {
+    /** V8's name of the tier, such as `MAGLEV` or `TURBOFAN_JS` */
+    readonly tier: string;
+    /** Whether it compiled a running loop, for on-stack replacement */
+    readonly osr: boolean;
+}
+
+/** Turbofan's decision whether to inline a function into another */
+export interface V8Inlining {
+    /** The other function: the one called, or the one compiled */
+    readonly function: V8Function;
+    readonly inlined: boolean;
+    /** Why it didn't, where V8 said */
+    readonly reason: string | null;
+}
+
+/** A deoptimization of a function's optimized code */
+export interface V8Deoptimization {
+    /** The tier of the code that deoptimized */
+    readonly tier: string;
+    /** `deopt-eager`, `deopt-lazy` or `deopt-soft` */
+    readonly kind: string;
+    readonly reason: string;
+    /**
+     * Where it deoptimized, and then where each function that it was in was
+     * inlined, outwards
+     */
+    readonly positions: readonly V8Position[];
+}
+
+/** What V8 did with a function in the traced run */
+export interface V8FunctionReport extends V8Function {
+    readonly tiers: ReadonlyArray<V8Counted<V8Tier>>;
+    readonly deoptimizations: ReadonlyArray<V8Counted<V8Deoptimization>>;
+    /**
+     * Its Turbofan compilations' decisions of the functions that it calls,
+     * counted by compilation
+     */
+    readonly callees: ReadonlyArray<V8Counted<V8Inlining>>;
+    /** Other functions' Turbofan compilations' decisions of this one */
+    readonly callers: ReadonlyArray<V8Counted<V8Inlining>>;
+}
+
+/** A variant, by its group's name and its own */
+export interface V8VariantName {
+    readonly group: string;
+    readonly variant: string;
+}
+
+/** A deoptimization of a variant's code, and how many were in timed rounds */
+export interface V8VariantDeoptimization extends V8Deoptimization {
+    /** Whose code deoptimized: the variant's `run`'s, or a timer loop's */
+    readonly code: 'run' | 'loop';
+    readonly count: number;
+    /**
+     * How many of them were in the timed rounds of the variant's group, or
+     * null where the traces can't place the timed rounds, as on Windows,
+     * where V8's traces reach stdout in chunks of the C runtime's buffer
+     */
+    readonly timed: number | null;
+}
+
+/**
+ * What V8 did with a variant's code in the traced run, of the `bench()`
+ * call that measured it. The traced run reads where each variant's `run`
+ * starts. Its timer loops are those that the traces tie to that `run`: a
+ * loop whose Turbofan compilation considered it, or whose deoptimization was
+ * in it. Others, such as a loop that only Maglev compiled and that didn't
+ * deoptimize, aren't counted. Variants with the same `run`, as a group's
+ * reference and its A/A copy, share their loops.
+ */
+export interface VariantV8 {
+    /**
+     * Its `run`, or null where the traced run couldn't place it, as a
+     * builtin, or V8's log hasn't a function there
+     */
+    readonly run: V8Function | null;
+    /** The tiers that V8 compiled its `run` to, on its own */
+    readonly runTiers: ReadonlyArray<V8Counted<V8Tier>>;
+    /** Its timer loops that the traces tie to its `run` */
+    readonly loops: number;
+    /** The tiers that V8 compiled those loops to */
+    readonly loopTiers: ReadonlyArray<V8Counted<V8Tier>>;
+    /**
+     * Turbofan's decisions in its loops' compilations: what it inlined into
+     * them, its `run` too, and what it didn't
+     */
+    readonly inlining: ReadonlyArray<V8Counted<V8Inlining>>;
+    /** The deoptimizations of its `run`'s code, and of its loops' */
+    readonly deoptimizations: readonly V8VariantDeoptimization[];
+    /**
+     * The other variants of the `bench()` call whose `run` is the same
+     * function, and whose loops these are too
+     */
+    readonly sharedWith: readonly V8VariantName[];
+}
+
+/**
+ * Turbofan's limits on inlining, from V8's flags, in bytes of bytecode, as
+ * the Node that ran the script has them
+ */
+export interface InliningLimits {
+    /** `--max-inlined-bytecode-size`: a function that Turbofan inlines */
+    readonly maxInlinedBytecodeSize: number;
+    /**
+     * `--max-inlined-bytecode-size-cumulative`: the functions that one
+     * compilation inlines, in all
+     */
+    readonly maxInlinedBytecodeSizeCumulative: number;
+    /**
+     * `--max-inlined-bytecode-size-small`: a small function, which Turbofan
+     * inlines beyond the cumulative limit
+     */
+    readonly maxInlinedBytecodeSizeSmall: number;
+}
+
+/**
+ * A function of the script whose bytecode is over a limit: Turbofan's, for
+ * a function that it considered inlining, or the user's, for a function that
+ * it compiled or considered
+ */
+export interface V8SizeFailure {
+    readonly kind: 'over budget' | 'over limit';
+    readonly function: V8Function;
+    /** The limit, in bytes of bytecode */
+    readonly limit: number;
+    /** The functions whose Turbofan compilations considered inlining it */
+    readonly consideredFor: readonly V8Function[];
+}
+
+/** A deoptimization in a group's timed rounds, of the script's code */
+export interface V8DeoptimizationFailure {
+    readonly kind: 'deoptimized';
+    readonly group: string;
+    /** The function whose code deoptimized */
+    readonly function: V8Function;
+    readonly deoptimization: V8Deoptimization;
+    readonly count: number;
+}
+
+export type V8Failure = V8SizeFailure | V8DeoptimizationFailure;
+
+/** The check of `--v8-check`, of the functions that the report lists */
+export interface V8Check {
+    /** Whether no function failed it */
+    readonly passed: boolean;
+    /**
+     * Whether it checked for deoptimizations in the timed rounds, which it
+     * can't where the traces can't place them, as on Windows
+     */
+    readonly deoptimizationsChecked: boolean;
+    /** The user's limit of `--v8-max-bytecode`, or null */
+    readonly maxBytecodeSize: number | null;
+    readonly failures: readonly V8Failure[];
+}
+
+/** V8's report of a run, from its traced run */
+export interface V8Report {
+    /** The path of the script that was traced */
+    readonly script: string;
+    /** The source of `--v8-filter`, or '' */
+    readonly filter: string;
+    /** Turbofan's limits, or null where `node --v8-options` didn't give them */
+    readonly limits: InliningLimits | null;
+    /** The functions that the report lists, as its text does */
+    readonly functions: readonly V8FunctionReport[];
+    /** The check of `--v8-check`, or null without it */
+    readonly check: V8Check | null;
 }

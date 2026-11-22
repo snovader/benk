@@ -4,7 +4,7 @@
 import { registerHooks } from 'node:module';
 import { describe, expect } from 'hypotes';
 import { fc, it } from 'hypotes/fast-check';
-import type { AsyncTimer, Timer } from 'benk/core';
+import type { AsyncTimer, Group, Timer, Variant } from 'benk/core';
 import { expectClose } from './expectations.ts';
 import { FakeRuntime } from './fake-runtime.ts';
 
@@ -60,6 +60,63 @@ describe('benk/core', () => {
         expect(result.runtime).toStrictEqual(runtime.description);
         expect(result.groups.map(group => group.name)).toStrictEqual(['second']);
     });
+
+    it.prop([fc.integer({ min: 1, max: 12 }), fc.integer({ min: 0, max: 3 }), fc.boolean()])(
+        "calls onRounds just before each group's timed rounds, and just after them",
+        async (rounds, warmupRounds, heap) => {
+            const runtime = new FakeRuntime();
+            const events: string[] = [];
+            let calls = 0;
+            const counted = (name: string): Variant => {
+                const { run } = runtime.variant(name, 100);
+                return {
+                    name,
+                    run: () => {
+                        calls++;
+                        return run();
+                    }
+                };
+            };
+            const groups: Group[] = [
+                { name: 'first', variants: [counted('a'), counted('b')] },
+                { name: 'second', variants: [counted('c')] }
+            ];
+
+            const result = await measureGroups(groups, {
+                ...QUICK,
+                rounds,
+                warmupRounds,
+                heap,
+                aa: false,
+                runtime,
+                onRounds: (group, phase) => {
+                    events.push(`${phase} ${group.name}`);
+                    // Counts the calls of the timed rounds from 0
+                    if (phase === 'timed') {
+                        calls = 0;
+                    } else {
+                        events.push(`${calls} calls`);
+                    }
+                },
+                onGroup: group => events.push(`results ${group.name}`)
+            });
+
+            const timedCalls = result.groups.map(
+                group =>
+                    `${group.variants.reduce((sum, v) => sum + group.rounds * v.repetitions, 0)} calls`
+            );
+            expect(events).toStrictEqual([
+                'timed first',
+                'done first',
+                timedCalls[0],
+                'results first',
+                'timed second',
+                'done second',
+                timedCalls[1],
+                'results second'
+            ]);
+        }
+    );
 });
 
 /** A function expression of a timer loop, as a build step would write it */

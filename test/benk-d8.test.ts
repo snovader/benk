@@ -102,6 +102,14 @@ describe('benk-d8', () => {
             [
                 ['--d8=', D8_BUNDLE],
                 "TypeError: Expected the path of d8's binary in --d8=<path>, got --d8="
+            ],
+            [
+                [missing, D8_BUNDLE, '--', '--v8-check'],
+                "Error: Expected no --v8-check in benk-d8: V8's check needs Node's traced run"
+            ],
+            [
+                [missing, D8_BUNDLE, '--', '--v8-max-bytecode', '400'],
+                'Error: Expected no --v8-max-bytecode in benk-d8'
             ]
         ] as const) {
             const { status, stdout, stderr } = await runCommand(args);

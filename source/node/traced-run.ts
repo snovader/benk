@@ -3,7 +3,8 @@
 // what its compilers do. `v8-trace.ts` parses what the run writes, and
 // `v8-report.ts` reports it, as `reportTracedRun()` puts them together. A run
 // in Node records the source maps of its scripts before its `bench()`
-// returns, as `source-maps.ts` reads them.
+// returns, as `source-maps.ts` reads them, and marks its calls of `bench()`
+// among the traces, as `traced-markers.ts` describes.
 import { spawn } from 'node:child_process';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -11,10 +12,22 @@ import { dirname, join } from 'node:path';
 import {
     readSourceMapFile,
     readSourceMaps,
-    type SourceMapFile
+    type SourceMapFile,
+    type SourceMaps
 } from './source-maps.ts';
-import { formatV8Report, reportFunctions, tracedScripts } from './v8-report.ts';
-import { parseCodeLog, parseTrace } from './v8-trace.ts';
+import { readTracedOutput, type MarkedOutput } from './traced-markers.ts';
+import {
+    formatV8Report,
+    isScriptUrl,
+    reportFunctions,
+    tracedScripts,
+    type FunctionReport
+} from './v8-report.ts';
+import {
+    parseCodeLog,
+    type FunctionAddress,
+    type LoggedFunction
+} from './v8-trace.ts';
 
 /**
  * The environment variable that marks the traced run in Node. `bench()`
@@ -312,10 +325,55 @@ export interface TracedReportOptions {
  */
 export async function reportTracedRun(
     script: string,
+    traced: TracedOutput,
+    options: TracedReportOptions
+): Promise<string[]> {
+    const { reports, sourceMaps } = await readTracedReport(
+        script,
+        traced,
+        options
+    );
+
+    return formatV8Report(reports, {
+        ...options,
+        script,
+        directory: process.cwd(),
+        sourceMaps
+    });
+}
+
+/** What a traced run says, as V8's report reads it */
+export interface TracedReport {
+    /** V8's traces, placed by the run's markers where they're in order */
+    readonly marked: MarkedOutput;
+    /** The functions of V8's code log, by their addresses */
+    readonly logged: ReadonlyMap<FunctionAddress, LoggedFunction>;
+    readonly sourceMaps: SourceMaps;
+    /** The functions that the report lists, which the filter selects */
+    readonly reports: FunctionReport[];
+    /**
+     * Whether a script is the benchmark's, or a module that it imports,
+     * rather than Node's own, benk's, or code compiled from a string
+     */
+    readonly isScript: (url: string) => boolean;
+}
+
+/**
+ * Reads a traced run's traces and code log, and the source maps of its
+ * scripts, and lists the functions of the report, as `reportTracedRun()`
+ * reports them. The markers of a run in Node place its traces, as
+ * `readTracedOutput()` describes. A run in d8 writes none.
+ *
+ * @throws {Error} If the traces have none of V8's compilations, or the log
+ * none of its functions, as when V8 changed their formats.
+ */
+export async function readTracedReport(
+    script: string,
     { output, codeLog, sourceMapFiles }: TracedOutput,
     { filter, engine }: TracedReportOptions
-): Promise<string[]> {
-    const trace = parseTrace(output);
+): Promise<TracedReport> {
+    const marked = readTracedOutput(output);
+    const { trace } = marked;
     const logged = parseCodeLog(codeLog);
     if (trace.compilations.length === 0 || logged.size === 0) {
         // A line that V8 wrote of a compilation, which says what it wrote
@@ -332,18 +390,20 @@ export async function reportTracedRun(
         tracedScripts(trace, logged),
         sourceMapFiles
     );
+    const benk = benkDirectory();
     const reports = reportFunctions(trace, logged, {
-        benkDirectory: benkDirectory(),
+        benkDirectory: benk,
         filter,
         sourceMaps
     });
-    return formatV8Report(reports, {
-        script,
-        directory: process.cwd(),
-        filter,
+
+    return {
+        marked,
+        logged,
         sourceMaps,
-        engine
-    });
+        reports,
+        isScript: url => isScriptUrl(url, benk)
+    };
 }
 
 /**

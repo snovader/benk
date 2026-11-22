@@ -54,6 +54,9 @@ declare function writeFile(path: string, data: string | ArrayBuffer): void;
  *   which implies it: d8 can't start the process that runs the script
  *   again. The command `benk-d8` runs a script in d8 from Node, and
  *   carries them out itself.
+ * - `--v8-check` is an error too, as is `--v8-max-bytecode`, which implies
+ *   it, in `benk-d8` as well: the check needs Node's traced run, which
+ *   reads where each variant's `run` starts, and marks the timed rounds.
  * - A run counts bytes only with a runtime that counts them. `D8Runtime`
  *   counts array buffers only where d8 started with the flags that it
  *   describes, and never heap bytes. A run that counts neither records
@@ -64,7 +67,8 @@ declare function writeFile(path: string, data: string | ArrayBuffer): void;
  * malformed, as `measureGroups()` describes.
  * @throws {RangeError} If a number is out of its range.
  * @throws {SyntaxError} If a filter isn't a regular expression.
- * @throws {Error} With `--v8-report` or `--v8-filter`, or if the JSON's file can't be
+ * @throws {Error} With `--v8-report`, `--v8-check` or an option that implies
+ * either, or if the JSON's file can't be
  * written, which it checks before it measures, if the runtime's clock reads
  * no time, or if a variant throws, with its error as the cause.
  */
@@ -72,9 +76,15 @@ export async function bench(
     groups: Iterable<Group>,
     options: BenchOptions = {}
 ): Promise<RunResult> {
-    const { json, v8Report, v8Filter, ...command } = parseOptions(
-        options.args ?? scriptArguments()
-    );
+    const { json, v8Report, v8Filter, v8Check, v8MaxBytecode, ...command } =
+        parseOptions(options.args ?? scriptArguments());
+    if (v8Check) {
+        const option =
+            v8MaxBytecode == null ? '--v8-check' : '--v8-max-bytecode';
+        throw new Error(
+            `Expected no ${option} in d8, nor in benk-d8: V8's check needs Node's traced run, of a script that calls benk's bench()`
+        );
+    }
     if (v8Report) {
         throw new Error(
             `Expected no --v8-report${v8Filter == null ? '' : ' or --v8-filter'} in d8, which can't run the script again: run it with benk-d8, as benk-d8 bench.mjs -- --v8-report`

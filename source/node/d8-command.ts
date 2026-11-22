@@ -60,13 +60,23 @@ const TRACED_RUN_OPTIONS: OptionNames = {
  * @throws {RangeError} If a number of the script's options is out of its
  * range.
  * @throws {SyntaxError} If a filter isn't a regular expression.
- * @throws {Error} If d8 can't be started, as when the PATH has no `d8`, or
- * if the traced run fails, or writes no traces, as `runTracedInD8()` and
- * `reportTracedRun()` describe.
+ * @throws {Error} With `--v8-check` or `--v8-max-bytecode`, before d8
+ * runs: the check needs Node's traced run. If d8 can't be started, as when
+ * the PATH has no `d8`, or if the traced run fails, or writes no traces, as
+ * `runTracedInD8()` and `reportTracedRun()` describe.
  */
 export async function runD8Command(args: readonly string[]): Promise<number> {
     const run = readCommand(args);
-    const { json, v8Report, v8Filter } = parseOptions(run.args);
+    const { json, v8Report, v8Filter, v8Check, v8MaxBytecode } = parseOptions(
+        run.args
+    );
+    if (v8Check) {
+        const option =
+            v8MaxBytecode == null ? '--v8-check' : '--v8-max-bytecode';
+        throw new Error(
+            `Expected no ${option} in benk-d8: V8's check needs Node's traced run, which reads where each variant's run starts, and marks the timed rounds`
+        );
+    }
     const print = json === '-' ? printError : printLine;
 
     const exit = await runD8({
