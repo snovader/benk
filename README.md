@@ -518,6 +518,9 @@ same.
   function or a deoptimization in. That's the file that the script's last
   `//# sourceMappingURL=` comment names, beside the script, or the map
   inline, as a `data:` URL.
+- The comment has to start its line, as bundlers write it. That tells it
+  from the same text in a string, which V8 doesn't read either. A comment
+  after code on its line, which V8 reads, isn't read.
 - It reads them right after the traced run, before `bench()` returns, so
   a script that deletes its bundle afterwards still has the report in its
   sources.

@@ -12,9 +12,12 @@ import type { SourcePosition } from './v8-trace.ts';
 /**
  * The comment that names a script's source map, as
  * `//# sourceMappingURL=bench.mjs.map`, which captures its URL. The last one
- * counts, wherever it is, as with Node's `--enable-source-maps`.
+ * counts. V8 reads only a comment, and not the same text in a string, as of
+ * a library that writes source maps. Without parsing the script, a line
+ * that starts with the comment, as bundlers write it, tells it from one in
+ * a string. One after code on its line, which V8 reads too, isn't read.
  */
-const SOURCE_MAPPING_URL = /\/\/[#@]\s+sourceMappingURL=(\S+)/g;
+const SOURCE_MAPPING_URL = /^[ \t]*\/\/[#@][ \t]+sourceMappingURL=(\S+)/gm;
 
 /** A data URL, which captures its parameters and its data */
 const DATA_URL = /^data:([^,]*),(.*)$/s;
@@ -61,8 +64,8 @@ export class SourceMaps {
 /**
  * Reads the source maps of scripts, by the URLs or paths that V8 names them
  * by. A script's source map is the file that its last
- * `//# sourceMappingURL=` comment names, beside it, or the map inline, as a
- * data URL. A script that isn't a file, as Node's own modules, or that names
+ * `//# sourceMappingURL=` comment names, at the start of a line, beside the
+ * script, or the map inline, as a data URL. A script that isn't a file, as Node's own modules, or that names
  * no source map, keeps its positions.
  *
  * So does a script whose source map can't be read, and `unread()` says why.
@@ -218,7 +221,10 @@ function fileOf(script: string): URL | undefined {
     return isAbsolute(script) ? pathToFileURL(script) : undefined;
 }
 
-/** The URL of the last `//# sourceMappingURL=` comment of a script */
+/**
+ * The URL of the last `//# sourceMappingURL=` comment of a script, at the
+ * start of a line
+ */
 function lastReference(code: string): string | undefined {
     let reference: string | undefined;
     for (const [, url] of code.matchAll(SOURCE_MAPPING_URL)) {

@@ -155,12 +155,13 @@ describe('readSourceMaps', () => {
         });
     });
 
-    it('reads the last comment that names a source map, in a script whose lines end in \\r\\n', async () => {
+    it('reads the last comment that names a source map at the start of a line, in a script whose lines end in \\r\\n', async () => {
         const files = {
             'bundle.js': [
-                "const text = '//# sourceMappingURL=other.map';",
+                '//# sourceMappingURL=other.map',
                 CODE,
-                '//# sourceMappingURL=bundle.js.map',
+                '  //# sourceMappingURL=bundle.js.map',
+                'const after = 1;',
                 ''
             ].join('\r\n'),
             'bundle.js.map': JSON.stringify(sourceMap(['source.ts'], [[], LINE]))
@@ -175,6 +176,26 @@ describe('readSourceMaps', () => {
                 url: urlOf(directory, 'source.ts'),
                 line: 3,
                 column: 17
+            });
+        });
+    });
+
+    it('reads no source map of the same text in a string, as V8 reads none', async () => {
+        const files = {
+            'library.mjs': [CODE, "const comment = '\\n//# sourceMappingURL=other.map';", ''].join(
+                '\n'
+            )
+        };
+
+        await inDirectory(files, async directory => {
+            const url = urlOf(directory, 'library.mjs');
+            const maps = await readSourceMaps([url]);
+
+            expect(maps.unread()).toStrictEqual(new Map());
+            expect(maps.original({ url, line: 1, column: 10 })).toStrictEqual({
+                url,
+                line: 1,
+                column: 10
             });
         });
     });
