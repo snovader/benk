@@ -28,6 +28,7 @@ function variant(
         interval: null,
         heapBytes: 0,
         arrayBufferBytes: 0,
+        v8: null,
         ...fields
     };
 }

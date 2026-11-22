@@ -50,8 +50,9 @@ declare function writeFile(path: string, data: string | ArrayBuffer): void;
  * - `--json <path>` writes the file with d8's `writeFile()`. d8 has no
  *   check of a directory, so `bench()` checks the path before it measures
  *   by writing the file: with the bytes that it has, or empty.
- * - `--v8-report` is an error, before it measures, as is `--v8-filter`,
- *   which implies it: the report runs the script again in Node.
+ * - `--v8-report` is an error, before it measures, as are `--v8-filter`,
+ *   `--v8-check` and `--v8-max-bytecode`, which imply it: the report runs
+ *   the script again in Node.
  * - A run counts bytes only with a runtime that counts them, which
  *   `D8Runtime` doesn't. Its results then record `heap: false`, with or
  *   without `--no-heap`, and its description leaves the bytes out.
@@ -60,7 +61,7 @@ declare function writeFile(path: string, data: string | ArrayBuffer): void;
  * malformed, as `measureGroups()` describes.
  * @throws {RangeError} If a number is out of its range.
  * @throws {SyntaxError} If a filter isn't a regular expression.
- * @throws {Error} With `--v8-report` or `--v8-filter`, or if the JSON's file can't be
+ * @throws {Error} With `--v8-report` or an option that implies it, or if the JSON's file can't be
  * written, which it checks before it measures, if the runtime's clock reads
  * no time, or if a variant throws, with its error as the cause.
  */
@@ -68,12 +69,17 @@ export async function bench(
     groups: Iterable<Group>,
     options: BenchOptions = {}
 ): Promise<RunResult> {
-    const { json, v8Report, v8Filter, ...command } = parseOptions(
-        options.args ?? scriptArguments()
-    );
+    const { json, v8Report, v8Filter, v8Check, v8MaxBytecode, ...command } =
+        parseOptions(options.args ?? scriptArguments());
     if (v8Report) {
+        // The option that implies --v8-report, of those given
+        const implying = [
+            v8Filter == null ? undefined : '--v8-filter',
+            v8MaxBytecode == null ? undefined : '--v8-max-bytecode',
+            v8Check && v8MaxBytecode == null ? '--v8-check' : undefined
+        ].filter(option => option != null);
         throw new Error(
-            `Expected no --v8-report${v8Filter == null ? '' : ' or --v8-filter'} in d8: V8's report runs the script again in Node`
+            `Expected no ${['--v8-report', ...implying].join(' or ')} in d8: V8's report runs the script again in Node`
         );
     }
     const runtime = options.runtime ?? new D8Runtime();

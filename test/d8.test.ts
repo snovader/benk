@@ -244,11 +244,18 @@ describe('bench of benk/d8', () => {
                 ...(aa ? [] : ['--no-aa']),
                 ...(heap ? [] : ['--no-heap'])
             ];
-            const { json, v8Report, v8Filter, ...parsed } = parseOptions(args);
+            const { json, v8Report, v8Filter, v8Check, v8MaxBytecode, ...parsed } =
+                parseOptions(args);
 
             const result = await bench(groups(runtime), { args, runtime, print: () => undefined });
 
-            expect([json, v8Report, v8Filter]).toStrictEqual([undefined, false, undefined]);
+            expect([json, v8Report, v8Filter, v8Check, v8MaxBytecode]).toStrictEqual([
+                undefined,
+                false,
+                undefined,
+                false,
+                undefined
+            ]);
             expect(result.options).toStrictEqual({
                 ...parsed,
                 filter: parsed.filter?.source ?? ''
@@ -289,10 +296,12 @@ describe('bench of benk/d8', () => {
         expect(printed.some(line => line.startsWith('second: '))).toBe(true);
     });
 
-    it('rejects --v8-report, --v8-filter and mistaken arguments before it measures', async () => {
+    it("rejects V8's report's options and mistaken arguments before it measures", async () => {
         for (const [args, error] of [
-            [['--v8-report'], /--v8-report in d8/],
-            [['--v8-filter', 'sum'], /--v8-report or --v8-filter in d8/],
+            [['--v8-report'], /no --v8-report in d8/],
+            [['--v8-filter', 'sum'], /no --v8-report or --v8-filter in d8/],
+            [['--v8-check'], /no --v8-report or --v8-check in d8/],
+            [['--v8-max-bytecode', '400'], /no --v8-report or --v8-max-bytecode in d8/],
             [['--round', '6'], TypeError],
             [['--rounds', '0'], RangeError]
         ] as const) {

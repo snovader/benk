@@ -7,6 +7,16 @@
 import { relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { formatBytes } from '#source/core/report';
+import type {
+    GroupResult,
+    InliningLimits,
+    V8Check,
+    V8Counted,
+    V8Failure,
+    V8Tier,
+    V8VariantDeoptimization,
+    VariantResult
+} from '#source/core/types';
 import type { SourceMaps } from './source-maps.ts';
 import type {
     Compilation,
@@ -130,10 +140,26 @@ export function reportFunctions(
     logged: ReadonlyMap<FunctionAddress, LoggedFunction>,
     { benkDirectory, filter, sourceMaps }: ReportOptions
 ): FunctionReport[] {
-    const original = (position: SourcePosition): SourcePosition =>
-        sourceMaps?.original(position) ?? position;
-    const functions = new FunctionTable(logged, tracedSizes(trace), original);
     const isScript = (url: string): boolean => isScriptUrl(url, benkDirectory);
+
+    const reported = collectFunctions(trace, logged, sourceMaps).filter(
+        report => isReported(report, isScript, filter)
+    );
+    return reported.sort((a, b) => comparePlaces(a, b, isScript));
+}
+
+/**
+ * What V8 did with each function that the traces name, by the order of its
+ * first line, whether the report lists it or not. Its positions are in the
+ * sources that the scripts' source maps name, where they name one.
+ */
+export function collectFunctions(
+    trace: V8Trace,
+    logged: ReadonlyMap<FunctionAddress, LoggedFunction>,
+    sourceMaps?: SourceMaps
+): FunctionReport[] {
+    const original = originalOf(sourceMaps);
+    const functions = new FunctionTable(logged, tracedSizes(trace), original);
 
     for (const compilation of trace.compilations) {
         functions.of(compilation).addTier(compilation);
@@ -148,10 +174,17 @@ export function reportFunctions(
         addDecisions(functions, compilation);
     }
 
-    const reported = functions
-        .reports()
-        .filter(report => isReported(report, isScript, filter));
-    return reported.sort((a, b) => comparePlaces(a, b, isScript));
+    return functions.reports();
+}
+
+/**
+ * The position in the source that a script's source map names, or the
+ * position itself where there's none
+ */
+export function originalOf(
+    sourceMaps: SourceMaps | undefined
+): (position: SourcePosition) => SourcePosition {
+    return position => sourceMaps?.original(position) ?? position;
 }
 
 /**
@@ -220,6 +253,176 @@ export function formatV8Report(
         ...heading,
         ...reports.flatMap(report => formatFunction(report, directory))
     ];
+}
+
+/**
+ * The lines of each group's variants, from the V8 fields of the results:
+ * where V8 placed each variant's `run`, the tiers that it compiled the run
+ * to on its own, the timer loops that the traces tie to the run, what
+ * Turbofan inlined into them, and the deoptimizations of both
+ */
+export function formatVariants(
+    groups: readonly GroupResult[],
+    { directory, isScript }: VariantFormat
+): string[] {
+    return [
+        '',
+        "By variant, of the tables: where V8 placed its run, the tiers that V8 compiled the run to on its own, and its timer loops that the traces tie to the run, with their tiers, what Turbofan inlined into them of the script's functions, and the deoptimizations of both.",
+        ...groups.flatMap(group => [
+            group.name,
+            ...group.variants.flatMap(variant =>
+                formatVariant(variant, group.name, { directory, isScript })
+            )
+        ])
+    ];
+}
+
+/** How the lines of each variant write its functions */
+export interface VariantFormat {
+    /** The directory that the paths are relative to */
+    readonly directory: string;
+    /**
+     * Whether a script is the benchmark's, of whose functions the lines
+     * write Turbofan's decisions. Node's, such as those of
+     * `performance.now()`, which each timer loop calls, are left out.
+     */
+    readonly isScript: (url: string) => boolean;
+}
+
+function formatVariant(
+    { name, v8 }: VariantResult,
+    group: string,
+    { directory, isScript }: VariantFormat
+): string[] {
+    if (v8 == null) {
+        return [`  ${name}: not in the traced run`];
+    }
+
+    const run =
+        v8.run == null
+            ? 'a run without a position, as a builtin'
+            : `${formatName(v8.run, directory)}${formatSize(v8.run.bytecodeSize)}`;
+    const shared = v8.sharedWith.map(other =>
+        other.group === group
+            ? other.variant
+            : `${other.variant} of ${other.group}`
+    );
+    const loops =
+        v8.loops === 0
+            ? 'no timer loop that the traces tie to its run'
+            : [
+                  `${v8.loops} timer loop${v8.loops === 1 ? '' : 's'}`,
+                  ...(shared.length > 0
+                      ? [`also of ${shared.join(', ')}`]
+                      : []),
+                  ...formatTiers(v8.loopTiers)
+              ].join(', ');
+    const details = [
+        loops,
+        ...v8.inlining
+            .filter(({ function: callee }) =>
+                isScript(callee.position?.url ?? '')
+            )
+            .map(
+                ({ function: callee, inlined, reason, count }) =>
+                    `${formatInlines(callee, inlined, reason, directory)}${formatCount(count)}`
+            ),
+        ...v8.deoptimizations.map(
+            deoptimization =>
+                `${deoptimization.code} ${formatDeoptimization(deoptimization, directory)}${formatCount(deoptimization.count)}${formatTimed(deoptimization)}`
+        )
+    ];
+
+    return [
+        `  ${[`${name}: ${run}`, ...formatTiers(v8.runTiers)].join(', ')}`,
+        ...details.map(detail => `    ${detail}`)
+    ];
+}
+
+/** The size of a function's bytecode, after its name */
+function formatSize(bytecodeSize: number | null | undefined): string {
+    return bytecodeSize == null
+        ? ''
+        : `, ${formatBytes(bytecodeSize)} of bytecode`;
+}
+
+/** The tiers that V8 compiled a function to, or nothing if none */
+function formatTiers(tiers: ReadonlyArray<V8Counted<V8Tier>>): string[] {
+    return tiers.length === 0
+        ? []
+        : [
+              `compiled to ${tiers.map(tier => `${formatTier(tier)}${formatCount(tier.count)}`).join(', ')}`
+          ];
+}
+
+/** How many of a variant's deoptimizations were in its timed rounds */
+function formatTimed({ count, timed }: V8VariantDeoptimization): string {
+    if (timed === 0) {
+        return '';
+    }
+
+    return timed === count
+        ? ', in the timed rounds'
+        : `, ${timed} in the timed rounds`;
+}
+
+/** The line of Turbofan's limits, as V8's flags set them */
+export function formatLimits(limits: InliningLimits | null): string {
+    if (limits == null) {
+        return "Turbofan's limits: node --v8-options didn't print them.";
+    }
+
+    const {
+        maxInlinedBytecodeSize,
+        maxInlinedBytecodeSizeCumulative,
+        maxInlinedBytecodeSizeSmall
+    } = limits;
+    return `Turbofan's limits, from V8's flags: ${formatBytes(maxInlinedBytecodeSize)} of bytecode for a function that it inlines, ${formatBytes(maxInlinedBytecodeSizeCumulative)} for the functions that one compilation inlines, in all, and ${formatBytes(maxInlinedBytecodeSizeSmall)} for a small function, which it inlines beyond that.`;
+}
+
+/** The lines of the check: whether it passed, and each failure */
+export function formatCheck(check: V8Check, directory: string): string[] {
+    if (check.passed) {
+        const user =
+            check.maxBytecodeSize == null
+                ? ''
+                : ` or ${formatBytes(check.maxBytecodeSize)}`;
+        return [
+            '',
+            `V8 check passed: no hot function of the report is over Turbofan's limit${user}, and none deoptimized in the timed rounds.`
+        ];
+    }
+
+    return [
+        '',
+        'V8 check failed:',
+        ...countedLines(
+            check.failures.map(failure => ({
+                text: formatFailure(failure, directory),
+                count: failure.kind === 'deoptimized' ? failure.count : 1
+            }))
+        )
+    ];
+}
+
+/** A failure of the check, without its count */
+function formatFailure(failure: V8Failure, directory: string): string {
+    const name = formatName(failure.function, directory);
+    if (failure.kind === 'deoptimized') {
+        return `${name} ${formatDeoptimization(failure.deoptimization, directory)}, in the timed rounds of ${failure.group}`;
+    }
+
+    const size = formatSize(failure.function.bytecodeSize);
+    const limit =
+        failure.kind === 'over budget'
+            ? `over Turbofan's ${formatBytes(failure.limit)}`
+            : `over the limit of ${formatBytes(failure.limit)}`;
+    const hot =
+        failure.consideredFor.length === 0
+            ? 'and compiled by Turbofan'
+            : `and considered for inlining into ${failure.consideredFor.map(fn => formatName(fn, directory)).join(', ')}`;
+
+    return `${name}${size}, ${limit}, ${hot}`;
 }
 
 /**
@@ -319,13 +522,23 @@ function formatCallee(
     { other, inlined, reason }: InliningDecision,
     directory: string
 ): string {
+    return formatInlines(other, inlined, reason, directory);
+}
+
+/** Turbofan's decision whether to inline a function into the one compiled */
+function formatInlines(
+    callee: Named,
+    inlined: boolean,
+    reason: string | null | undefined,
+    directory: string
+): string {
     const size =
-        other.bytecodeSize == null
+        callee.bytecodeSize == null
             ? ''
-            : ` (${formatBytes(other.bytecodeSize)})`;
+            : ` (${formatBytes(callee.bytecodeSize)})`;
     const verb = inlined ? 'inlines' : "doesn't inline";
 
-    return `${verb} ${formatName(other, directory)}${size}${formatReason(reason)}`;
+    return `${verb} ${formatName(callee, directory)}${size}${formatReason(reason)}`;
 }
 
 function formatCaller(
@@ -350,8 +563,14 @@ function formatDeoptimization(
     return `deoptimized in ${code}: ${cause}${at === '' ? '' : `, at ${at}`}`;
 }
 
+/** A function as the report names it: by its report, or by the results */
+type Named = Pick<ReportedFunction, 'name' | 'topLevel'> & {
+    readonly position?: SourcePosition | null;
+    readonly bytecodeSize?: number | null;
+};
+
 /** A function's name, and its position if the code log has it */
-function formatName(fn: ReportedFunction, directory: string): string {
+function formatName(fn: Named, directory: string): string {
     const name = displayName(fn);
 
     return fn.position == null
@@ -360,7 +579,7 @@ function formatName(fn: ReportedFunction, directory: string): string {
 }
 
 /** A function's name as the report writes it, which its filter matches */
-function displayName({ name, topLevel }: ReportedFunction): string {
+function displayName({ name, topLevel }: Named): string {
     return topLevel ? '(top level)' : name || '(anonymous)';
 }
 
@@ -386,7 +605,7 @@ function formatTier({ tier, osr }: Tier): string {
     return `${TIER_NAMES[tier] ?? tier}${osr ? ' (OSR)' : ''}`;
 }
 
-function formatReason(reason: string | undefined): string {
+function formatReason(reason: string | null | undefined): string {
     return reason == null ? '' : `: ${reason}`;
 }
 
@@ -398,7 +617,7 @@ function formatCount(count: number): string {
  * Whether a script is the benchmark's, or a module that it imports, rather
  * than Node's own, benk's, or code compiled from a string
  */
-function isScriptUrl(url: string, benkDirectory: string): boolean {
+export function isScriptUrl(url: string, benkDirectory: string): boolean {
     return (
         url !== '' && !url.startsWith('node:') && !url.startsWith(benkDirectory)
     );

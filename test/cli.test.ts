@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { describe, expect, it, vi } from 'hypotes';
-import { bench, parseOptions, type Group } from 'benk';
+import { bench, parseOptions, type Group, type RunResult } from 'benk';
 import { FakeRuntime } from './fake-runtime.ts';
 import { BENCH, BUNDLE, BUNDLED, REPOSITORY } from './v8-fixtures.ts';
 
@@ -21,7 +21,9 @@ describe('parseOptions', () => {
             filter: undefined,
             json: undefined,
             v8Report: false,
-            v8Filter: undefined
+            v8Filter: undefined,
+            v8Check: false,
+            v8MaxBytecode: undefined
         });
     });
 
@@ -40,7 +42,10 @@ describe('parseOptions', () => {
             '--no-heap',
             '--v8-report',
             '--v8-filter',
-            '^sum'
+            '^sum',
+            '--v8-check',
+            '--v8-max-bytecode',
+            '400'
         ]);
 
         expect(options).toStrictEqual({
@@ -52,7 +57,9 @@ describe('parseOptions', () => {
             filter: /^record/u,
             json: 'results.json',
             v8Report: true,
-            v8Filter: /^sum/u
+            v8Filter: /^sum/u,
+            v8Check: true,
+            v8MaxBytecode: 400
         });
     });
 
@@ -203,8 +210,19 @@ describe('bench', () => {
 
 /** The lines that a script prints, with the arguments, from the repository's directory */
 async function runScript(script: string, args: readonly string[]): Promise<string[]> {
+    const { code, lines } = await runScriptWithCode(script, args);
+    expect(code, lines.join('\n')).toBe(0);
+
+    return lines;
+}
+
+/** The lines that a script prints, and the code that it exits with */
+async function runScriptWithCode(
+    script: string,
+    args: readonly string[]
+): Promise<{ code: number; lines: string[] }> {
     // Run as the package's scripts run the tests, whose flags the traced run has too
-    const { stdout } = await promisify(execFile)(
+    const run = promisify(execFile)(
         process.execPath,
         [
             '--no-strip-types',
@@ -220,7 +238,14 @@ async function runScript(script: string, args: readonly string[]): Promise<strin
         { cwd: REPOSITORY }
     );
 
-    return stdout.split(/\r?\n/);
+    try {
+        const { stdout } = await run;
+        return { code: 0, lines: stdout.split(/\r?\n/) };
+    } catch (error) {
+        // A child that exits with another code than 0 rejects with its code and output
+        const { code, stdout } = error as { code: number; stdout: string };
+        return { code, lines: stdout.split(/\r?\n/) };
+    }
 }
 
 describe('--v8-report', () => {
@@ -266,14 +291,69 @@ describe('--v8-report', () => {
     });
 });
 
+describe('--v8-check', () => {
+    it("fails the run with exit code 2 for a function over Turbofan's limit", async () => {
+        const { code, lines } = await runScriptWithCode(BENCH, ['--v8-check']);
+        const failed = lines.indexOf('V8 check failed:');
+
+        expect(code).toBe(2);
+        expect(failed).not.toBe(-1);
+        expect(lines.slice(failed + 1)).toContain(
+            `  mix ${BENCH}:23:13, 874 B of bytecode, over Turbofan's 460 B, and considered for inlining into mixAll ${BENCH}:64:16`
+        );
+    });
+
+    it('passes, and exits with 0, where no listed function fails', async () => {
+        const { code, lines } = await runScriptWithCode(BENCH, [
+            '--v8-check',
+            '--v8-filter',
+            '^nothing$'
+        ]);
+
+        expect(code).toBe(0);
+        expect(lines).toContain(
+            "V8 check passed: no hot function of the report is over Turbofan's limit, and none deoptimized in the timed rounds."
+        );
+    });
+
+    it('writes the report into the JSON, with what V8 did with each variant', async () => {
+        const directory = await mkdtemp(join(tmpdir(), 'benk-'));
+        try {
+            const path = join(directory, 'results.json');
+            await runScript(BENCH, ['--v8-report', '--json', path]);
+            const result = JSON.parse(await readFile(path, 'utf8')) as RunResult;
+
+            const runs = result.groups[0].variants.map(({ name, v8 }) => {
+                const position = v8?.run?.position;
+                return [name, position?.line, position?.column];
+            });
+            expect(result.schema).toBe(4);
+            expect(result.v8Report?.check).toBeNull();
+            expect(result.v8Report?.functions.map(fn => fn.name)).toContain('mix');
+            expect(runs).toStrictEqual([
+                ['integers', 80, 9],
+                ['mean', 84, 9],
+                ['switching', 90, 9],
+                ['mixed', 94, 9],
+                ['integers A/A', 80, 9]
+            ]);
+        } finally {
+            await rm(directory, { recursive: true });
+        }
+    });
+});
+
 /**
- * The lines of a report with a filter after its heading, but for each
- * function's lines of detail: its name and position, before the size of its
- * bytecode, which differs between versions of V8, or a note
+ * The lines of a report's functions with a filter after its heading, up to
+ * the blank line before its variants, but for each function's lines of
+ * detail: its name and position, before the size of its bytecode, which
+ * differs between versions of V8, or a note
  */
 function reportedFunctions(lines: readonly string[], heading: number): string[] {
-    return lines
-        .slice(heading + 3)
-        .filter(line => !line.startsWith('  ') && line !== '')
+    const functions = lines.slice(heading + 3);
+
+    return functions
+        .slice(0, functions.indexOf(''))
+        .filter(line => !line.startsWith('  '))
         .map(line => line.split(',', 1)[0]);
 }

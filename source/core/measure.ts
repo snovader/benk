@@ -55,7 +55,18 @@ export interface RunOptions extends MeasureOptions {
     readonly filter?: RegExp;
     /** Called with each group's results, as soon as it's measured */
     readonly onGroup?: (result: GroupResult) => void;
+    /**
+     * Called with each group before its first timed round, after its
+     * calibration and warm-up rounds, with `'timed'`, and after its last
+     * timed round, before its bytes are counted, with `'done'`. Something
+     * that the caller does then, such as starting a profiler, takes the time
+     * of the rounds that it falls between.
+     */
+    readonly onRounds?: (group: Group, rounds: TimedRounds) => void;
 }
+
+/** Where a group's timed rounds are: about to start, or done */
+export type TimedRounds = 'timed' | 'done';
 
 export const DEFAULT_OPTIONS: Required<MeasureOptions> = {
     rounds: 31,
@@ -100,18 +111,24 @@ export async function measureGroups(
     const results: GroupResult[] = [];
     for (const group of groups) {
         if (filter.test(group.name)) {
-            const result = await measureGroup(group, resolved, runtime);
+            const result = await measureGroup(
+                group,
+                resolved,
+                runtime,
+                options.onRounds
+            );
             options.onGroup?.(result);
             results.push(result);
         }
     }
 
     return {
-        schema: 3,
+        schema: 4,
         date,
         runtime: runtime.description,
         options: { ...resolved, filter: options.filter?.source ?? '' },
-        groups: results
+        groups: results,
+        v8Report: null
     };
 }
 
@@ -139,6 +156,9 @@ export async function measureGroups(
  * apart from the timed rounds, and compares each variant with the first, as
  * `VariantResult` describes.
  *
+ * It calls `onRounds` before the first timed round and after the last, as
+ * `RunOptions` describes.
+ *
  * @throws {RangeError} If an option is out of its range.
  * @throws {TypeError} If the group has no variants, or two of the same name.
  * @throws {Error} If the runtime's clock reads no time, or if a variant
@@ -147,7 +167,8 @@ export async function measureGroups(
 export async function measureGroup(
     group: Group,
     measureOptions: MeasureOptions,
-    runtime: Runtime
+    runtime: Runtime,
+    onRounds?: RunOptions['onRounds']
 ): Promise<GroupResult> {
     const options = resolveOptions(measureOptions);
     const { sampleTime, warmupRounds } = options;
@@ -166,7 +187,10 @@ export async function measureGroup(
         }
     }
 
+    onRounds?.(group, 'timed');
     const { samples, positions } = await timeRounds(variants, orders, rounds);
+    onRounds?.(group, 'done');
+
     const heap = options.heap ? heapCounterOf(runtime) : undefined;
     const arrayBuffers = options.heap ? runtime.arrayBuffers : undefined;
 
@@ -307,7 +331,8 @@ function variantResult(
         ratio: role === 'reference' ? 1 : ratio,
         interval: role === 'reference' ? null : medianInterval(ratios),
         heapBytes,
-        arrayBufferBytes
+        arrayBufferBytes,
+        v8: null
     };
 }
 

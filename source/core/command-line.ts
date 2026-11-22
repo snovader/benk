@@ -26,12 +26,23 @@ export interface CommandOptions {
     readonly json: string | undefined;
     /**
      * Whether to run the script again with V8's traces, after measuring,
-     * and print a report of its hot functions, as `--v8-report` or
-     * `--v8-filter` asks
+     * and print a report of its hot functions, as `--v8-report` asks, and
+     * each of the options below
      */
     readonly v8Report: boolean;
     /** Selects the functions of V8's report by name, or none if all of them */
     readonly v8Filter: RegExp | undefined;
+    /**
+     * Whether to check the functions of V8's report against Turbofan's
+     * limits, and for deoptimizations in the timed rounds, and fail the run
+     * if one fails, as `--v8-check` or `--v8-max-bytecode` asks
+     */
+    readonly v8Check: boolean;
+    /**
+     * The user's limit on the bytecode of a hot function, in bytes, which
+     * the check checks too, or none
+     */
+    readonly v8MaxBytecode: number | undefined;
 }
 
 /** How `bench()` runs, for a script that runs it other than from the shell */
@@ -68,9 +79,10 @@ const OPTIONS: ArgumentSpec = {
         'sample-ms',
         'filter',
         'json',
-        'v8-filter'
+        'v8-filter',
+        'v8-max-bytecode'
     ]),
-    flags: new Set(['aa', 'heap', 'v8-report'])
+    flags: new Set(['aa', 'heap', 'v8-report', 'v8-check'])
 };
 
 /**
@@ -89,6 +101,10 @@ const OPTIONS: ArgumentSpec = {
  *   report of its hot functions
  * - `--v8-filter <regex>`: selects the functions of V8's report by name,
  *   and implies `--v8-report`
+ * - `--v8-check`: checks the functions of V8's report, and fails the run if
+ *   one fails, and implies `--v8-report`
+ * - `--v8-max-bytecode <bytes>`: a limit on the bytecode of a hot function,
+ *   which the check checks too, and implies `--v8-check`
  *
  * It reads them as Node's `parseArgs()` does, on any runtime.
  *
@@ -99,6 +115,8 @@ const OPTIONS: ArgumentSpec = {
  */
 export function parseOptions(args: readonly string[]): CommandOptions {
     const { values, flags } = readArguments(args, OPTIONS);
+    const v8MaxBytecode = maxBytecodeOption(values.get('v8-max-bytecode'));
+    const v8Check = (flags.get('v8-check') ?? false) || v8MaxBytecode != null;
 
     return {
         rounds: integerOption(
@@ -120,8 +138,11 @@ export function parseOptions(args: readonly string[]): CommandOptions {
         json: values.get('json'),
         v8Report:
             (flags.get('v8-report') ?? false) ||
-            values.get('v8-filter') != null,
-        v8Filter: filterOption(values.get('v8-filter'), '--v8-filter')
+            values.get('v8-filter') != null ||
+            v8Check,
+        v8Filter: filterOption(values.get('v8-filter'), '--v8-filter'),
+        v8Check,
+        v8MaxBytecode
     };
 }
 
@@ -186,13 +207,21 @@ function integerOption(
     least: number,
     otherwise: number
 ): number {
+    return value == null ? otherwise : integerOf(value, name, least);
+}
+
+function maxBytecodeOption(value: string | undefined): number | undefined {
+    return value == null ? undefined : integerOf(value, '--v8-max-bytecode', 1);
+}
+
+/**
+ * An option's integer
+ *
+ * @throws {RangeError} If it isn't one, or is less than `least`.
+ */
+function integerOf(value: string, name: string, least: number): number {
     // Digits only, as Number() reads an empty string as 0
-    const number =
-        value == null
-            ? otherwise
-            : /^\d+$/.test(value)
-              ? Number(value)
-              : Number.NaN;
+    const number = /^\d+$/.test(value) ? Number(value) : Number.NaN;
     if (!Number.isInteger(number) || number < least) {
         throw new RangeError(
             `Expected ${name} to be an integer of at least ${least}, got ${value}`

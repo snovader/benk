@@ -19,7 +19,9 @@ const REFERENCE = {
         aa: { type: 'boolean' },
         heap: { type: 'boolean' },
         'v8-report': { type: 'boolean' },
-        'v8-filter': { type: 'string' }
+        'v8-filter': { type: 'string' },
+        'v8-check': { type: 'boolean' },
+        'v8-max-bytecode': { type: 'string' }
     }
 } as const;
 
@@ -28,8 +30,16 @@ const ENTRY_POINTS = [
     ['benk/core', core.parseOptions]
 ] as const;
 
-const FLAGS = ['aa', 'heap', 'v8-report'];
-const WITH_VALUES = ['rounds', 'warmup-rounds', 'sample-ms', 'filter', 'json', 'v8-filter'];
+const FLAGS = ['aa', 'heap', 'v8-report', 'v8-check'];
+const WITH_VALUES = [
+    'rounds',
+    'warmup-rounds',
+    'sample-ms',
+    'filter',
+    'json',
+    'v8-filter',
+    'v8-max-bytecode'
+];
 
 /** Values, of options or not, some of which look like options */
 const value = fc.oneof(
@@ -135,7 +145,7 @@ describe('parseOptions', () => {
         expect(parse).toThrow(TypeError);
         expect(parse).toThrow(/, got --round$/);
         expect(parse).toThrow(
-            /--rounds, --warmup-rounds, --sample-ms, --filter, --json, --v8-filter, --\[no-\]aa/
+            /--rounds, --warmup-rounds, --sample-ms, --filter, --json, --v8-filter, --v8-max-bytecode, --\[no-\]aa/
         );
     });
 
