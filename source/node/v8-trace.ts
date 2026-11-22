@@ -2,8 +2,11 @@
 // its flags `--trace-opt`, `--trace-deopt-verbose` and `--trace-turbo-inlining`
 // on stdout, and the log of `--log-code`. V8 doesn't keep their formats
 // stable: these match V8 13.6, 14.6 and 15.6, of Node 24.22.3, 26.13.0 and
-// 27.0.0-alpha, as the fixtures in `test/fixtures/v8` have them. They port
-// the parsers of meteox's d8 tools, for V8 15.8, to these versions.
+// 27.0.0-alpha, and d8 15.8.62.9, as the fixtures in `test/fixtures/v8` have
+// them. They port the parsers of meteox's d8 tools, for V8 15.8, to these
+// versions. d8 writes what Node's V8 writes, but names a script by its path.
+import { isAbsolute } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 /**
  * A function's identity in a process: the address of its
@@ -14,7 +17,11 @@ export type FunctionAddress = string;
 
 /** A position in a script, with a line and column from 1, as V8 prints it */
 export interface SourcePosition {
-    /** The script's URL, or '' for one compiled from a string */
+    /**
+     * The script's URL, or '' for one compiled from a string. V8 names a
+     * script that d8 loads, and a CommonJS module of Node's, by its path,
+     * whose file's URL this is.
+     */
     readonly url: string;
     readonly line: number;
     readonly column: number;
@@ -182,6 +189,23 @@ const NOT_INLINING = new RegExp(
 );
 
 /**
+ * A function's name and position in the code log, as `sum
+ * file:///bench.ts:15:13`, which captures them. A script is named by its URL,
+ * without spaces, or by its absolute path, as d8 names it, which can have
+ * spaces as a name can. The name is the shortest that leaves a script after
+ * it, so a name with a space before a `/` takes what follows for a path.
+ */
+const LOGGED_POSITION = /^(.*?) ((?:\/|[A-Za-z]:[\\/]).*|\S*):(\d+):(\d+)$/;
+
+/**
+ * The log's line of V8's version, as `v8-version,15,8,62,9,0`, or with the
+ * embedder's string, as Node's `v8-version,14,6,202,34,-node.40,0`, which
+ * captures the version's numbers and the embedder's string
+ */
+const LOGGED_VERSION =
+    /^v8-version,(\d+),(\d+),(\d+),(\d+),(?:([^,\r\n]*),)?\d+\r?$/m;
+
+/**
  * An escape of V8's log, after its backslash: a comma's is `x2C`, and others'
  * are in lower case
  */
@@ -347,10 +371,19 @@ function positionsAfter(
  */
 function positionsOf(text: string): SourcePosition[] {
     return Array.from(text.matchAll(POSITION), ([, url, line, column]) => ({
-        url: url === UNKNOWN_SCRIPT ? '' : url,
+        url: url === UNKNOWN_SCRIPT ? '' : scriptUrl(url),
         line: Number(line),
         column: Number(column)
     }));
+}
+
+/**
+ * The URL of a script as V8 names it: its file's URL where V8 names it by
+ * its absolute path, as d8 and Node's CommonJS modules, and the name itself
+ * otherwise. The traces come from this machine, whose paths these are.
+ */
+function scriptUrl(name: string): string {
+    return isAbsolute(name) ? pathToFileURL(name).href : name;
 }
 
 /** The decisions of one Turbofan compilation, as its lines come */
@@ -438,6 +471,21 @@ function reasonOf(reason: string | undefined): string | undefined {
 }
 
 /**
+ * V8's version, from its line in `--log-code`'s log, with the embedder's
+ * string, as `15.8.62.9` of d8, and `14.6.202.34-node.40` of Node 26.13.0,
+ * or undefined if the log has none
+ */
+export function parseLoggedVersion(log: string): string | undefined {
+    const match = LOGGED_VERSION.exec(log);
+    if (match == null) {
+        return undefined;
+    }
+
+    const [, major, minor, build, patch, embedder] = match;
+    return `${major}.${minor}.${build}.${patch}${embedder ?? ''}`;
+}
+
+/**
  * The function of a line of the code log that creates a function's code, as
  * `code-creation,JS,10,69581,0x1e373e4149c0,38,sumLoop file:///bench.ts:6:17,0x296851e78018,~`,
  * whose fields are the code's type, kind, time, address and size, the
@@ -459,7 +507,7 @@ function loggedFunctionOf(line: string): LoggedFunction | undefined {
     // the script's URL, which a space separates from it
     const described = fields.slice(6, -2).join(',');
     const [address, mark] = fields.slice(-2);
-    const located = /^(.*) (\S*):(\d+):(\d+)$/.exec(described);
+    const located = LOGGED_POSITION.exec(described);
     if (located == null) {
         return undefined;
     }
@@ -470,7 +518,7 @@ function loggedFunctionOf(line: string): LoggedFunction | undefined {
         name,
         topLevel: type === 'Script',
         position: {
-            url: unescapeLog(url),
+            url: scriptUrl(unescapeLog(url)),
             line: Number(row),
             column: Number(column)
         },

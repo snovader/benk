@@ -106,6 +106,11 @@ export interface FormatOptions {
      * script of a position whose source map couldn't be read.
      */
     readonly sourceMaps?: SourceMaps;
+    /**
+     * The engine of the traced run, which the heading names, as `d8
+     * 15.8.62.9`, or none for a run in the Node that reports it
+     */
+    readonly engine?: string;
 }
 
 const TIER_NAMES: Readonly<Record<string, string>> = {
@@ -191,16 +196,18 @@ export function tracedScripts(
  * The lines of the report: a heading, and then each function's name,
  * position and size of bytecode, with a line for each of its tiers'
  * compilations, its Turbofan inlining, and its deoptimizations. The
- * heading names the filter, and each script of a position of the report
- * whose source map couldn't be read, whose positions are its own.
+ * heading names the engine of a run in d8, the filter, and each script of
+ * a position of the report whose source map couldn't be read, whose
+ * positions are its own.
  */
 export function formatV8Report(
     reports: readonly FunctionReport[],
-    { script, directory, filter, sourceMaps }: FormatOptions
+    { script, directory, filter, sourceMaps, engine }: FormatOptions
 ): string[] {
+    const where = engine == null ? '' : ` in ${engine}`;
     const heading = [
         '',
-        `V8 report of ${relative(directory, script)}, from a run of it with V8's traces, whose times aren't reported.`,
+        `V8 report of ${relative(directory, script)}, from a run of it${where} with V8's traces, whose times aren't reported.`,
         "Per function of the script, and per function that deoptimized in the script's code: the tiers that V8 compiled it to, what Turbofan inlined into it and where it inlined it, with sizes of bytecode, and its deoptimizations.",
         ...(filter == null
             ? []

@@ -1,8 +1,9 @@
 // Stops any package manager but Yarn from packing the package, as `prepack`
-// runs this before the build. In this repository, the exports of package.json
-// name the source, which the package leaves out, and those of `publishConfig`
-// name the bundle. Yarn packs the package with the latter, and npm with the
-// former, so a package that npm packed or published couldn't be imported.
+// runs this before the build. In this repository, the exports and the bin of
+// package.json name the source, which the package leaves out, and those of
+// `publishConfig` name the bundle. Yarn packs the package with the latter,
+// and npm with the former, so a package that npm packed or published
+// couldn't be imported, nor its command run.
 
 /** What the package manager that runs a script calls itself */
 const userAgent = process.env.npm_config_user_agent ?? '';

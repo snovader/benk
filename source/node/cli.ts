@@ -9,10 +9,12 @@ import { measureGroups } from '#source/core/measure';
 import { formatJson } from '#source/core/report';
 import type { Group, RunResult, Runtime } from '#source/core/types';
 import { NodeRuntime } from './runtime.ts';
-import { readSourceMaps } from './source-maps.ts';
-import { isTracedRun, recordSourceMaps, runTraced } from './traced-run.ts';
-import { formatV8Report, reportFunctions, tracedScripts } from './v8-report.ts';
-import { parseCodeLog, parseTrace } from './v8-trace.ts';
+import {
+    isTracedRun,
+    recordSourceMaps,
+    reportTracedRun,
+    runTraced
+} from './traced-run.ts';
 
 /**
  * Runs a benchmark script: reads its options from the command line, prints
@@ -137,48 +139,9 @@ async function traceScript(
     script: string,
     filter: RegExp | undefined
 ): Promise<string[]> {
-    const { output, codeLog, sourceMapFiles } = await runTraced(
-        script,
-        process.argv.slice(2)
-    );
-    const trace = parseTrace(output);
-    const logged = parseCodeLog(codeLog);
-    if (trace.compilations.length === 0 || logged.size === 0) {
-        // A line that V8 wrote of a compilation, which says what it wrote
-        const line = output
-            .split('\n')
-            .find(text => text.startsWith('[completed compiling'));
-        throw new Error(
-            `Expected V8's compilations and functions in the traced run of ${script}, got ${trace.compilations.length} and ${logged.size}: V8 ${process.versions.v8} may write other formats${line == null ? '' : `, as ${line.trimEnd()}`}`
-        );
-    }
+    const traced = await runTraced(script, process.argv.slice(2));
 
-    const sourceMaps = await readSourceMaps(
-        tracedScripts(trace, logged),
-        sourceMapFiles
-    );
-    const reports = reportFunctions(trace, logged, {
-        benkDirectory: benkDirectory(),
-        filter,
-        sourceMaps
-    });
-    return formatV8Report(reports, {
-        script,
-        directory: process.cwd(),
-        filter,
-        sourceMaps
-    });
-}
-
-/**
- * The URL of the directory of benk's own modules, whose functions the V8
- * report leaves out: `dist`, of the bundle, which has this module in it, or
- * `source`, which has this module's directory in it
- */
-function benkDirectory(): string {
-    const url = import.meta.url;
-
-    return new URL(url.endsWith('.ts') ? '..' : '.', url).href;
+    return reportTracedRun(script, traced, { filter });
 }
 
 function printError(line: string): void {
