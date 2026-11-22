@@ -1,31 +1,36 @@
-// A script that `d8.test.ts` bundles and runs in d8: it times a group of a
-// sync and an async variant with d8's runtime, and prints its results, the
-// run's description and the group's table, as JSON
-import { describeRun, formatGroup, measureGroups } from 'benk/core';
-import { D8Runtime } from 'benk/d8';
+// A script that `d8.test.ts` bundles and runs in d8: it runs `bench()` of
+// `benk/d8` with the arguments that d8 passes it, on a group of a sync and
+// an async variant, and on a group whose variant throws. If `bench()`
+// throws, it prints the error, and the variants' calls until then, as JSON
+// on the last line of stdout.
+import { bench } from 'benk/d8';
 
-let count = 0;
-const result = await measureGroups(
-    [
+let calls = 0;
+try {
+    await bench([
         {
             name: 'calls',
             variants: [
-                { name: 'sync', run: () => (count = (count + 1) % 1024) },
+                { name: 'sync', run: () => calls++ },
                 {
                     name: 'async',
                     async: true,
-                    run: () => Promise.resolve(count)
+                    run: () => Promise.resolve(calls++)
+                }
+            ]
+        },
+        {
+            name: 'throws',
+            variants: [
+                {
+                    name: 'throw',
+                    run: () => {
+                        throw new Error('Thrown by the variant');
+                    }
                 }
             ]
         }
-    ],
-    { runtime: new D8Runtime(), sampleTime: 0.2, warmupRounds: 2, rounds: 6 }
-);
-
-console.log(
-    JSON.stringify({
-        result,
-        description: describeRun(result.runtime, result.options),
-        table: formatGroup(result.groups[0])
-    })
-);
+    ]);
+} catch (error) {
+    console.log(JSON.stringify({ error: String(error), calls }));
+}

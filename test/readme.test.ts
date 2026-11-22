@@ -7,8 +7,9 @@ import * as d8 from 'benk/d8';
 import { TRACE_FLAGS } from '#source/node/traced-run';
 
 // The README names the package's exports and the command line's options one
-// by one, which a change to either would leave behind: these compare its
-// tables with the package. Its samples are run by hand, as AGENTS.md says.
+// by one, in Node and in d8, which a change to either would leave behind:
+// these compare its tables with the package. Its samples are run by hand, as
+// AGENTS.md says.
 const readme = readFileSync(join(import.meta.dirname, '..', 'README.md'), 'utf8');
 
 /** The first table after a heading of the README, up to the blank line that ends it */
@@ -23,6 +24,14 @@ function tableAfter(heading: string): string {
 /** What `pattern` captures first in each of its matches */
 function captures(text: string, pattern: RegExp): string[] {
     return Array.from(text.matchAll(pattern), match => match[1]);
+}
+
+/** The options of the command line that a table's first column names, each once */
+function optionsNamed(table: string): string[] {
+    const firstCells = captures(table, /^\| ([^|]+)\|/gm);
+    const options = firstCells.flatMap(cell => captures(cell, /`(--[a-z\d-]+)/g));
+
+    return Array.from(new Set(options)).sort();
 }
 
 describe('README', () => {
@@ -62,6 +71,12 @@ describe('README', () => {
             .map(([name]) => name);
 
         expect(unchanged).toStrictEqual([]);
+    });
+
+    it('says what each option of the command line does in d8', () => {
+        expect(optionsNamed(tableAfter('#### Options in d8'))).toStrictEqual(
+            optionsNamed(tableAfter('### Options'))
+        );
     });
 
     it("names each of V8's flags of the traced run of --v8-report", () => {

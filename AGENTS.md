@@ -142,10 +142,17 @@ between them: the author does.
   runtime to the core. `source/core.ts` is the core's entry point,
   `benk/core`, which loads none of Node's modules and requires a runtime.
   It exports what `benk` does, apart from what needs Node.
-  `source/d8.ts` is d8's entry point, `benk/d8`, which exports only its
-  runtime, and loads none of Node's modules: a script in d8 takes the rest
-  from `benk/core`. A runtime for browsers or Workers would be an entry
-  point of its own too.
+  `source/d8.ts` is d8's entry point, `benk/d8`, which exports its runtime
+  and its `bench()`, and loads none of Node's modules: a script in d8 takes
+  the rest from `benk/core`. A runtime for browsers or Workers would be an
+  entry point of its own too.
+- The command line is the core's, in `command-line.ts`: the options, which
+  `arguments.ts` reads as Node's `parseArgs()` does, since `node:util` is
+  Node's, and the run that prints the description and the tables. Each
+  entry point's `bench()` passes its host's arguments and output, and
+  decides what each option means there. An option that a host can't carry
+  out is an error there, as `--v8-report` is in d8, and a new option needs
+  a decision for each host, which the README's table for d8 records.
 - The source of the timer loops is the core's, in `timer-source.ts`, since
   a runtime that can't compile a string writes its loops from it at build
   time. A change to it changes what every runtime times.

@@ -121,6 +121,8 @@ node bench.ts --rounds 51 --json results.json
 | `--v8-report`         |         | Runs the script again with V8's traces, after measuring, and prints [V8's report](#v8s-report) of its hot functions. |
 | `--v8-filter <regex>` |         | Lists only the functions whose name matches in V8's report, and implies `--v8-report`.                               |
 
+A script in d8 takes the same options after `--`, as [d8](#d8) describes.
+
 ### Variants
 
 ```ts
@@ -595,8 +597,7 @@ it is, has its own positions, without a note.
   was in `sum`, inlined into a variant's `run`, inlined into its timer loop.
 - Sparkplug's compilations, which `--trace-opt` doesn't print.
 - Which variant a timer loop is for, as [Planned](#planned) says.
-- A run in d8, whose script calls `measureGroups()` rather than `bench()`,
-  as [d8](#d8) shows.
+- A run in d8, where `--v8-report` is an error, as [d8](#d8) describes.
 
 V8 doesn't keep the traces' formats stable. The parsers were checked
 against what Node 24.22.3, 26.13.0 and 27.0.0-alpha wrote on macOS, and
@@ -699,11 +700,10 @@ variants. Importing `benk/core` loads none.
 
 `benk/core` exports what `benk` does, except these, which need Node:
 
-| Export           | What to do without it                                                       |
-| ---------------- | --------------------------------------------------------------------------- |
-| `bench()`        | Call `measureGroups()`, and print with `describeRun()` and `formatGroup()`. |
-| `parseOptions()` | Pass the options as an object.                                              |
-| `NodeRuntime`    | Pass a `Runtime` as the `runtime` option, which `benk/core` requires.       |
+| Export        | What to do without it                                                                                             |
+| ------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `bench()`     | Call `measureGroups()`, and print with `describeRun()` and `formatGroup()`. In d8, import `bench()` of `benk/d8`. |
+| `NodeRuntime` | Pass a `Runtime` as the `runtime` option, which `benk/core` requires.                                             |
 
 A runtime that can't compile a string needs its loops written before it
 runs. Each variant needs a loop from a source of its own: V8 shares the
@@ -810,22 +810,19 @@ d8 15.8.62.9, from `brew install v8`, has small integers of 31 bits, as
 V8's builds with [pointer compression](https://v8.dev/blog/pointer-compression)
 do, and Node 26.13.0 has small integers of 32 bits.
 
-`benk/d8` exports d8's runtime, and loads none of Node's modules:
+`benk/d8` exports d8's `bench()` and runtime, and loads none of Node's
+modules:
 
-| Export      | What it does                                                                         |
-| ----------- | ------------------------------------------------------------------------------------ |
-| `D8Runtime` | Times variants in d8, each in a timer loop that `new Function` compiles, as in Node. |
+| Export                    | What it does                                                                                               |
+| ------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `bench(groups, options?)` | Runs a benchmark script in d8, as `benk`'s `bench()` does in Node, with the options that d8 can carry out. |
+| `D8Runtime`               | Times variants in d8, each in a timer loop that `new Function` compiles, as in Node.                       |
 
 d8 reads an import as a path, not as a package's name. So a script imports
 benk's bundle from `node_modules`, as this one, `bench.mjs`, does:
 
 ```js
-import {
-    describeRun,
-    formatGroup,
-    measureGroups
-} from './node_modules/benk/dist/core.js';
-import { D8Runtime } from './node_modules/benk/dist/d8.js';
+import { bench } from './node_modules/benk/dist/d8.js';
 
 const numbers = Array.from({ length: 1000 }, (_, i) => Math.sin(i));
 
@@ -837,52 +834,67 @@ function sumLoop(values) {
     return sum;
 }
 
-const result = await measureGroups(
-    [
-        {
-            name: 'sum 1,000 numbers',
-            variants: [
-                { name: 'for loop', run: () => sumLoop(numbers) },
-                {
-                    name: 'reduce',
-                    run: () => numbers.reduce((sum, x) => sum + x, 0)
-                }
-            ]
-        }
-    ],
-    { runtime: new D8Runtime() }
-);
-
-console.log(describeRun(result.runtime, result.options));
-for (const group of result.groups) {
-    console.log(formatGroup(group).join('\n'));
-}
+await bench([
+    {
+        name: 'sum 1,000 numbers',
+        variants: [
+            { name: 'for loop', run: () => sumLoop(numbers) },
+            {
+                name: 'reduce',
+                run: () => numbers.reduce((sum, x) => sum + x, 0)
+            }
+        ]
+    }
+]);
 ```
 
-d8 runs a `.mjs` file as an ES module:
+d8 runs a `.mjs` file as an ES module, and passes the script the arguments
+after `--`:
 
 ```sh
-d8 bench.mjs
+d8 bench.mjs -- --rounds 51 --json results.json
 ```
 
 ```text
 d8 15.8.62.9, V8 15.8.62.9, macos unknown, unknown, with unknown. Process state: 31-bit small integers.
-Per call, of at least 31 interleaved rounds of 1 ms per variant after 10 warm-up rounds, in an order that rotates each variant through each position:
-the fastest and median round, the interquartile range as a share of the median, the ratio to the group's first variant by the statistic that the group leads with, a 95% interval of the median of the per-round ratios, and the bytes allocated on the heap.
+Per call, of at least 51 interleaved rounds of 1 ms per variant after 10 warm-up rounds, in an order that rotates each variant through each position:
+the fastest and median round, the interquartile range as a share of the median, the ratio to the group's first variant by the statistic that the group leads with, a 95% interval of the median of the per-round ratios.
 
-sum 1,000 numbers: 36 rounds, by the median round (a call of 1 µs or more)
-                      fastest     median   spread    ratio   95% interval        heap
-  for loop            1.41 µs    1.46 µs     3.4%    1.00×                          –
-  reduce              6.23 µs    6.55 µs     4.2%    4.47×      4.42–4.55           –
-  for loop A/A        1.41 µs    1.46 µs     3.6%    1.00×      0.99–1.02           –
+sum 1,000 numbers: 54 rounds, by the median round (a call of 1 µs or more)
+                      fastest     median   spread    ratio   95% interval        heap     buffers
+  for loop            1.41 µs    1.45 µs     3.7%    1.00×                          –           –
+  reduce              6.21 µs    6.45 µs     4.2%    4.46×      4.42–4.51           –           –
+  for loop A/A        1.41 µs    1.46 µs     5.1%    1.00×      0.99–1.01           –           –
 ```
 
-This is one of 3 runs on an Apple M2 Pro, whose ratios of `reduce` were
-4.41, 4.47 and 4.48. What a run in d8 reports differs from Node's:
+This is one of 3 runs on an Apple M2 Pro, with Homebrew's d8 15.8.62.9,
+whose ratios of `reduce` were 4.46, 4.46 and 4.49. Each wrote its results
+to `results.json`. Without `--`, d8 takes the options for its own flags. It
+warns of an unknown flag, runs the script with benk's defaults, and then
+fails to load a value, such as `51`, as another script.
 
-- **heap**: d8 has no API that counts heap bytes, so the column shows `–`,
-  and `heapBytes` is null. The description lists heap bytes anyway, as for
-  any run whose `heap` option is on.
+#### Options in d8
+
+| Option                                                              | In d8                                                                                                                                                 |
+| ------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--rounds`, `--warmup-rounds`, `--sample-ms`, `--filter`, `--no-aa` | As in Node.                                                                                                                                           |
+| `--json <path>`                                                     | Writes the file with d8's `writeFile()`. benk checks the path by writing the file before it measures, as d8 can't check a directory.                  |
+| `--json -`                                                          | Writes the JSON to stdout with d8's `write()`, and the tables to stderr with `printErr()`.                                                            |
+| `--no-heap`                                                         | Changes nothing. d8 counts no bytes, so a run in d8 records `heap: false` with or without it.                                                         |
+| `--v8-report`, `--v8-filter`                                        | Throws before it measures: [V8's report](#v8s-report) runs the script again in Node. d8 takes V8's trace flags itself, as `d8 --trace-opt bench.mjs`. |
+
+To check the path of `--json`, benk writes the file again with the bytes
+that d8 reads of it, or empty where there's none. So a run that fails leaves
+an earlier file as it was, as in Node, and an empty file where there was
+none.
+
+What a run in d8 reports differs from Node's:
+
+- **heap** and **buffers**: d8 has no API that counts bytes, so the columns
+  show `–`, and `heapBytes` and `arrayBufferBytes` are null. `bench()`
+  records `heap: false`, so the description leaves the bytes out. A script
+  that calls `measureGroups()` with a `D8Runtime` records its `heap` option,
+  which is on by default, and its description lists the bytes anyway.
 - **The runtime's description** gives `unknown` for the architecture, the
   processor and the flags that d8 started with, which d8 can't read. The
   platform is d8's name for the operating system, such as `macos`, where
@@ -895,9 +907,15 @@ This is one of 3 runs on an Apple M2 Pro, whose ratios of `reduce` were
   1 µs, which benk's estimate gives. A round of the default 1 ms spans 1,000
   of them. Median rounds under 50 µs get the note.
 
-A TypeScript script, or one that imports `benk/core` and `benk/d8` by name,
-as in Node, needs bundling into one module first. A `bench.ts` that did so
-ran as `bench.mjs` did, bundled by rolldown 1.3.2:
+d8's `bench()` takes the options that `benk`'s does, as [API](#api) lists
+them. Their defaults are d8's: its `arguments`, a `D8Runtime`, and its
+`print()`, `printErr()` and `write()`. A script that prints or stores
+results its own way imports `measureGroups()` from `benk/core`, and passes
+a `D8Runtime` as the `runtime` option, as in [Runtimes](#runtimes).
+
+A TypeScript script, or one that imports `benk/d8` by name, as in Node,
+needs bundling into one module first. A `bench.ts` that did so ran as
+`bench.mjs` did, bundled by rolldown 1.3.2:
 
 ```sh
 rolldown bench.ts --file bench.mjs
@@ -1163,6 +1181,47 @@ benk keeps these in view rather than out of the results:
   `sumLoop` into its timer loop. These are the fastest rounds of 3 runs of
   each, on an Apple M2 Pro with Node 26.13.0. [V8's report](#v8s-report)
   shows the tiers.
+
+- **The width of small integers.** V8 keeps an integer in place of a
+  pointer, as a small integer, when it fits: in 32 bits in Node, and in 31
+  where V8 compresses pointers, as in d8, workerd and Chrome. There, an
+  integer from 2³⁰ to 2³¹ − 1 is a number on the heap. So code that handles
+  such integers can take more or less time in a Worker or a browser than in
+  Node, and a benchmark in Node doesn't show it.
+  [`benchmarks/small-integers/`](benchmarks/small-integers/) does the same
+  work on 1,000 integers just below 2³⁰, and on as many from 2³⁰, with the
+  same groups in Node and in d8. These are the ratios of the second to the
+  first, by the median round, in 3 runs of each, on an Apple M2 Pro with
+  Node 26.13.0 and d8 15.8.62.9, with a load average near 2:
+
+  | Integers held in | Node, 1 ms | Node, 10 ms | d8, 1 ms  | d8, 10 ms |
+  | ---------------- | ---------- | ----------- | --------- | --------- |
+  | object fields    | 0.99–1.02  | 1.00        | 1.09–1.10 | 1.06–1.08 |
+  | `number[]`       | 1.00–1.01  | 0.99–1.00   | 0.90      | 0.91–0.92 |
+  | `Int32Array`     | 1.00–1.01  | 1.00        | 0.95      | 0.97–1.00 |
+  | A/A copies       | 0.99–1.01  | 0.99–1.01   | 0.99–1.01 | 1.00–1.01 |
+
+  The columns are of rounds of 1 ms and of 10 ms, as `--sample-ms` sets.
+  Each of d8's intervals for object fields and `number[]` left out 1, and
+  each of Node's held it.
+
+  In d8, each new object's field held a heap number. In runs apart from the
+  timed ones, with V8's `--trace-gc-nvp`, a call allocated about 28,200
+  bytes in d8, against 15,900, and 10,000 calls collected 68 times, against
+  38. In Node, both allocated about 31,700 bytes a call, and collected 38
+  and 39 times. In d8, the `number[]` held doubles, which V8 stores without
+  checking that they fit in 31 bits.
+
+  The `Int32Array` holds 32-bit integers either way. With rounds of 1 ms,
+  its calls ran in Maglev's code, which V8 compiled from feedback that saw
+  heap numbers for the larger integers, and which took 5% less time with
+  them. With 10 ms, Turbofan's code took over after 9 or 10 of the 36
+  rounds, and the ratios came closer to 1.
+
+  Time code in d8, with `benk/d8`, when it will run in a Worker or a
+  browser, and compare ratios within one engine. Node's V8 and d8's are
+  different versions, so a time in one against a time in the other compares
+  the versions too.
 
 ## Planned
 
