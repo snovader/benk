@@ -96,25 +96,34 @@ export interface LoggedFunction {
 const LINE_BREAK = /\r?\n/;
 
 /**
+ * An address, as V8 prints it: in lower case after `0x` where it formats the
+ * address itself, and as the C library's `%p` or a stream's `void*` where
+ * it doesn't, as in `(sfi = %p)` and the handles of the inlining's lines.
+ * Those have `0x` on macOS and Linux, and on Windows neither `0x` nor lower
+ * case, as `000002A3B4C5D6E7`.
+ */
+const ADDRESS = String.raw`(?:0x)?[\dA-Fa-f]+`;
+
+/**
  * A `JSFunction` as the traces print it, as
  * `<JSFunction sum (sfi = 0x121eeab5b611)>`, which captures its name and
  * address
  */
-const JS_FUNCTION = String.raw`<JSFunction (.*?) ?\(sfi = (0x[\da-f]+)\)>`;
+const JS_FUNCTION = String.raw`<JSFunction (.*?) ?\(sfi = (${ADDRESS})\)>`;
 
 /**
  * A `SharedFunctionInfo` as the inlining's lines print it, after a handle's
  * address, as `0x7884e9b5c8 {0x121eeab5b611 <SharedFunctionInfo sum>}`,
  * which captures its address and name
  */
-const SHARED = String.raw`0x[\da-f]+ \{(0x[\da-f]+) <SharedFunctionInfo ?(.*?)>\}`;
+const SHARED = String.raw`${ADDRESS} \{(${ADDRESS}) <SharedFunctionInfo ?(.*?)>\}`;
 
 /**
  * The start of a compilation, as `[compiling method 0x… <JSFunction …>
  * (target TURBOFAN_JS) OSR, mode: ConcurrencyMode::kSynchronous]`
  */
 const COMPILING = new RegExp(
-    String.raw`^\[compiling method 0x[\da-f]+ ${JS_FUNCTION} \(target (\w+)\)( OSR)?`
+    String.raw`^\[compiling method ${ADDRESS} ${JS_FUNCTION} \(target (\w+)\)( OSR)?`
 );
 
 /**
@@ -122,7 +131,7 @@ const COMPILING = new RegExp(
  * (target MAGLEV) - took 0.000, 0.150, 0.001 ms]`
  */
 const COMPLETED = new RegExp(
-    String.raw`^\[completed compiling 0x[\da-f]+ ${JS_FUNCTION} \(target (\w+)\)( OSR)?`
+    String.raw`^\[completed compiling ${ADDRESS} ${JS_FUNCTION} \(target (\w+)\)( OSR)?`
 );
 
 /**
@@ -130,7 +139,7 @@ const COMPLETED = new RegExp(
  * wrong map): begin. deoptimizing 0x… <JSFunction …>, 0x… <Code MAGLEV>, …]`
  */
 const BAILOUT = new RegExp(
-    String.raw`^\[bailout \(kind: ([\w-]+), reason: (.*?)\): begin\. deoptimizing 0x[\da-f]+ ${JS_FUNCTION}, 0x[\da-f]+ <Code (\w+)>`
+    String.raw`^\[bailout \(kind: ([\w-]+), reason: (.*?)\): begin\. deoptimizing ${ADDRESS} ${JS_FUNCTION}, ${ADDRESS} <Code (\w+)>`
 );
 
 /**
@@ -489,9 +498,12 @@ function unescapeLog(text: string): string {
 }
 
 /**
- * An address without its tag: the traces print a heap object's address with
- * the tag of 1 that V8 sets in its pointers, and the log without
+ * An address without its tag, in lower case after `0x`: the traces print a
+ * heap object's address with the tag of 1 that V8 sets in its pointers, and
+ * the log without, and Windows prints some without `0x`
  */
 function untagged(address: string): FunctionAddress {
-    return `0x${(BigInt(address) & ~3n).toString(16)}`;
+    const hex = address.startsWith('0x') ? address : `0x${address}`;
+
+    return `0x${(BigInt(hex) & ~3n).toString(16)}`;
 }

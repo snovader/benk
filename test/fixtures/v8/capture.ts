@@ -20,8 +20,9 @@ const { output, codeLog } = await runTraced(
 
 /** The addresses that the traces name, untagged, as the log has them */
 const named = new Set(
-    Array.from(output.matchAll(/(?:sfi = |\{)(0x[\da-f]+)/g), ([, address]) =>
-        (BigInt(address) & ~3n).toString(16)
+    Array.from(
+        output.matchAll(/(?:sfi = |\{)(?:0x)?([\dA-Fa-f]+)/g),
+        ([, address]) => (BigInt(`0x${address}`) & ~3n).toString(16)
     )
 );
 

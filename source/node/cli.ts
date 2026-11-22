@@ -231,8 +231,12 @@ async function traceScript(script: string): Promise<string[]> {
     const trace = parseTrace(output);
     const logged = parseCodeLog(codeLog);
     if (trace.compilations.length === 0 || logged.size === 0) {
+        // A line that V8 wrote of a compilation, which says what it wrote
+        const line = output
+            .split('\n')
+            .find(text => text.startsWith('[completed compiling'));
         throw new Error(
-            `Expected V8's compilations and functions in the traced run of ${script}, got ${trace.compilations.length} and ${logged.size}: V8 ${process.versions.v8} may write other formats`
+            `Expected V8's compilations and functions in the traced run of ${script}, got ${trace.compilations.length} and ${logged.size}: V8 ${process.versions.v8} may write other formats${line == null ? '' : `, as ${line.trimEnd()}`}`
         );
     }
 

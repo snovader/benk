@@ -188,6 +188,37 @@ describe.each(VERSIONS)('the traced run on Node %s', version => {
     });
 });
 
+/**
+ * A fixture's traces as V8 prints them on Windows: where V8 prints an address
+ * with the C library's `%p`, or as a stream's `void*`, the Microsoft runtime
+ * writes 16 digits in upper case without `0x`, and lines can end in `\r\n`.
+ * The addresses that V8 formats itself, padded after `0x`, stay as they are.
+ */
+function asOnWindows(trace: string): string {
+    const pointer = (hex: string): string => hex.toUpperCase().padStart(16, '0');
+
+    return trace
+        .replaceAll(/\(sfi = 0x([\da-f]+)\)/g, (_, hex: string) => `(sfi = ${pointer(hex)})`)
+        .replaceAll(/0x([\da-f]+) \{/g, (_, hex: string) => `${pointer(hex)} {`)
+        .replaceAll('\n', '\r\n');
+}
+
+describe.each(VERSIONS)('the traced run on Node %s, as Windows prints it', version => {
+    it('reads the same traces', () => {
+        const trace = fixture(version, 'trace.txt');
+        const windows = asOnWindows(trace);
+
+        expect(windows).toContain('(sfi = 0000');
+        expect(parseTrace(windows)).toStrictEqual(parseTrace(trace));
+    });
+
+    it('reads the same code log, whose lines can end in \\r\\n', () => {
+        const log = fixture(version, 'code.log');
+
+        expect(parseCodeLog(log.replaceAll('\n', '\r\n'))).toStrictEqual(parseCodeLog(log));
+    });
+});
+
 describe('parseCodeLog', () => {
     it("unescapes a script's URL", () => {
         // Of Node 26.13.0, for a script in a directory named `a,b ü`

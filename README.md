@@ -351,15 +351,15 @@ node bench.ts --v8-report --sample-ms 10
 ```text
 Node v26.13.0, V8 14.6.202.34-node.40, darwin arm64, Apple M2 Pro. Process state: entry script from TypeScript source.
 Per call, of at least 31 interleaved rounds of 10 ms per variant after 10 warm-up rounds, in an order that rotates each variant through each position:
-the fastest and median round, the interquartile range as a share of the median, the ratio to the group's first variant by the statistic that the group leads with, a 95% interval of the median of the per-round ratios, and the bytes allocated on the heap.
+the fastest and median round, the interquartile range as a share of the median, the ratio to the group's first variant by the statistic that the group leads with, a 95% interval of the median of the per-round ratios, and the bytes allocated on the heap and in array buffers outside it.
 
 sum 1,000 numbers: 36 rounds, by the median round (a call of 1 µs or more)
-                      fastest     median   spread    ratio   95% interval        heap
-  for loop             794 ns     809 ns     3.1%    1.00×                       16 B
-  reduce              6.90 µs    7.03 µs     1.2%    8.69×      8.58–8.75    32,040 B
-  for loop A/A         797 ns     810 ns     2.1%    1.00×      1.00–1.01        16 B
-  for loop: two modes, 32 rounds near 806 ns and 4 near 1.43 µs
-  for loop A/A: two modes, 32 rounds near 810 ns and 4 near 1.44 µs
+                      fastest     median   spread    ratio   95% interval        heap     buffers
+  for loop             795 ns     817 ns     2.9%    1.00×                       16 B         0 B
+  reduce              7.12 µs    7.26 µs     2.5%    8.93×      8.83–8.98    32,040 B         0 B
+  for loop A/A         799 ns     824 ns     3.1%    1.00×      1.00–1.01        16 B         0 B
+  for loop: two modes, 32 rounds near 816 ns and 4 near 1.45 µs
+  for loop A/A: two modes, 32 rounds near 820 ns and 4 near 1.44 µs
 
 V8 report of bench.ts, from a run of it with V8's traces, whose times aren't reported.
 Per function of the script, and per function that deoptimized in the script's code: the tiers that V8 compiled it to, what Turbofan inlined into it and where it inlined it, with sizes of bytecode, and its deoptimizations.
@@ -386,10 +386,10 @@ file, and the report writes it as `<anonymous>`, as V8's stack traces do.
 
 With the default rounds of 1 ms, the same script's report had no line of
 inlining, as no Turbofan compilation considered `run` or `sumLoop`, and the
-for loop took 1.41 µs rather than 794 ns. These are the fastest rounds of 3
+for loop took 1.41 µs rather than 795 ns. These are the fastest rounds of 3
 runs of each, on an Apple M2 Pro with Node 26.13.0, and each sample time's
 3 reports were the same. The two modes with 10 ms are the rounds before
-Turbofan's code: 4 near 1.43 µs.
+Turbofan's code: 4 near 1.45 µs.
 
 ### Reading the report
 
@@ -455,9 +455,13 @@ script's, or didn't, is named in that function's lines.
   was in `sum`, inlined into a variant's `run`, inlined into its timer loop.
 - Sparkplug's compilations, which `--trace-opt` doesn't print.
 - Which variant a timer loop is for, as [Planned](#planned) says.
+- A run in d8, whose script calls `measureGroups()` rather than `bench()`,
+  as [d8](#d8) shows.
 
 V8 doesn't keep the traces' formats stable. The parsers were checked
-against what Node 24.22.3, 26.13.0 and 27.0.0-alpha wrote on macOS. If the
+against what Node 24.22.3, 26.13.0 and 27.0.0-alpha wrote on macOS, and
+against the same with addresses as Windows prints some of them, without
+`0x`. If the
 traced run's stdout has none of V8's compilations, or its log none of its
 functions, `--v8-report` throws, rather than print an empty report.
 
@@ -1015,7 +1019,7 @@ benk keeps these in view rather than out of the results:
   tier that V8 compiled them to, and rounds of 1 ms can end before Turbofan
   compiles a timer loop. The quick start's for loop took 1.41 µs with the
   default sample time, when no Turbofan compilation considered its `run`,
-  and 794 ns with `--sample-ms 10`, when Turbofan inlined `run` and
+  and 795 ns with `--sample-ms 10`, when Turbofan inlined `run` and
   `sumLoop` into its timer loop. These are the fastest rounds of 3 runs of
   each, on an Apple M2 Pro with Node 26.13.0. [V8's report](#v8s-report)
   shows the tiers.
