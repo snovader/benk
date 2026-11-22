@@ -743,7 +743,7 @@ fails to load a value, such as `51`, as another script.
 | `--no-heap`                                                         | Changes nothing. d8 counts no bytes, so a run in d8 records `heap: false` with or without it.                                                         |
 | `--v8-report`                                                       | Throws before it measures: [V8's report](#v8s-report) runs the script again in Node. d8 takes V8's trace flags itself, as `d8 --trace-opt bench.mjs`. |
 
-To check the path of `--json`, benk writes the file again with the text
+To check the path of `--json`, benk writes the file again with the bytes
 that d8 reads of it, or empty where there's none. So a run that fails leaves
 an earlier file as it was, as in Node, and an empty file where there was
 none.

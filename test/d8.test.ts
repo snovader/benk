@@ -51,8 +51,8 @@ function askShell(): Shell | undefined {
 interface DriverRun {
     readonly stdout: string;
     readonly stderr: string;
-    /** The text of `results.json` in the run's directory, if it has one */
-    readonly results: string | undefined;
+    /** The bytes of `results.json` in the run's directory, if it has one */
+    readonly results: Buffer | undefined;
 }
 
 /** What `d8-driver.ts` prints when `bench()` throws */
@@ -87,9 +87,12 @@ async function bundleDriver(): Promise<string> {
 /**
  * Runs `d8-driver.ts` in d8, in a directory of its own, with the arguments
  * after `--`, and returns what it printed and wrote. `results` is the text
- * of a `results.json` that the directory has before the run.
+ * or bytes of a `results.json` that the directory has before the run.
  */
-async function runDriver(args: readonly string[], results?: string): Promise<DriverRun> {
+async function runDriver(
+    args: readonly string[],
+    results?: string | Uint8Array
+): Promise<DriverRun> {
     const code = await (driver ??= bundleDriver());
     const directory = mkdtempSync(join(tmpdir(), 'benk-d8-'));
     const resultsPath = join(directory, 'results.json');
@@ -108,7 +111,7 @@ async function runDriver(args: readonly string[], results?: string): Promise<Dri
         return {
             stdout: run.stdout,
             stderr: run.stderr,
-            results: existsSync(resultsPath) ? readFileSync(resultsPath, 'utf8') : undefined
+            results: existsSync(resultsPath) ? readFileSync(resultsPath) : undefined
         };
     } finally {
         rmSync(directory, { recursive: true, force: true });
@@ -376,7 +379,7 @@ describe.runIf(shell)('benk/d8 in d8', () => {
             '--json',
             'results.json'
         ]);
-        const result = JSON.parse(expectPresent(run.results)) as RunResult;
+        const result = JSON.parse(expectPresent(run.results).toString()) as RunResult;
 
         expect(result.groups.map(({ name }) => name)).toStrictEqual(['calls']);
         expect(run.stdout.split('\n')[0]).toMatch(/^d8 /);
@@ -396,7 +399,24 @@ describe.runIf(shell)('benk/d8 in d8', () => {
             calls: 0
         });
         expect(driverError(failed).error).toMatch(/throw/);
-        expect(failed.results).toBe('earlier');
+        expect(failed.results).toStrictEqual(Buffer.from('earlier'));
+    });
+
+    it("leaves an earlier file's bytes as they were if the run fails, where they aren't UTF-8", async () => {
+        // Bytes that UTF-8 can't start a character with, which a read of the
+        // file as text would each take for U+FFFD
+        const earlier = Buffer.concat([
+            Buffer.from([0xff, 0xfe]),
+            Buffer.from('{"old":1}'),
+            Buffer.from([0x80, 0x0a])
+        ]);
+        const failed = await runDriver(
+            [...QUICK_ARGS, '--filter', 'throws', '--json', 'results.json'],
+            earlier
+        );
+
+        expect(driverError(failed).error).toMatch(/throw/);
+        expect(failed.results).toStrictEqual(earlier);
     });
 
     it('rejects --v8-report before it measures', async () => {

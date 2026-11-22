@@ -25,18 +25,19 @@ declare function printErr(...values: unknown[]): void;
 declare function write(...values: unknown[]): void;
 
 /**
- * Reads a file as UTF-8 text
+ * Reads the bytes of a file
  *
- * @throws {Error} If d8 can't load it.
+ * @throws {Error} If d8 can't read it.
  */
-declare function read(path: string): string;
+declare function readbuffer(path: string): ArrayBuffer;
 
 /**
- * Writes text to a file as UTF-8
+ * Writes text to a file as UTF-8, or the bytes of an `ArrayBuffer` as they
+ * are
  *
  * @throws {Error} If d8 can't open it, without the path.
  */
-declare function writeFile(path: string, text: string): void;
+declare function writeFile(path: string, data: string | ArrayBuffer): void;
 
 /**
  * Runs a benchmark script in d8, as `benk`'s `bench()` does in Node: reads
@@ -48,7 +49,7 @@ declare function writeFile(path: string, text: string): void;
  *
  * - `--json <path>` writes the file with d8's `writeFile()`. d8 has no
  *   check of a directory, so `bench()` checks the path before it measures
- *   by writing the file: with the text that it has, or empty.
+ *   by writing the file: with the bytes that it has, or empty.
  * - `--v8-report` is an error, before it measures: the report runs the
  *   script again in Node.
  * - A run counts bytes only with a runtime that counts them, which
@@ -92,7 +93,7 @@ export async function bench(
     if (toStdout) {
         (options.write ?? write)(formatJson(result));
     } else if (json != null) {
-        writeText(json, formatJson(result));
+        writeResults(json, formatJson(result));
     }
 
     return result;
@@ -117,29 +118,31 @@ function countsBytes(runtime: Runtime): boolean {
  * Checks that d8 can write the results' file, before the run rather than
  * after it, when a mistyped path would lose the measurements. d8 can't ask
  * whether a directory can be written to, so this writes the file again with
- * what d8 reads of it, or empty if it reads nothing, as when it's missing.
+ * the bytes that d8 reads of it, or empty if it reads none, as when it's
+ * missing. It reads bytes rather than text: d8's `read()` decodes the file
+ * as UTF-8, and takes each byte that isn't UTF-8 for U+FFFD.
  *
  * @throws {Error} If d8 can't write the file.
  */
 function checkFile(path: string): void {
-    let text = '';
+    let bytes = new ArrayBuffer(0);
     try {
-        text = read(path);
+        bytes = readbuffer(path);
     } catch {
         // A file that d8 can't read is written empty, if it can be written
     }
 
-    writeText(path, text);
+    writeResults(path, bytes);
 }
 
 /**
- * Writes text to the results' file
+ * Writes the results' file, with text as UTF-8, or with bytes as they are
  *
  * @throws {Error} If d8 can't, with the path, which d8's error leaves out.
  */
-function writeText(path: string, text: string): void {
+function writeResults(path: string, data: string | ArrayBuffer): void {
     try {
-        writeFile(path, text);
+        writeFile(path, data);
     } catch (error) {
         throw new Error(
             `Expected d8 to write the file of --json, got ${path}`,
