@@ -12,7 +12,13 @@ const ENTRY_POINTS = {
 export default defineConfig({
     // The tests run on hypotes, whose rules see what they declare and expect
     extends: [oxlint, hypotes],
-    ignorePatterns: ['.yarn', 'dist'],
+    ignorePatterns: [
+        '.yarn',
+        'dist',
+        // A bundle as rolldown writes it, whose positions the fixtures of
+        // its traced run name
+        'test/fixtures/v8/bundled/bench.mjs'
+    ],
     rules: {
         // A module in a parent directory is imported by a private path of
         // package.json's `imports`, such as `#source/core/types`, rather than

@@ -5,8 +5,9 @@ import { measureGroups, DEFAULT_OPTIONS } from '#source/core/measure';
 import { describeRun, formatGroup, formatJson } from '#source/core/report';
 import type { Group, RunResult, Runtime } from '#source/core/types';
 import { NodeRuntime } from './runtime.ts';
+import { readSourceMaps } from './source-maps.ts';
 import { isTracedRun, runTraced } from './traced-run.ts';
-import { formatV8Report, reportFunctions } from './v8-report.ts';
+import { formatV8Report, reportFunctions, tracedScripts } from './v8-report.ts';
 import { parseCodeLog, parseTrace } from './v8-trace.ts';
 
 /** The options of a benchmark script, from its command line */
@@ -22,9 +23,12 @@ export interface CommandOptions {
     readonly json: string | undefined;
     /**
      * Whether to run the script again with V8's traces, after measuring,
-     * and print a report of its hot functions
+     * and print a report of its hot functions, as `--v8-report` or
+     * `--v8-filter` asks
      */
     readonly v8Report: boolean;
+    /** Selects the functions of V8's report by name, or none if all of them */
+    readonly v8Filter: RegExp | undefined;
 }
 
 /** How `bench()` runs, for a script that runs it other than from the shell */
@@ -55,11 +59,13 @@ export interface BenchOptions {
  *   in array buffers
  * - `--v8-report`: runs the script again with V8's traces, and prints a
  *   report of its hot functions
+ * - `--v8-filter <regex>`: selects the functions of V8's report by name,
+ *   and implies `--v8-report`
  *
  * @throws {TypeError} If an argument isn't one of the options, or an option
  * has no value.
  * @throws {RangeError} If a number is out of its range.
- * @throws {SyntaxError} If the filter isn't a regular expression.
+ * @throws {SyntaxError} If a filter isn't a regular expression.
  */
 export function parseOptions(args: readonly string[]): CommandOptions {
     const { values } = parseArgs({
@@ -73,7 +79,8 @@ export function parseOptions(args: readonly string[]): CommandOptions {
             json: { type: 'string' },
             aa: { type: 'boolean', default: DEFAULT_OPTIONS.aa },
             heap: { type: 'boolean', default: DEFAULT_OPTIONS.heap },
-            'v8-report': { type: 'boolean', default: false }
+            'v8-report': { type: 'boolean', default: false },
+            'v8-filter': { type: 'string' }
         }
     });
 
@@ -93,9 +100,10 @@ export function parseOptions(args: readonly string[]): CommandOptions {
         sampleTime: sampleTimeOption(values['sample-ms']),
         aa: values.aa,
         heap: values.heap,
-        filter: filterOption(values.filter),
+        filter: filterOption(values.filter, '--filter'),
         json: values.json,
-        v8Report: values['v8-report']
+        v8Report: values['v8-report'] || values['v8-filter'] != null,
+        v8Filter: filterOption(values['v8-filter'], '--v8-filter')
     };
 }
 
@@ -104,7 +112,8 @@ export function parseOptions(args: readonly string[]): CommandOptions {
  * a description of the run, measures each group whose name matches the
  * filter and prints its table, and then writes the results as JSON, if the
  * options ask for it. With `--v8-report`, it then runs the script again
- * with V8's traces, and prints a report of its hot functions.
+ * with V8's traces, and prints a report of its hot functions, or of those
+ * that `--v8-filter` selects.
  *
  * In that traced run, it measures as in any other, but prints nothing,
  * writes no JSON, and doesn't run the script again.
@@ -112,7 +121,7 @@ export function parseOptions(args: readonly string[]): CommandOptions {
  * @throws {TypeError} If an argument isn't one of the options, or a group is
  * malformed, as `measureGroups()` describes.
  * @throws {RangeError} If a number is out of its range.
- * @throws {SyntaxError} If the filter isn't a regular expression.
+ * @throws {SyntaxError} If a filter isn't a regular expression.
  * @throws {Error} If the JSON's directory can't be written to, or
  * `--v8-report` has no script to run again, which it checks before it
  * measures, if the runtime's clock reads no time, if a variant throws, with
@@ -122,7 +131,7 @@ export async function bench(
     groups: Iterable<Group>,
     options: BenchOptions = {}
 ): Promise<RunResult> {
-    const { json, v8Report, ...command } = parseOptions(
+    const { json, v8Report, v8Filter, ...command } = parseOptions(
         options.args ?? process.argv.slice(2)
     );
     const runtime = options.runtime ?? defaultRuntime();
@@ -166,7 +175,7 @@ export async function bench(
     }
 
     if (script != null) {
-        for (const line of await traceScript(script)) {
+        for (const line of await traceScript(script, v8Filter)) {
             print(line);
         }
     }
@@ -220,13 +229,18 @@ function scriptToTrace(): string {
 
 /**
  * Runs the script again with V8's traces, with the arguments of this
- * process, and returns the lines of the report
+ * process, and returns the lines of the report, of the functions that the
+ * filter selects. It reads the scripts' source maps straight after the run,
+ * before a build that bundled the script may delete it.
  *
  * @throws {Error} If the traced run fails, or its traces have none of V8's
  * compilations, or its log none of its functions, as when V8 changed their
  * formats.
  */
-async function traceScript(script: string): Promise<string[]> {
+async function traceScript(
+    script: string,
+    filter: RegExp | undefined
+): Promise<string[]> {
     const { output, codeLog } = await runTraced(script, process.argv.slice(2));
     const trace = parseTrace(output);
     const logged = parseCodeLog(codeLog);
@@ -240,10 +254,18 @@ async function traceScript(script: string): Promise<string[]> {
         );
     }
 
+    const sourceMaps = await readSourceMaps(tracedScripts(trace, logged));
     const reports = reportFunctions(trace, logged, {
-        benkDirectory: benkDirectory()
+        benkDirectory: benkDirectory(),
+        filter,
+        sourceMaps
     });
-    return formatV8Report(reports, { script, directory: process.cwd() });
+    return formatV8Report(reports, {
+        script,
+        directory: process.cwd(),
+        filter,
+        sourceMaps
+    });
 }
 
 /**
@@ -257,7 +279,10 @@ function benkDirectory(): string {
     return new URL(url.endsWith('.ts') ? '..' : '.', url).href;
 }
 
-function filterOption(value: string | undefined): RegExp | undefined {
+function filterOption(
+    value: string | undefined,
+    name: string
+): RegExp | undefined {
     if (value == null) {
         return undefined;
     }
@@ -266,7 +291,7 @@ function filterOption(value: string | undefined): RegExp | undefined {
         return new RegExp(value, 'u');
     } catch (error) {
         throw new SyntaxError(
-            `Expected --filter to be a regular expression, got ${value}`,
+            `Expected ${name} to be a regular expression, got ${value}`,
             { cause: error }
         );
     }

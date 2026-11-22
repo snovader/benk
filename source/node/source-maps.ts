@@ -1,0 +1,304 @@
+// The source maps of the scripts that V8's traces name, for `--v8-report`:
+// they put a bundle's positions, as V8 has them, in the sources that it was
+// bundled from. `--v8-report` reads them right after the traced run, while
+// the scripts still exist, as a script that bundles a benchmark may delete
+// its bundle once `bench()` returns. Node's own `SourceMap` reads them.
+import { readFile } from 'node:fs/promises';
+import { SourceMap, type SourceMapPayload } from 'node:module';
+import { isAbsolute } from 'node:path';
+import { pathToFileURL } from 'node:url';
+import type { SourcePosition } from './v8-trace.ts';
+
+/**
+ * The comment that names a script's source map, as
+ * `//# sourceMappingURL=bench.mjs.map`, which captures its URL. The last one
+ * counts, wherever it is, as with Node's `--enable-source-maps`.
+ */
+const SOURCE_MAPPING_URL = /\/\/[#@]\s+sourceMappingURL=(\S+)/g;
+
+/** A data URL, which captures its parameters and its data */
+const DATA_URL = /^data:([^,]*),(.*)$/s;
+
+/** A Windows path that starts with a drive, as `C:\project\source\sum.ts` */
+const WINDOWS_PATH = /^[A-Za-z]:[\\/]/;
+
+/**
+ * The source maps of scripts, by the URLs or paths that V8 names the scripts
+ * by, and why those that couldn't be read couldn't
+ */
+export class SourceMaps {
+    readonly #maps: ReadonlyMap<string, ScriptSourceMap>;
+    readonly #unread: ReadonlyMap<string, string>;
+
+    constructor(
+        maps: ReadonlyMap<string, ScriptSourceMap>,
+        unread: ReadonlyMap<string, string>
+    ) {
+        this.#maps = maps;
+        this.#unread = unread;
+    }
+
+    /**
+     * The position in the source that its script was compiled from, as the
+     * script's source map has it. It's the position itself in a script
+     * without a source map, or whose source map couldn't be read, and where
+     * the map has no mapping on the position's line, at or before its
+     * column, as in code that a bundler added.
+     */
+    original(position: SourcePosition): SourcePosition {
+        return this.#maps.get(position.url)?.original(position) ?? position;
+    }
+
+    /**
+     * Why each script that names a source map that couldn't be read has its
+     * own positions, by the script's URL, as `it couldn't be read (ENOENT)`
+     */
+    unread(): ReadonlyMap<string, string> {
+        return this.#unread;
+    }
+}
+
+/**
+ * Reads the source maps of scripts, by the URLs or paths that V8 names them
+ * by. A script's source map is the file that its last
+ * `//# sourceMappingURL=` comment names, beside it, or the map inline, as a
+ * data URL. A script that isn't a file, as Node's own modules, or that names
+ * no source map, keeps its positions.
+ *
+ * So does a script whose source map can't be read, and `unread()` says why.
+ * This doesn't throw for it: the report is still of use with a bundle's
+ * positions, as long as it says that they are.
+ */
+export async function readSourceMaps(
+    scripts: Iterable<string>
+): Promise<SourceMaps> {
+    const unique = Array.from(new Set(scripts));
+    const read = await Promise.all(unique.map(readSourceMap));
+
+    const maps = new Map<string, ScriptSourceMap>();
+    const unread = new Map<string, string>();
+    for (let i = 0; i < unique.length; i++) {
+        const map = read[i];
+        if (typeof map === 'string') {
+            unread.set(unique[i], map);
+        } else if (map != null) {
+            maps.set(unique[i], map);
+        }
+    }
+
+    return new SourceMaps(maps, unread);
+}
+
+/** A script's source map, with its sources' URLs */
+export class ScriptSourceMap {
+    readonly #map: SourceMap;
+    /** The URLs of the sources, by the names that the map gives them */
+    readonly #sources = new Map<string, string>();
+
+    /**
+     * @param payload The source map, as JSON parses it.
+     * @param base The URL that the sources are relative to: the source
+     * map's, or the script's for a source map inline.
+     * @throws {TypeError} If the payload isn't a source map of version 3,
+     * or a source isn't a URL.
+     */
+    constructor(payload: unknown, base: URL) {
+        if (!isSourceMap(payload)) {
+            throw new TypeError('Expected a source map of version 3');
+        }
+
+        this.#map = new SourceMap(payload as SourceMapPayload);
+        for (const [source, root] of sourcesOf(payload)) {
+            this.#sources.set(source, sourceUrl(source, root, base));
+        }
+    }
+
+    /**
+     * The position in the source, or undefined where the map has no mapping
+     * on the position's line, at or before its column. A bundler copies a
+     * mapping's code from the source, so a column after the mapping's start
+     * is as far after its start in the source, as Node's `findOrigin()`
+     * takes it. A segment of one field, which maps to no source, isn't told
+     * apart by Node's `SourceMap`, which gives it the previous mapping's.
+     */
+    original({ line, column }: SourcePosition): SourcePosition | undefined {
+        const entry = this.#map.findEntry(line - 1, column - 1);
+        // The last mapping before the position, which can be on an earlier
+        // line, in other code
+        if (!('originalSource' in entry) || entry.generatedLine !== line - 1) {
+            return undefined;
+        }
+
+        const source = this.#sources.get(entry.originalSource);
+        if (source == null) {
+            return undefined;
+        }
+
+        return {
+            url: source,
+            line: entry.originalLine + 1,
+            column: entry.originalColumn + column - entry.generatedColumn
+        };
+    }
+}
+
+/** A source map, as far as it's checked before Node's `SourceMap` reads it */
+interface SourceMapJson {
+    readonly version: 3;
+    readonly sourceRoot?: unknown;
+    readonly sources?: unknown;
+    /** The source maps of an index map, which Node's `SourceMap` reads too */
+    readonly sections?: unknown;
+}
+
+function isSourceMap(value: unknown): value is SourceMapJson {
+    return (
+        typeof value === 'object' &&
+        value != null &&
+        'version' in value &&
+        value.version === 3
+    );
+}
+
+/**
+ * Reads a script's source map, or says why it couldn't, or returns undefined
+ * if the script names none, or isn't a file
+ */
+async function readSourceMap(
+    script: string
+): Promise<ScriptSourceMap | string | undefined> {
+    const file = fileOf(script);
+    if (file == null) {
+        return undefined;
+    }
+
+    let code: string;
+    try {
+        code = await readFile(file, 'utf8');
+    } catch (error) {
+        return `it couldn't be read (${reasonOf(error)})`;
+    }
+
+    const reference = lastReference(code);
+    if (reference == null) {
+        return undefined;
+    }
+
+    // A data URL can be long, and says nothing of where the map is
+    const named = reference.startsWith('data:')
+        ? 'its inline source map'
+        : `its source map, ${reference},`;
+    let url: URL;
+    let text: string;
+    try {
+        url = new URL(reference, file);
+        text = await readReference(url);
+    } catch (error) {
+        return `${named} couldn't be read (${reasonOf(error)})`;
+    }
+
+    try {
+        const base = url.protocol === 'data:' ? file : url;
+        return new ScriptSourceMap(JSON.parse(text), base);
+    } catch (error) {
+        return `${named} isn't one (${reasonOf(error)})`;
+    }
+}
+
+/**
+ * The URL of the file of a script that V8 names by its URL, as a module, or
+ * by its path, as a CommonJS module, or undefined for another, as Node's
+ * own modules and code compiled from a string
+ */
+function fileOf(script: string): URL | undefined {
+    if (script.startsWith('file:')) {
+        return new URL(script);
+    }
+
+    return isAbsolute(script) ? pathToFileURL(script) : undefined;
+}
+
+/** The URL of the last `//# sourceMappingURL=` comment of a script */
+function lastReference(code: string): string | undefined {
+    let reference: string | undefined;
+    for (const [, url] of code.matchAll(SOURCE_MAPPING_URL)) {
+        reference = url;
+    }
+
+    return reference;
+}
+
+/**
+ * The text of a source map in a file, or inline as a data URL, in base64 or
+ * percent-encoded
+ *
+ * @throws {Error} If the file can't be read, or the URL is of another scheme.
+ */
+async function readReference(url: URL): Promise<string> {
+    if (url.protocol === 'file:') {
+        return readFile(url, 'utf8');
+    }
+
+    const data = url.protocol === 'data:' ? DATA_URL.exec(url.href) : null;
+    if (data == null) {
+        throw new Error('not a file or a data URL');
+    }
+
+    const [, parameters, encoded] = data;
+    return parameters.endsWith(';base64')
+        ? Buffer.from(encoded, 'base64').toString('utf8')
+        : decodeURIComponent(encoded);
+}
+
+/**
+ * The names of a source map's sources, with its `sourceRoot`, and those of
+ * each map of an index map's sections. A source can be null, as of code that
+ * a bundler wrote, which has no URL.
+ */
+function sourcesOf(map: SourceMapJson): Array<[string, string]> {
+    const root = typeof map.sourceRoot === 'string' ? map.sourceRoot : '';
+    const sources = Array.isArray(map.sources) ? map.sources : [];
+    const own = sources
+        .filter(source => typeof source === 'string')
+        .map((source): [string, string] => [source, root]);
+    const sections = Array.isArray(map.sections) ? map.sections : [];
+
+    return [...own, ...sections.flatMap(sectionSources)];
+}
+
+/** The sources of an index map's section, as `{ offset, map }` */
+function sectionSources(section: unknown): Array<[string, string]> {
+    const map =
+        typeof section === 'object' && section != null && 'map' in section
+            ? section.map
+            : undefined;
+
+    return isSourceMap(map) ? sourcesOf(map) : [];
+}
+
+/**
+ * A source's URL: its name after the map's `sourceRoot`, from the base, as
+ * the specification of source maps resolves it, or of a Windows path with a
+ * drive, which some tools write, and which a URL would read as a scheme
+ *
+ * @throws {TypeError} If it isn't a URL.
+ */
+function sourceUrl(source: string, root: string, base: URL): string {
+    const rooted = root ? `${root.replace(/[\\/]?$/, '/')}${source}` : source;
+    if (WINDOWS_PATH.test(rooted)) {
+        return pathToFileURL(rooted, { windows: true }).href;
+    }
+
+    return new URL(rooted, base).href;
+}
+
+/** What an error says, briefly: a system error's code, as ENOENT, or its message */
+function reasonOf(error: unknown): string {
+    if (!(error instanceof Error)) {
+        return String(error);
+    }
+
+    return 'code' in error && typeof error.code === 'string'
+        ? error.code
+        : error.message;
+}
