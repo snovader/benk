@@ -269,38 +269,75 @@ describe('readTracedOutput', () => {
         }
     );
 
+    /** The output with the five markers of a `bench()` call, each at an offset of the output */
+    const markedAt = (at: readonly number[]): string => {
+        const events = [
+            marker({ bench: 0, event: 'start' }),
+            marker({ bench: 0, event: 'timed', group: 0 }),
+            marker({ bench: 0, event: 'done', group: 0 }),
+            marker({ bench: 0, event: 'end' }),
+            marker({ bench: 0, event: 'variants', groups: tracedGroups() })
+        ];
+        const marked = events.map((event, i) => `${output.slice(at[i - 1] ?? 0, at[i])}${event}\n`);
+
+        return `${marked.join('')}${output.slice(at[4])}`;
+    };
+    const sorted = (offsets: number[]): number[] => offsets.toSorted((a, b) => a - b);
+
     // As Node writes V8's traces on Windows: in chunks of the C runtime's
-    // buffer, of 4,096 bytes, among which a marker falls, within a line
-    const chunked = fc
+    // buffer, among which a marker falls anywhere, often within a line
+    const anywhere = fc
         .uniqueArray(fc.integer({ min: 1, max: output.length - 1 }), {
             minLength: 5,
             maxLength: 5
         })
-        .map(chosen => chosen.toSorted((a, b) => a - b));
+        .map(sorted);
 
-    it.prop([chunked, fc.boolean()])(
-        "cuts out markers that fall within V8's lines, and doesn't place the traces by them",
-        (at, inOrder) => {
-            const events = [
-                marker({ bench: 0, event: 'start' }),
-                marker({ bench: 0, event: 'timed', group: 0 }),
-                marker({ bench: 0, event: 'done', group: 0 }),
-                marker({ bench: 0, event: 'end' }),
-                marker({ bench: 0, event: 'variants', groups: tracedGroups() })
-            ];
-            const marked = events
-                .map((event, i) => `${output.slice(at[i - 1] ?? 0, at[i])}${event}\n`)
-                .join('');
-            const read = readTracedOutput(`${marked}${output.slice(at[4])}`, inOrder);
+    it.prop([anywhere])(
+        "cuts out markers wherever they fall, and doesn't place the traces by markers out of order",
+        at => {
+            const read = readTracedOutput(markedAt(at), false);
             const bench = expectPresent(read.benches.get(0));
 
             expect(read.trace).toStrictEqual(parseTrace(output));
             expect(bench.trace).toStrictEqual(read.trace);
+            expect(bench.timed).toBeUndefined();
             expect(bench.groups).toStrictEqual(tracedGroups());
-            // Unless each marker started a line, which shows nothing
-            if (!inOrder || at.some(i => output[i - 1] !== '\n')) {
-                expect(bench.timed).toBeUndefined();
-            }
+        }
+    );
+
+    // Within the first line of a compilation or a deoptimization, whose
+    // start V8 wrote before the marker, as in one run in CI
+    // The offset in the output of each line's start
+    const lineStarts: number[] = [];
+    let offset = 0;
+    for (const line of lines) {
+        lineStarts.push(offset);
+        offset += line.length + 1;
+    }
+    const withinFirstLines = fc
+        .uniqueArray(
+            fc
+                .constantFrom(...between)
+                .chain(i =>
+                    fc.integer({ min: lineStarts[i], max: lineStarts[i] + lines[i].length })
+                ),
+            { minLength: 5, maxLength: 5 }
+        )
+        .map(sorted);
+    const lineStartOf = (offset: number): number => output.lastIndexOf('\n', offset - 1) + 1;
+
+    it.prop([withinFirstLines])(
+        'places a marker in order that falls within a line at the start of the line',
+        at => {
+            const read = readTracedOutput(markedAt(at), true);
+            const bench = expectPresent(read.benches.get(0));
+            const [start, timed, done, end] = at.map(lineStartOf);
+
+            expect(read.trace).toStrictEqual(parseTrace(output));
+            expect(bench.trace).toStrictEqual(parseTrace(output.slice(start, end)));
+            expect(bench.timed).toStrictEqual([parseTrace(output.slice(timed, done))]);
+            expect(bench.groups).toStrictEqual(tracedGroups());
         }
     );
 

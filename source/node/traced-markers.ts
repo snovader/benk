@@ -6,12 +6,14 @@
 //
 // V8 writes its traces on the main thread, while JavaScript waits, and the
 // traced run compiles on it too. Where V8's stdout isn't buffered, a marker
-// that JavaScript writes falls between two of V8's lines, after those that
-// V8 wrote before it. Of 300 functions, each made hot between two markers,
-// all 1,050 compilations and deoptimizations were between the right
-// markers, on Node 24.22.3, 26.13.0 and 27.0.0-alpha on macOS. Where it's
-// buffered, as on Windows, `markersInOrder()` says why the markers fall
-// elsewhere, and the reader uses only what they say, not where they are.
+// that JavaScript writes falls after the lines that V8 wrote before it, and
+// between two of them, but for a rare one within a line, which the reader
+// places at the line's start. Of 300 functions, each made hot between two
+// markers, all 1,050 compilations and deoptimizations were between the
+// right markers, on Node 24.22.3, 26.13.0 and 27.0.0-alpha on macOS. Where
+// it's buffered, as on Windows, `markersInOrder()` says why the markers
+// fall elsewhere, and the reader uses only what they say, not where they
+// are.
 import { writeSync } from 'node:fs';
 import type { Role } from '#source/core/types';
 import { parseTrace, type SourcePosition, type V8Trace } from './v8-trace.ts';
@@ -123,31 +125,48 @@ export function markersInOrder(): boolean {
  * Reads V8's traces from a traced run's stdout, with its markers cut out of
  * them, wherever they fall. Where the markers fall in order, it places the
  * traces by them: each `bench()` call's, and each of its groups' timed
- * rounds'. It doesn't where they don't, or where a marker fell within a
- * line of V8's, which shows that they didn't: each call then has all of the
+ * rounds'. It doesn't where they don't: each call then has all of the
  * traces, and none of timed rounds.
+ *
+ * A marker in order still falls within a line of the output now and then:
+ * in one run in CI, on Linux with Node 24.22.3, against none in 38 runs on
+ * macOS and on Linux in Docker. The line's start came before the marker,
+ * and its end after. It places the marker at the line's start, so that the
+ * line, joined again, comes after it whole.
  */
 export function readTracedOutput(
     output: string,
     inOrder: boolean = markersInOrder()
 ): MarkedOutput {
     const { pieces, markers } = cutMarkers(output);
-    const placed = inOrder && markers.every(marker => marker.atLineStart);
-    const segments = new Segments(placed);
+    const segments = new Segments(inOrder);
+    const placed = inOrder ? atLineStarts(pieces) : pieces;
 
-    for (const [i, { marker }] of markers.entries()) {
-        segments.add(pieces[i]);
+    for (const [i, marker] of markers.entries()) {
+        segments.add(placed[i]);
         segments.mark(marker);
     }
-    segments.add(pieces[markers.length]);
+    segments.add(placed[markers.length]);
 
     return segments.build();
 }
 
-/** A marker, and whether it starts a line of the output */
-interface CutMarker {
-    readonly marker: Marker;
-    readonly atLineStart: boolean;
+/**
+ * The pieces of an output between its markers, with each piece's end within
+ * a line moved to the start of the next piece, so that each marker falls at
+ * the start of the line that it fell within. Their text is the same.
+ */
+function atLineStarts(pieces: readonly string[]): string[] {
+    const moved = [...pieces];
+
+    for (let i = 0; i < moved.length - 1; i++) {
+        const piece = moved[i];
+        const lineStart = piece.lastIndexOf('\n') + 1;
+        moved[i] = piece.slice(0, lineStart);
+        moved[i + 1] = piece.slice(lineStart) + moved[i + 1];
+    }
+
+    return moved;
 }
 
 /**
@@ -156,12 +175,11 @@ interface CutMarker {
  */
 function cutMarkers(output: string): {
     pieces: string[];
-    markers: CutMarker[];
+    markers: Marker[];
 } {
     const pieces: string[] = [];
-    const markers: CutMarker[] = [];
+    const markers: Marker[] = [];
     let from = 0;
-    let atLineStart = true;
 
     for (
         let at = output.indexOf(PREFIX);
@@ -177,12 +195,8 @@ function cutMarkers(output: string): {
             continue;
         }
 
-        const piece = output.slice(from, at);
-        if (piece !== '') {
-            atLineStart = piece.endsWith('\n');
-        }
-        pieces.push(piece);
-        markers.push({ marker, atLineStart });
+        pieces.push(output.slice(from, at));
+        markers.push(marker);
         from = end === -1 ? output.length : end + 1;
     }
     pieces.push(output.slice(from));

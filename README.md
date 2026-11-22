@@ -878,7 +878,10 @@ What the report can't show in d8:
      JavaScript waits, so such a line falls between two of V8's. Of 300
      functions made hot between two such lines, each of the 1,050
      compilations and deoptimizations fell between the right two, in Node
-     24.22.3, 26.13.0 and 27.0.0-alpha on macOS.
+     24.22.3, 26.13.0 and 27.0.0-alpha on macOS. Once, in CI on Linux with
+     Node 24.22.3, a line fell within one of V8's, and none did in 38 runs
+     since, on macOS and on Linux in Docker. The report places such a line
+     at the start of the line of V8's that it fell within.
    - On Windows, Node leaves the buffering on, as `src/node.cc` turns it
      off for POSIX only. V8's lines reach stdout in chunks of the buffer,
      and a line of benk's falls between two chunks, before lines of V8's
