@@ -201,7 +201,10 @@ export class ScriptSourceMap {
      * on the position's line, at or before its column. A bundler copies a
      * mapping's code from the source, so a column after the mapping's start
      * is as far after its start in the source, as Node's `findOrigin()`
-     * takes it. A segment of one field, which maps to no source, isn't told
+     * takes it. Where the bundler renamed an identifier after the mapping,
+     * or minified the code, the column is off by the difference in length:
+     * telling it would take the bundle's code, and minified code can differ
+     * anywhere. A segment of one field, which maps to no source, isn't told
      * apart by Node's `SourceMap`, which gives it the previous mapping's.
      */
     original({ line, column }: SourcePosition): SourcePosition | undefined {

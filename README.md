@@ -534,6 +534,13 @@ same.
 - The names are V8's, as the bundle has them. A bundler can rename a
   function, as rolldown renames a second `sum` to `sum$1`, and
   `--v8-filter` matches the bundle's name.
+- A column after a renamed name, or in minified code, is approximate. It's
+  off by what the bundler changed between the mapping and the position.
+  With `a.ts` and `b.ts`, which each export a `sum`, rolldown renamed
+  `a.ts`'s to `sum$1`. The report placed it at `a.ts:1:22`, 2 columns
+  after its parameters, as `sum$1` is 2 characters longer. With
+  `--minify`, it was `t a.ts:1:18`, and each variant's `run` was 1 column
+  before its parameters. Their lines were right.
 
 A script that names a source map that can't be read keeps its own
 positions. The report then says why, after its heading, for each such
