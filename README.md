@@ -1024,6 +1024,47 @@ benk keeps these in view rather than out of the results:
   each, on an Apple M2 Pro with Node 26.13.0. [V8's report](#v8s-report)
   shows the tiers.
 
+- **The width of small integers.** V8 keeps an integer in place of a
+  pointer, as a small integer, when it fits: in 32 bits in Node, and in 31
+  where V8 compresses pointers, as in d8, workerd and Chrome. There, an
+  integer from 2³⁰ to 2³¹ − 1 is a number on the heap. So code that handles
+  such integers can take more or less time in a Worker or a browser than in
+  Node, and a benchmark in Node doesn't show it.
+  [`benchmarks/small-integers/`](benchmarks/small-integers/) does the same
+  work on 1,000 integers just below 2³⁰, and on as many from 2³⁰, with the
+  same groups in Node and in d8. These are the ratios of the second to the
+  first, by the median round, in 3 runs of each, on an Apple M2 Pro with
+  Node 26.13.0 and d8 15.8.62.9, with a load average near 2:
+
+  | Integers held in | Node, 1 ms | Node, 10 ms | d8, 1 ms  | d8, 10 ms |
+  | ---------------- | ---------- | ----------- | --------- | --------- |
+  | object fields    | 0.99–1.02  | 1.00        | 1.09–1.10 | 1.06–1.08 |
+  | `number[]`       | 1.00–1.01  | 0.99–1.00   | 0.90      | 0.91–0.92 |
+  | `Int32Array`     | 1.00–1.01  | 1.00        | 0.95      | 0.97–1.00 |
+  | A/A copies       | 0.99–1.01  | 0.99–1.01   | 0.99–1.01 | 1.00–1.01 |
+
+  The columns are of rounds of 1 ms and of 10 ms, as `--sample-ms` sets.
+  Each of d8's intervals for object fields and `number[]` left out 1, and
+  each of Node's held it.
+
+  In d8, each new object's field held a heap number. In runs apart from the
+  timed ones, with V8's `--trace-gc-nvp`, a call allocated about 28,200
+  bytes in d8, against 15,900, and 10,000 calls collected 68 times, against
+  38. In Node, both allocated about 31,700 bytes a call, and collected 38
+  and 39 times. In d8, the `number[]` held doubles, which V8 stores without
+  checking that they fit in 31 bits.
+
+  The `Int32Array` holds 32-bit integers either way. With rounds of 1 ms,
+  its calls ran in Maglev's code, which V8 compiled from feedback that saw
+  heap numbers for the larger integers, and which took 5% less time with
+  them. With 10 ms, Turbofan's code took over after 9 or 10 of the 36
+  rounds, and the ratios came closer to 1.
+
+  Time code in d8, with `benk/d8`, when it will run in a Worker or a
+  browser, and compare ratios within one engine. Node's V8 and d8's are
+  different versions, so a time in one against a time in the other compares
+  the versions too.
+
 ## Planned
 
 Not built yet:
