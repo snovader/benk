@@ -97,7 +97,7 @@ export interface SourceMapText {
  * positions, as long as it says that they are.
  *
  * @param read The source maps that were read before, as the traced run
- * records them, by script, which aren't read again.
+ * records them, by the URLs of the scripts' files, which aren't read again.
  */
 export async function readSourceMaps(
     scripts: Iterable<string>,
@@ -161,13 +161,18 @@ export async function readSourceMapFile(
     }
 }
 
-/** A script's source map as it was read before, or as it's read now */
+/**
+ * A script's source map as it was read before, by the URL of its file, as
+ * Node's inspector names a CommonJS module that V8 names by its path, or as
+ * it's read now
+ */
 async function sourceMapFileOf(
     script: string,
     read: ReadonlyMap<string, SourceMapFile>
 ): Promise<SourceMapFile> {
+    const url = fileOf(script)?.href;
     // Strictly, as null is of a script that was read, and names none
-    const file = read.get(script);
+    const file = url == null ? undefined : read.get(url);
 
     return file === undefined ? readSourceMapFile(script) : file;
 }

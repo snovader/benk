@@ -562,9 +562,17 @@ it is, has its own positions, without a note.
    that V8 sees the same calls, but prints nothing and writes no JSON. A
    script that does more, such as writing files, does it twice.
 2. Once it has measured, its `bench()` reads the source maps of the
-   scripts that V8 has logged, for the report. In 3 runs of a script that
-   bundled its benchmark with rolldown, on an Apple M2 Pro with Node
-   26.13.0, that took 10 ms, for 165 scripts.
+   scripts that V8 has compiled, for the report. It lists them through
+   Node's [inspector](https://nodejs.org/api/inspector.html), whose
+   debugger it enables only for that, as V8 on Windows keeps its code log
+   to itself until the run exits. In 3 runs of a script that bundled its
+   benchmark with rolldown, on an Apple M2 Pro with each of Node 24.22.3,
+   26.13.0 and 27.0.0-alpha, that took 32 to 39 ms, for 202 or 203
+   scripts. The reports of a script that calls `bench()` twice were the
+   same with it and without it, but for a timer loop whose tiers differed
+   between runs either way. A Node built without the inspector reads the
+   source maps after the run instead, so a deleted bundle keeps its own
+   positions.
 3. V8's flags are `--trace-opt`, `--trace-deopt-verbose` and
    `--trace-turbo-inlining`, whose traces go to the run's stdout, and
    `--log-code` with `--no-logfile-per-isolate`, whose log of each

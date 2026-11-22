@@ -296,6 +296,30 @@ describe('readSourceMaps of source maps read before', () => {
         });
     });
 
+    it('takes the source map of a script that V8 names by its path, by the URL of its file', async () => {
+        const files = {
+            'bundle.cjs': `${CODE}\n//# sourceMappingURL=bundle.cjs.map\n`,
+            'bundle.cjs.map': map
+        };
+
+        await inDirectory(files, async directory => {
+            const url = urlOf(directory, 'bundle.cjs');
+            const read = new Map([[url, await readSourceMapFile(url)]]);
+            for (const name of Object.keys(files)) {
+                await rm(join(directory, name));
+            }
+            const path = join(directory, 'bundle.cjs');
+            const maps = await readSourceMaps([path], read);
+
+            expect(maps.unread()).toStrictEqual(new Map());
+            expect(maps.original({ url: path, line: 1, column: 13 })).toStrictEqual({
+                url: urlOf(directory, 'source.ts'),
+                line: 3,
+                column: 20
+            });
+        });
+    });
+
     it('keeps the reason of a script read before, and reads the scripts that were not', async () => {
         const files = {
             'other.mjs': `${CODE}\n//# sourceMappingURL=other.mjs.map\n`,

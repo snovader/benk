@@ -8,7 +8,6 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { readSourceMapFile, type SourceMapFile } from './source-maps.ts';
-import { parseCodeLog } from './v8-trace.ts';
 
 /**
  * The environment variable that marks the traced run. `bench()` measures in
@@ -56,8 +55,8 @@ export interface TracedOutput {
     /** V8's log of the code that it created */
     readonly codeLog: string;
     /**
-     * The source maps that it read of the scripts of its code log, by
-     * script, before its `bench()` returned, as `recordSourceMaps()` records
+     * The source maps that it read of its scripts, by the URLs of their
+     * files, before its `bench()` returned, as `recordSourceMaps()` records
      * them
      */
     readonly sourceMapFiles: ReadonlyMap<string, SourceMapFile>;
@@ -69,41 +68,72 @@ export function isTracedRun(): boolean {
 }
 
 /**
- * The source maps that this traced run read, by script, which it keeps
- * between its calls of `bench()`, so that it reads each only once
+ * The source maps that this traced run read, by the URLs of the scripts'
+ * files, which it keeps between its calls of `bench()`, so that it reads
+ * each only once
  */
 const recorded = new Map<string, SourceMapFile>();
 
 /**
- * In the traced run, reads the source maps of the scripts that its code log
- * names so far, and records them beside the log, for the process that runs
- * it. That process reads its traces once the run exits, after the script's
- * code after `bench()` has run in it too, which can delete the bundle that
- * it timed. A run without a code log, as one whose environment sets
- * `BENK_TRACED_RUN` without benk, records nothing.
+ * In the traced run, reads the source maps of the scripts that V8 has
+ * compiled so far, and records them beside the code log, for the process
+ * that runs it. That process reads its traces once the run exits, after the
+ * script's code after `bench()` has run in it too, which can delete the
+ * bundle that it timed.
+ *
+ * A run without a code log, as one whose environment sets
+ * `BENK_TRACED_RUN` without benk, records nothing, and so does a Node built
+ * without the inspector, whose process then reads the source maps after it.
  */
 export async function recordSourceMaps(): Promise<void> {
     // The last, which `runTraced()` passes after this process's own flags
     const log = process.execArgv
         .findLast(arg => arg.startsWith(LOGFILE))
         ?.slice(LOGFILE.length);
-    if (log == null) {
+    if (log == null || !process.features.inspector) {
         return;
     }
 
-    const logged = parseCodeLog(await readFile(log, 'utf8'));
-    const scripts = new Set<string>();
-    for (const { position } of logged.values()) {
-        if (!recorded.has(position.url)) {
-            scripts.add(position.url);
-        }
-    }
-    await Promise.all(Array.from(scripts, recordSourceMap));
+    const scripts = await compiledScripts();
+    const unread = Array.from(scripts).filter(script => !recorded.has(script));
+    await Promise.all(unread.map(recordSourceMap));
 
     await writeFile(
         join(dirname(log), SOURCE_MAPS),
         JSON.stringify(Array.from(recorded))
     );
+}
+
+/**
+ * The URLs of the scripts that V8 has compiled, as its debugger lists them.
+ * The code log names them too, but V8 on Windows keeps the log's file to
+ * itself until the process exits, so that it can't be read.
+ *
+ * The debugger is enabled only for as long as V8 takes to list the scripts.
+ * That didn't change what V8 did after it: a script that calls `bench()`
+ * twice had the same report with it and without it, in 3 runs of each on
+ * Node 24.22.3, 26.13.0 and 27.0.0-alpha, apart from a timer loop whose
+ * tiers differed between runs either way.
+ */
+async function compiledScripts(): Promise<Set<string>> {
+    // Imported here, as the module throws in a Node without the inspector
+    const { Session } = await import('node:inspector/promises');
+    const session = new Session();
+    const scripts = new Set<string>();
+
+    session.on('Debugger.scriptParsed', ({ params }) => {
+        scripts.add(params.url);
+    });
+    session.connect();
+    try {
+        // V8 lists the scripts that it has before it answers
+        await session.post('Debugger.enable');
+        await session.post('Debugger.disable');
+    } finally {
+        session.disconnect();
+    }
+
+    return scripts;
 }
 
 async function recordSourceMap(script: string): Promise<void> {
