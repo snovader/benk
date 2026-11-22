@@ -245,14 +245,35 @@ describe('--v8-report', () => {
         );
 
         expect(heading).not.toBe(-1);
-        // Each function's name and position, before the size of its
-        // bytecode, which differs between versions of V8
-        const functions = lines
-            .slice(heading + 3)
-            .filter(line => !line.startsWith('  ') && line !== '')
-            .map(line => line.slice(0, line.indexOf(',')));
-
         expect(lines[heading + 2]).toBe('Only the functions whose names match ^sum$.');
-        expect(functions).toStrictEqual([`sum ${join(BUNDLED, 'sum.ts')}:6:20`]);
+        expect(reportedFunctions(lines, heading)).toStrictEqual([
+            `sum ${join(BUNDLED, 'sum.ts')}:6:20`
+        ]);
+    });
+
+    it('reports a bundle in its sources, if the script deletes it after bench()', async () => {
+        const script = join(BUNDLED, 'build-and-bench.ts');
+        const lines = await runScript(script, ['--v8-filter', '^sum$']);
+        const heading = lines.indexOf(
+            `V8 report of ${script}, from a run of it with V8's traces, whose times aren't reported.`
+        );
+
+        // Without a note that the bundle's positions are its own
+        expect(heading).not.toBe(-1);
+        expect(reportedFunctions(lines, heading)).toStrictEqual([
+            `sum ${join(BUNDLED, 'sum.ts')}:6:20`
+        ]);
     });
 });
+
+/**
+ * The lines of a report with a filter after its heading, but for each
+ * function's lines of detail: its name and position, before the size of its
+ * bytecode, which differs between versions of V8, or a note
+ */
+function reportedFunctions(lines: readonly string[], heading: number): string[] {
+    return lines
+        .slice(heading + 3)
+        .filter(line => !line.startsWith('  ') && line !== '')
+        .map(line => line.split(',', 1)[0]);
+}

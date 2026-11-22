@@ -6,7 +6,7 @@ import { describeRun, formatGroup, formatJson } from '#source/core/report';
 import type { Group, RunResult, Runtime } from '#source/core/types';
 import { NodeRuntime } from './runtime.ts';
 import { readSourceMaps } from './source-maps.ts';
-import { isTracedRun, runTraced } from './traced-run.ts';
+import { isTracedRun, recordSourceMaps, runTraced } from './traced-run.ts';
 import { formatV8Report, reportFunctions, tracedScripts } from './v8-report.ts';
 import { parseCodeLog, parseTrace } from './v8-trace.ts';
 
@@ -116,7 +116,9 @@ export function parseOptions(args: readonly string[]): CommandOptions {
  * that `--v8-filter` selects.
  *
  * In that traced run, it measures as in any other, but prints nothing,
- * writes no JSON, and doesn't run the script again.
+ * writes no JSON, and doesn't run the script again. It then reads the
+ * source maps of the scripts that V8 logged, before it returns, for the
+ * report.
  *
  * @throws {TypeError} If an argument isn't one of the options, or a group is
  * malformed, as `measureGroups()` describes.
@@ -137,7 +139,9 @@ export async function bench(
     const runtime = options.runtime ?? defaultRuntime();
     if (isTracedRun()) {
         // The process that runs this one prints the report, and the results
-        return measureGroups(groups, command, runtime);
+        const result = await measureGroups(groups, command, runtime);
+        await recordSourceMaps();
+        return result;
     }
 
     const toStdout = json === '-';
@@ -230,8 +234,10 @@ function scriptToTrace(): string {
 /**
  * Runs the script again with V8's traces, with the arguments of this
  * process, and returns the lines of the report, of the functions that the
- * filter selects. It reads the scripts' source maps straight after the run,
- * before a build that bundled the script may delete it.
+ * filter selects. It takes the scripts' source maps from the traced run,
+ * which read them before its `bench()` returned. The script's code after
+ * `bench()` runs in the traced run too, and may delete a bundle. It reads
+ * the source maps of other scripts after the run.
  *
  * @throws {Error} If the traced run fails, or its traces have none of V8's
  * compilations, or its log none of its functions, as when V8 changed their
@@ -241,7 +247,10 @@ async function traceScript(
     script: string,
     filter: RegExp | undefined
 ): Promise<string[]> {
-    const { output, codeLog } = await runTraced(script, process.argv.slice(2));
+    const { output, codeLog, sourceMapFiles } = await runTraced(
+        script,
+        process.argv.slice(2)
+    );
     const trace = parseTrace(output);
     const logged = parseCodeLog(codeLog);
     if (trace.compilations.length === 0 || logged.size === 0) {
@@ -254,7 +263,10 @@ async function traceScript(
         );
     }
 
-    const sourceMaps = await readSourceMaps(tracedScripts(trace, logged));
+    const sourceMaps = await readSourceMaps(
+        tracedScripts(trace, logged),
+        sourceMapFiles
+    );
     const reports = reportFunctions(trace, logged, {
         benkDirectory: benkDirectory(),
         filter,

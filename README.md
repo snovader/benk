@@ -521,9 +521,11 @@ same.
 - The comment has to start its line, as bundlers write it. That tells it
   from the same text in a string, which V8 doesn't read either. A comment
   after code on its line, which V8 reads, isn't read.
-- It reads them right after the traced run, before `bench()` returns, so
-  a script that deletes its bundle afterwards still has the report in its
-  sources.
+- The traced run reads them, before its own `bench()` returns. It runs all
+  of the script, so a script that deletes its bundle after `bench()`
+  deletes it in the traced run too, before benk prints the report. A script
+  that bundled `bench.ts`, imported the bundle and then deleted it still
+  had `sumLoop` at `sum.ts:1:24`.
 - Node's [`SourceMap`](https://nodejs.org/api/module.html#class-modulesourcemap)
   reads each map. A column after the start of a mapping is as far after
   the start in the source, as Node's `findOrigin()` takes it.
@@ -552,17 +554,21 @@ it is, has its own positions, without a note.
    in its environment, where `bench()` measures as it does otherwise, so
    that V8 sees the same calls, but prints nothing and writes no JSON. A
    script that does more, such as writing files, does it twice.
-2. V8's flags are `--trace-opt`, `--trace-deopt-verbose` and
+2. Once it has measured, its `bench()` reads the source maps of the
+   scripts that V8 has logged, for the report. In 3 runs of a script that
+   bundled its benchmark with rolldown, on an Apple M2 Pro with Node
+   26.13.0, that took 10 ms, for 165 scripts.
+3. V8's flags are `--trace-opt`, `--trace-deopt-verbose` and
    `--trace-turbo-inlining`, whose traces go to the run's stdout, and
    `--log-code` with `--no-logfile-per-isolate`, whose log of each
    function's position and bytecode benk reads from a temporary file. The
    run writes to the first run's stderr.
-3. `--no-concurrent-recompilation` compiles on the main thread, so that a
+4. `--no-concurrent-recompilation` compiles on the main thread, so that a
    compilation's lines come together. In Node 27.0.0-alpha, a background
    compilation's line of inlining was split by another line. V8 then
    installs optimized code as soon as it's compiled, rather than when the
    main thread next checks for it.
-4. It's another process, so V8's decisions can differ from the first run's,
+5. It's another process, so V8's decisions can differ from the first run's,
    as its calls per round can.
 
 ### What it leaves out

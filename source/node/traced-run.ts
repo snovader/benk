@@ -1,16 +1,20 @@
 // The traced run of `--v8-report`: the benchmark script run again, in a
 // child Node process, with V8's flags that trace what its compilers do.
 // `v8-trace.ts` parses what the run writes, and `v8-report.ts` reports it.
+// The run records the source maps of its scripts before its `bench()`
+// returns, as `source-maps.ts` reads them.
 import { spawn } from 'node:child_process';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { readSourceMapFile, type SourceMapFile } from './source-maps.ts';
+import { parseCodeLog } from './v8-trace.ts';
 
 /**
  * The environment variable that marks the traced run. `bench()` measures in
  * it as in any other run, so that V8 sees the same calls, but prints
  * nothing, writes no JSON, and doesn't run the script again for
- * `--v8-report`.
+ * `--v8-report`. It then records the source maps of the run's scripts.
  */
 export const TRACED_RUN = 'BENK_TRACED_RUN';
 
@@ -39,17 +43,71 @@ export const TRACE_FLAGS: readonly string[] = [
     '--no-logfile-per-isolate'
 ];
 
+/** The flag that names the file of V8's log, as `--logfile=code.log` */
+const LOGFILE = '--logfile=';
+
+/** The file beside the code log that the traced run records source maps in */
+const SOURCE_MAPS = 'source-maps.json';
+
 /** What a traced run wrote */
 export interface TracedOutput {
     /** Its stdout: V8's traces, among what the script wrote */
     readonly output: string;
     /** V8's log of the code that it created */
     readonly codeLog: string;
+    /**
+     * The source maps that it read of the scripts of its code log, by
+     * script, before its `bench()` returned, as `recordSourceMaps()` records
+     * them
+     */
+    readonly sourceMapFiles: ReadonlyMap<string, SourceMapFile>;
 }
 
 /** Whether this process is the traced run of another */
 export function isTracedRun(): boolean {
     return Boolean(process.env[TRACED_RUN]);
+}
+
+/**
+ * The source maps that this traced run read, by script, which it keeps
+ * between its calls of `bench()`, so that it reads each only once
+ */
+const recorded = new Map<string, SourceMapFile>();
+
+/**
+ * In the traced run, reads the source maps of the scripts that its code log
+ * names so far, and records them beside the log, for the process that runs
+ * it. That process reads its traces once the run exits, after the script's
+ * code after `bench()` has run in it too, which can delete the bundle that
+ * it timed. A run without a code log, as one whose environment sets
+ * `BENK_TRACED_RUN` without benk, records nothing.
+ */
+export async function recordSourceMaps(): Promise<void> {
+    // The last, which `runTraced()` passes after this process's own flags
+    const log = process.execArgv
+        .findLast(arg => arg.startsWith(LOGFILE))
+        ?.slice(LOGFILE.length);
+    if (log == null) {
+        return;
+    }
+
+    const logged = parseCodeLog(await readFile(log, 'utf8'));
+    const scripts = new Set<string>();
+    for (const { position } of logged.values()) {
+        if (!recorded.has(position.url)) {
+            scripts.add(position.url);
+        }
+    }
+    await Promise.all(Array.from(scripts, recordSourceMap));
+
+    await writeFile(
+        join(dirname(log), SOURCE_MAPS),
+        JSON.stringify(Array.from(recorded))
+    );
+}
+
+async function recordSourceMap(script: string): Promise<void> {
+    recorded.set(script, await readSourceMapFile(script));
 }
 
 /**
@@ -69,15 +127,42 @@ export async function runTraced(
         const output = await runChild(script, [
             ...process.execArgv,
             ...TRACE_FLAGS,
-            `--logfile=${log}`,
+            `${LOGFILE}${log}`,
             script,
             ...args
         ]);
 
-        return { output, codeLog: await readFile(log, 'utf8') };
+        return {
+            output,
+            codeLog: await readFile(log, 'utf8'),
+            sourceMapFiles: await readRecorded(join(directory, SOURCE_MAPS))
+        };
     } finally {
         await rm(directory, { recursive: true, force: true });
     }
+}
+
+/**
+ * The source maps that the traced run recorded, or none if it didn't, as
+ * when its script didn't call `bench()`
+ */
+async function readRecorded(path: string): Promise<Map<string, SourceMapFile>> {
+    let text: string;
+    try {
+        text = await readFile(path, 'utf8');
+    } catch (error) {
+        if (isMissing(error)) {
+            return new Map();
+        }
+        throw error;
+    }
+
+    // Written by `recordSourceMaps()`, in the traced run
+    return new Map(JSON.parse(text) as Array<[string, SourceMapFile]>);
+}
+
+function isMissing(error: unknown): boolean {
+    return error instanceof Error && 'code' in error && error.code === 'ENOENT';
 }
 
 /** Runs Node with the arguments, and collects what it writes to stdout */

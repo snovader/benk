@@ -6,7 +6,12 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { describe, expect } from 'hypotes';
 import { fc, it } from 'hypotes/fast-check';
-import { readSourceMaps, ScriptSourceMap } from '#source/node/source-maps';
+import {
+    readSourceMapFile,
+    readSourceMaps,
+    ScriptSourceMap,
+    type SourceMapFile
+} from '#source/node/source-maps';
 import type { SourcePosition } from '#source/node/v8-trace';
 import { BENCH_URL, BUNDLE_URL, BUNDLED, REPOSITORY } from './v8-fixtures.ts';
 
@@ -260,6 +265,57 @@ describe('readSourceMaps', () => {
                     column: 14
                 });
             }
+        });
+    });
+});
+
+describe('readSourceMaps of source maps read before', () => {
+    const map = JSON.stringify(sourceMap(['source.ts'], [LINE]));
+
+    it('takes the source map of a script that was deleted since, through JSON, as the traced run records it', async () => {
+        const files = {
+            'bundle.mjs': `${CODE}\n//# sourceMappingURL=bundle.mjs.map\n`,
+            'bundle.mjs.map': map
+        };
+
+        await inDirectory(files, async directory => {
+            const url = urlOf(directory, 'bundle.mjs');
+            const recorded = JSON.stringify([[url, await readSourceMapFile(url)]]);
+            for (const name of Object.keys(files)) {
+                await rm(join(directory, name));
+            }
+            const read = JSON.parse(recorded) as Array<[string, SourceMapFile]>;
+            const maps = await readSourceMaps([url], new Map(read));
+
+            expect(maps.unread()).toStrictEqual(new Map());
+            expect(maps.original({ url, line: 1, column: 14 })).toStrictEqual({
+                url: urlOf(directory, 'source.ts'),
+                line: 3,
+                column: 21
+            });
+        });
+    });
+
+    it('keeps the reason of a script read before, and reads the scripts that were not', async () => {
+        const files = {
+            'other.mjs': `${CODE}\n//# sourceMappingURL=other.mjs.map\n`,
+            'other.mjs.map': map
+        };
+
+        await inDirectory(files, async directory => {
+            const deleted = urlOf(directory, 'deleted.mjs');
+            const other = urlOf(directory, 'other.mjs');
+            const read = new Map([[deleted, await readSourceMapFile(deleted)]]);
+            const maps = await readSourceMaps([deleted, other], read);
+
+            expect(maps.unread()).toStrictEqual(
+                new Map([[deleted, "it couldn't be read (ENOENT)"]])
+            );
+            expect(maps.original({ url: other, line: 1, column: 14 })).toStrictEqual({
+                url: urlOf(directory, 'source.ts'),
+                line: 3,
+                column: 21
+            });
         });
     });
 });

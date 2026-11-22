@@ -1,8 +1,9 @@
 // The source maps of the scripts that V8's traces name, for `--v8-report`:
 // they put a bundle's positions, as V8 has them, in the sources that it was
-// bundled from. `--v8-report` reads them right after the traced run, while
-// the scripts still exist, as a script that bundles a benchmark may delete
-// its bundle once `bench()` returns. Node's own `SourceMap` reads them.
+// bundled from. The traced run reads them before its `bench()` returns,
+// while the scripts still exist, as a script that bundles a benchmark may
+// delete its bundle once `bench()` returns, and records them for the
+// process that reports it. Node's own `SourceMap` parses them.
 import { readFile } from 'node:fs/promises';
 import { SourceMap, type SourceMapPayload } from 'node:module';
 import { isAbsolute } from 'node:path';
@@ -62,26 +63,56 @@ export class SourceMaps {
 }
 
 /**
+ * A script's source map as it was read, before it's parsed: its text, or
+ * why it couldn't be read, or null where the script isn't a file, as Node's
+ * own modules, or names no source map
+ */
+export type SourceMapFile = SourceMapText | string | null;
+
+/** The text of a script's source map */
+export interface SourceMapText {
+    /**
+     * The map, as `its source map, bench.mjs.map,` or `its inline source
+     * map`, for a reason that it isn't one
+     */
+    readonly named: string;
+    /**
+     * The URL that the sources are relative to: the source map's, or the
+     * script's for a source map inline
+     */
+    readonly base: string;
+    readonly text: string;
+}
+
+/**
  * Reads the source maps of scripts, by the URLs or paths that V8 names them
- * by. A script's source map is the file that its last
- * `//# sourceMappingURL=` comment names, at the start of a line, beside the
- * script, or the map inline, as a data URL. A script that isn't a file, as Node's own modules, or that names
- * no source map, keeps its positions.
+ * by, or takes them from those that were read before. A script's source map
+ * is the file that its last `//# sourceMappingURL=` comment names, at the
+ * start of a line, beside the script, or the map inline, as a data URL. A
+ * script that isn't a file, as Node's own modules, or that names no source
+ * map, keeps its positions.
  *
  * So does a script whose source map can't be read, and `unread()` says why.
  * This doesn't throw for it: the report is still of use with a bundle's
  * positions, as long as it says that they are.
+ *
+ * @param read The source maps that were read before, as the traced run
+ * records them, by script, which aren't read again.
  */
 export async function readSourceMaps(
-    scripts: Iterable<string>
+    scripts: Iterable<string>,
+    read: ReadonlyMap<string, SourceMapFile> = new Map()
 ): Promise<SourceMaps> {
     const unique = Array.from(new Set(scripts));
-    const read = await Promise.all(unique.map(readSourceMap));
+    const files = await Promise.all(
+        unique.map(script => sourceMapFileOf(script, read))
+    );
 
     const maps = new Map<string, ScriptSourceMap>();
     const unread = new Map<string, string>();
     for (let i = 0; i < unique.length; i++) {
-        const map = read[i];
+        const file = files[i];
+        const map = file == null ? undefined : parseSourceMap(file);
         if (typeof map === 'string') {
             unread.set(unique[i], map);
         } else if (map != null) {
@@ -90,6 +121,55 @@ export async function readSourceMaps(
     }
 
     return new SourceMaps(maps, unread);
+}
+
+/**
+ * Reads the text of a script's source map, as `readSourceMaps()` finds it,
+ * or says why it couldn't, or returns null if the script names none, or
+ * isn't a file
+ */
+export async function readSourceMapFile(
+    script: string
+): Promise<SourceMapFile> {
+    const file = fileOf(script);
+    if (file == null) {
+        return null;
+    }
+
+    let code: string;
+    try {
+        code = await readFile(file, 'utf8');
+    } catch (error) {
+        return `it couldn't be read (${reasonOf(error)})`;
+    }
+
+    const reference = lastReference(code);
+    if (reference == null) {
+        return null;
+    }
+
+    // A data URL can be long, and says nothing of where the map is
+    const named = reference.startsWith('data:')
+        ? 'its inline source map'
+        : `its source map, ${reference},`;
+    try {
+        const url = new URL(reference, file);
+        const base = url.protocol === 'data:' ? file : url;
+        return { named, base: base.href, text: await readReference(url) };
+    } catch (error) {
+        return `${named} couldn't be read (${reasonOf(error)})`;
+    }
+}
+
+/** A script's source map as it was read before, or as it's read now */
+async function sourceMapFileOf(
+    script: string,
+    read: ReadonlyMap<string, SourceMapFile>
+): Promise<SourceMapFile> {
+    // Strictly, as null is of a script that was read, and names none
+    const file = read.get(script);
+
+    return file === undefined ? readSourceMapFile(script) : file;
 }
 
 /** A script's source map, with its sources' URLs */
@@ -164,47 +244,20 @@ function isSourceMap(value: unknown): value is SourceMapJson {
 }
 
 /**
- * Reads a script's source map, or says why it couldn't, or returns undefined
- * if the script names none, or isn't a file
+ * Parses the text of a script's source map, or says why it isn't one, as a
+ * reason that a script's positions are its own
  */
-async function readSourceMap(
-    script: string
-): Promise<ScriptSourceMap | string | undefined> {
-    const file = fileOf(script);
-    if (file == null) {
-        return undefined;
-    }
-
-    let code: string;
-    try {
-        code = await readFile(file, 'utf8');
-    } catch (error) {
-        return `it couldn't be read (${reasonOf(error)})`;
-    }
-
-    const reference = lastReference(code);
-    if (reference == null) {
-        return undefined;
-    }
-
-    // A data URL can be long, and says nothing of where the map is
-    const named = reference.startsWith('data:')
-        ? 'its inline source map'
-        : `its source map, ${reference},`;
-    let url: URL;
-    let text: string;
-    try {
-        url = new URL(reference, file);
-        text = await readReference(url);
-    } catch (error) {
-        return `${named} couldn't be read (${reasonOf(error)})`;
+function parseSourceMap(
+    file: SourceMapText | string
+): ScriptSourceMap | string {
+    if (typeof file === 'string') {
+        return file;
     }
 
     try {
-        const base = url.protocol === 'data:' ? file : url;
-        return new ScriptSourceMap(JSON.parse(text), base);
+        return new ScriptSourceMap(JSON.parse(file.text), new URL(file.base));
     } catch (error) {
-        return `${named} isn't one (${reasonOf(error)})`;
+        return `${file.named} isn't one (${reasonOf(error)})`;
     }
 }
 
