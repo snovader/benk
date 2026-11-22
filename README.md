@@ -563,6 +563,13 @@ The lines by variant say whose:
 `doesn't inline mix bench.ts:29:13 (874 B): exceeds bytecode limit`, under
 the variant `mixed`.
 
+The check sees only what V8 did in the traced run, and V8's tiering can
+differ between runs and machines. In CI, on Linux with Node 26.13.0, a run
+of `test/fixtures/v8/bench.ts` with 6 rounds of 1 ms passed the check: no
+Turbofan compilation considered `mix`. On the Apple M2 Pro, such runs
+failed it by `mix`. Longer rounds give V8 the time to compile the code
+that calls a function, as `--sample-ms 10` did above.
+
 ### In the results
 
 With `--v8-report`, the results have the report too, so `bench()` writes
@@ -879,9 +886,11 @@ What the report can't show in d8:
      functions made hot between two such lines, each of the 1,050
      compilations and deoptimizations fell between the right two, in Node
      24.22.3, 26.13.0 and 27.0.0-alpha on macOS. Once, in CI on Linux with
-     Node 24.22.3, a line fell within one of V8's, and none did in 38 runs
-     since, on macOS and on Linux in Docker. The report places such a line
-     at the start of the line of V8's that it fell within.
+     Node 24.22.3, a line fell within one of V8's. None did in 22 traced
+     runs since, on macOS and on Linux arm64 in Docker, nor in 32 on Linux
+     x64 in Docker, where V8 ran without Turbofan, as it does under the
+     Mac's emulation of x64. The report places such a line at the start of
+     the line of V8's that it fell within.
    - On Windows, Node leaves the buffering on, as `src/node.cc` turns it
      off for POSIX only. V8's lines reach stdout in chunks of the buffer,
      and a line of benk's falls between two chunks, before lines of V8's

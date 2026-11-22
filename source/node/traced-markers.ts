@@ -129,8 +129,8 @@ export function markersInOrder(): boolean {
  * traces, and none of timed rounds.
  *
  * A marker in order still falls within a line of the output now and then:
- * in one run in CI, on Linux with Node 24.22.3, against none in 38 runs on
- * macOS and on Linux in Docker. The line's start came before the marker,
+ * in one run in CI, on Linux with Node 24.22.3, against none in 22 runs
+ * since on macOS and on Linux arm64. The line's start came before the marker,
  * and its end after. It places the marker at the line's start, so that the
  * line, joined again, comes after it whole.
  */

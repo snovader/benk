@@ -8,6 +8,12 @@ import { bench, parseOptions, type Group, type RunResult } from 'benk';
 import { FakeRuntime } from './fake-runtime.ts';
 import { BENCH, BUNDLE, BUNDLED, REPOSITORY } from './v8-fixtures.ts';
 
+/**
+ * A benchmark with a function over Turbofan's limit, which Turbofan
+ * considers inlining in every run, as it runs with `--allow-natives-syntax`
+ */
+const OVER_BUDGET = join('test', 'fixtures', 'v8', 'over-budget.mjs');
+
 const QUICK = ['--sample-ms', '0.01', '--warmup-rounds', '1', '--rounds', '6'];
 
 describe('parseOptions', () => {
@@ -216,10 +222,14 @@ async function runScript(script: string, args: readonly string[]): Promise<strin
     return lines;
 }
 
-/** The lines that a script prints, and the code that it exits with */
+/**
+ * The lines that a script prints, and the code that it exits with, run with
+ * Node's flags, if any, before the script
+ */
 async function runScriptWithCode(
     script: string,
-    args: readonly string[]
+    args: readonly string[],
+    flags: readonly string[] = []
 ): Promise<{ code: number; lines: string[] }> {
     // Run as the package's scripts run the tests, whose flags the traced run has too
     const run = promisify(execFile)(
@@ -228,6 +238,7 @@ async function runScriptWithCode(
             '--no-strip-types',
             '--import',
             '@snovader/node-hooks/register',
+            ...flags,
             script,
             ...args,
             '--rounds',
@@ -293,13 +304,22 @@ describe('--v8-report', () => {
 
 describe('--v8-check', () => {
     it("fails the run with exit code 2 for a function over Turbofan's limit", async () => {
-        const { code, lines } = await runScriptWithCode(BENCH, ['--v8-check']);
+        // Whose caller V8 compiles with Turbofan before bench(), with the
+        // natives syntax, as a run of a few rounds may not
+        const { code, lines } = await runScriptWithCode(
+            OVER_BUDGET,
+            ['--v8-check'],
+            ['--allow-natives-syntax']
+        );
         const failed = lines.indexOf('V8 check failed:');
 
         expect(code).toBe(2);
         expect(failed).not.toBe(-1);
-        expect(lines.slice(failed + 1)).toContain(
-            `  mix ${BENCH}:23:13, 874 B of bytecode, over Turbofan's 460 B, and considered for inlining into mixAll ${BENCH}:64:16`
+        // Turbofan may consider it for the timer loop and its run too, after it
+        expect(lines[failed + 1]).toMatch(
+            new RegExp(
+                `^  mix ${escaped(OVER_BUDGET)}:11:13, 874 B of bytecode, over Turbofan's 460 B, and considered for inlining into addMix ${escaped(OVER_BUDGET)}:54:16(, |$)`
+            )
         );
     });
 
@@ -345,6 +365,11 @@ describe('--v8-check', () => {
         }
     });
 });
+
+/** A path as a regular expression matches it, as a Windows path's backslashes */
+function escaped(path: string): string {
+    return path.replaceAll(/[\\.]/g, character => `\\${character}`);
+}
 
 /**
  * The lines of a report's functions with a filter after its heading, up to
