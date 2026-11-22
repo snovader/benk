@@ -4,7 +4,7 @@ import { defineConfig } from 'oxlint';
 
 /** Imports of an entry point by its private path */
 const ENTRY_POINTS = {
-    regex: '^#source/(index|core)$',
+    regex: '^#source/(index|core|d8)$',
     message:
         'Import an entry point by the name that the package exports it under.'
 };
@@ -26,10 +26,16 @@ export default defineConfig({
     overrides: [
         {
             // The core runs on any JavaScript runtime: what's particular to
-            // Node, such as `node:v8`'s heap statistics and timer loops
-            // compiled with `new Function`, stays in `source/node`. The
-            // core's entry point is as free of them.
-            files: ['source/core/**', 'source/core.ts'],
+            // Node, such as `node:v8`'s heap statistics, stays in
+            // `source/node`. The core's entry point is as free of them, and
+            // so is d8's runtime, with its entry point, since d8 has none of
+            // Node's modules.
+            files: [
+                'source/core/**',
+                'source/core.ts',
+                'source/d8/**',
+                'source/d8.ts'
+            ],
             rules: {
                 'eslint/no-restricted-imports': [
                     'error',
@@ -39,7 +45,7 @@ export default defineConfig({
                             {
                                 regex: '^(node:|#source/node/)',
                                 message:
-                                    "Keep the core free of Node's modules: a runtime provides them through `Runtime`."
+                                    "Keep the core and d8's runtime free of Node's modules: a runtime provides what's particular to its host through `Runtime`."
                             }
                         ]
                     }

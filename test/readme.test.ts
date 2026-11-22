@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'hypotes';
 import * as benk from 'benk';
 import * as core from 'benk/core';
+import * as d8 from 'benk/d8';
 
 // The README names the package's exports and the command line's options one
 // by one, which a change to either would leave behind: these compare its
@@ -37,6 +38,12 @@ describe('README', () => {
 
         expect(named.sort()).toStrictEqual(leftOut.sort());
         expect(Object.keys(core).filter(name => !(name in benk))).toStrictEqual([]);
+    });
+
+    it('describes each export of benk/d8', () => {
+        const described = captures(tableAfter('### d8'), /^\| `(\w+)/gm);
+
+        expect(described.sort()).toStrictEqual(Object.keys(d8).sort());
     });
 
     it('describes each option of the command line', () => {

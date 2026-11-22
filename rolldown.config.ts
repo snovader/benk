@@ -3,15 +3,16 @@ import { defineConfig } from 'rolldown';
 
 /**
  * Bundles the package's entry points into `dist/`, as they're published:
- * `benk`'s, and `benk/core`'s, with what they share in a chunk of its own.
- * The package has no dependencies, so `benk`'s bundle imports only Node's
- * modules, and `benk/core`'s none. tsc writes the declarations beside them,
- * with `tsconfig.dist.json`.
+ * `benk`'s, `benk/core`'s and `benk/d8`'s, with what they share in a chunk
+ * of its own. The package has no dependencies, so `benk`'s bundle imports
+ * only Node's modules, and the others none. tsc writes the declarations
+ * beside them, with `tsconfig.dist.json`.
  */
 export default defineConfig({
     input: {
         index: join(import.meta.dirname, 'source/index.ts'),
-        core: join(import.meta.dirname, 'source/core.ts')
+        core: join(import.meta.dirname, 'source/core.ts'),
+        d8: join(import.meta.dirname, 'source/d8.ts')
     },
     platform: 'node',
     output: {

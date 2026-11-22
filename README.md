@@ -22,7 +22,8 @@ It times one process's variants against each other. It isn't a general
 harness with every statistic: [mitata](https://github.com/evanwashere/mitata)
 and [tinybench](https://github.com/tinylibs/tinybench) cover more ground.
 
-benk has no dependencies, and runs on Node 24 and later.
+benk has no dependencies, and runs on Node 24 and later, and in
+[d8](#d8), the V8 shell.
 
 ## Quick start
 
@@ -414,10 +415,10 @@ array buffers' bytes with `process.memoryUsage()`. A runtime without
 `arrayBuffers` counts none, as the runtime below. The `runtime` option takes
 another `Runtime`, such as one with a fake clock for a test.
 
-benk has a runtime for Node only. A script for another runtime passes its
-own, and imports `benk/core` rather than `benk`. Importing `benk` loads
-Node's modules, whichever runtime times the variants. Importing `benk/core`
-loads none.
+benk has runtimes for Node, and for d8, as [d8](#d8) describes. A script
+for another runtime passes its own, and imports `benk/core` rather than
+`benk`. Importing `benk` loads Node's modules, whichever runtime times the
+variants. Importing `benk/core` loads none.
 
 `benk/core` exports what `benk` does, except these, which need Node:
 
@@ -523,6 +524,107 @@ await measureGroups(
 
 Both scripts were run in Node. benk isn't tested in a Worker or a browser,
 whose clocks and module loading differ from Node's.
+
+### d8
+
+[d8](https://v8.dev/docs/d8) is V8's own shell, which runs JavaScript
+without Node. Its V8 can be newer than Node's, or built otherwise. Homebrew's
+d8 15.8.62.9, from `brew install v8`, has small integers of 31 bits, as
+V8's builds with [pointer compression](https://v8.dev/blog/pointer-compression)
+do, and Node 26.13.0 has small integers of 32 bits.
+
+`benk/d8` exports d8's runtime, and loads none of Node's modules:
+
+| Export      | What it does                                                                         |
+| ----------- | ------------------------------------------------------------------------------------ |
+| `D8Runtime` | Times variants in d8, each in a timer loop that `new Function` compiles, as in Node. |
+
+d8 reads an import as a path, not as a package's name. So a script imports
+benk's bundle from `node_modules`, as this one, `bench.mjs`, does:
+
+```js
+import {
+    describeRun,
+    formatGroup,
+    measureGroups
+} from './node_modules/benk/dist/core.js';
+import { D8Runtime } from './node_modules/benk/dist/d8.js';
+
+const numbers = Array.from({ length: 1000 }, (_, i) => Math.sin(i));
+
+function sumLoop(values) {
+    let sum = 0;
+    for (let i = 0; i < values.length; i++) {
+        sum += values[i];
+    }
+    return sum;
+}
+
+const result = await measureGroups(
+    [
+        {
+            name: 'sum 1,000 numbers',
+            variants: [
+                { name: 'for loop', run: () => sumLoop(numbers) },
+                {
+                    name: 'reduce',
+                    run: () => numbers.reduce((sum, x) => sum + x, 0)
+                }
+            ]
+        }
+    ],
+    { runtime: new D8Runtime() }
+);
+
+console.log(describeRun(result.runtime, result.options));
+for (const group of result.groups) {
+    console.log(formatGroup(group).join('\n'));
+}
+```
+
+d8 runs a `.mjs` file as an ES module:
+
+```sh
+d8 bench.mjs
+```
+
+```text
+d8 15.8.62.9, V8 15.8.62.9, macos unknown, unknown, with unknown. Process state: 31-bit small integers.
+Per call, of at least 31 interleaved rounds of 1 ms per variant after 10 warm-up rounds, in an order that rotates each variant through each position:
+the fastest and median round, the interquartile range as a share of the median, the ratio to the group's first variant by the statistic that the group leads with, a 95% interval of the median of the per-round ratios, and the bytes allocated on the heap.
+
+sum 1,000 numbers: 36 rounds, by the median round (a call of 1 µs or more)
+                      fastest     median   spread    ratio   95% interval        heap
+  for loop            1.41 µs    1.46 µs     3.4%    1.00×                          –
+  reduce              6.23 µs    6.55 µs     4.2%    4.47×      4.42–4.55           –
+  for loop A/A        1.41 µs    1.46 µs     3.6%    1.00×      0.99–1.02           –
+```
+
+This is one of 3 runs on an Apple M2 Pro, whose ratios of `reduce` were
+4.41, 4.47 and 4.48. What a run in d8 reports differs from Node's:
+
+- **heap**: d8 has no API that counts heap bytes, so the column shows `–`,
+  and `heapBytes` is null. The description lists heap bytes anyway, as for
+  any run whose `heap` option is on.
+- **The runtime's description** gives `unknown` for the architecture, the
+  processor and the flags that d8 started with, which d8 can't read. The
+  platform is d8's name for the operating system, such as `macos`, where
+  Node's is `darwin`.
+- **The process state** records the bits of the small integers. d8 has no
+  property that says, but its serializer writes 2³⁰ as an integer where they
+  have 32 bits, and as a double where they have 31. With 31, integers from
+  2³⁰ to 2³¹ − 1 are numbers on the heap.
+- **The timer's resolution**: d8's `performance.now()` advances in steps of
+  1 µs, which benk's estimate gives. A round of the default 1 ms spans 1,000
+  of them. Median rounds under 50 µs get the note.
+
+A TypeScript script, or one that imports `benk/core` and `benk/d8` by name,
+as in Node, needs bundling into one module first. A `bench.ts` that did so
+ran as `bench.mjs` did, bundled by rolldown 1.3.2:
+
+```sh
+rolldown bench.ts --file bench.mjs
+```
 
 ### Groups apart from the run
 
@@ -789,9 +891,9 @@ Not built yet:
   deopts, tied to the result that they explain, with a budget check for CI.
 - **A `bench` API in hypotes**, Vitest's `bench()` on node:test, layered over
   benk.
-- **Runtimes other than Node**: a runtime for browsers and Workers, with
-  timer loops written at build time and no heap bytes, in place of the one
-  that a script writes itself, as [Runtimes](#runtimes) describes.
+- **Runtimes for browsers and Workers**, with timer loops written at build
+  time and no heap bytes, in place of the one that a script writes itself,
+  as [Runtimes](#runtimes) describes.
 - **Position effects in the report.** The JSON has each round's position;
   the table could flag a variant whose time depends on it.
 
