@@ -52,9 +52,11 @@ declare function writeFile(path: string, data: string | ArrayBuffer): void;
  *   by writing the file: with the bytes that it has, or empty.
  * - `--v8-report` is an error, before it measures, as is `--v8-filter`,
  *   which implies it: the report runs the script again in Node.
- * - A run counts bytes only with a runtime that counts them, which
- *   `D8Runtime` doesn't. Its results then record `heap: false`, with or
- *   without `--no-heap`, and its description leaves the bytes out.
+ * - A run counts bytes only with a runtime that counts them. `D8Runtime`
+ *   counts array buffers only where d8 started with the flags that it
+ *   describes, and never heap bytes. A run that counts neither records
+ *   `heap: false`, with or without `--no-heap`, and its description leaves
+ *   the bytes out.
  *
  * @throws {TypeError} If an argument isn't one of the options, or a group is
  * malformed, as `measureGroups()` describes.
