@@ -915,7 +915,7 @@ __metadata:
     "@snovader/tsconfig": "npm:^0.1.0"
     "@types/node": "npm:^26.6.6"
     fast-check: "npm:^4.10.3"
-    hypotes: "npm:^0.3.0"
+    hypotes: "npm:^0.3.1"
     oxfmt: "npm:^0.79.0"
     oxlint: "npm:^1.94.0"
     oxlint-tsgolint: "npm:^7.0.2007"
@@ -949,9 +949,9 @@ __metadata:
   languageName: node
   linkType: hard
 
-"hypotes@npm:^0.3.0":
-  version: 0.3.0
-  resolution: "hypotes@npm:0.3.0"
+"hypotes@npm:^0.3.1":
+  version: 0.3.1
+  resolution: "hypotes@npm:0.3.1"
   dependencies:
     "@sinonjs/fake-timers": "npm:15.4.0"
     "@vitest/expect": "npm:^5.1.0"
@@ -974,7 +974,7 @@ __metadata:
       optional: true
   bin:
     hypotes: ./dist/cli.js
-  checksum: 10c0/79188998bb424e53401f307770d0248a20bb8796ab38136463a640c8b6455fbb059ae75f2af699c6521039b14f735c7002919f33658a6b09432052c1d342942c
+  checksum: 10c0/771bf5bc80093ea0e4523ed0cc70fb6a063b46c86986b659407b9e016ea8813098dcb8588ee5ec77195a4133b2306acb055faecbba7d2c91831b3e26a685028f
   languageName: node
   linkType: hard
 
