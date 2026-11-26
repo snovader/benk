@@ -13,17 +13,18 @@ type CreateNext<T> = (inputs: T[]) => () => T;
  * load into each variant's call.
  *
  * It compares rather than takes a remainder, which would divide by a count
- * that isn't a constant.
+ * that isn't a constant, and reads the array's length at each call: with
+ * the count in a variable of its own, a call took 0.2 ns longer, in
+ * `benchmarks/inputs-in-turn.ts` in Node 26.13.0.
  */
 const NEXT_SOURCE = `inputs => {
-    const count = inputs.length;
     let next = 0;
 
     return () => {
-        const input = inputs[next];
-        next = next + 1 === count ? 0 : next + 1;
+        const current = next;
+        next = current + 1 === inputs.length ? 0 : current + 1;
 
-        return input;
+        return inputs[current];
     };
 }`;
 
@@ -39,8 +40,8 @@ const NEXT_SOURCE = `inputs => {
  * inputs. So give each variant a function of its own, of inputs of one
  * kind: of the same class, and for arrays the same kind of elements.
  *
- * It keeps a copy of the array, and adds a load, a compare and two stores
- * to each call, which the README measures.
+ * It keeps a copy of the array, and adds to each call what a counter
+ * written by hand does, which the README measures.
  *
  * @throws {RangeError} If there are no inputs.
  */
