@@ -1,6 +1,14 @@
 import { describe, expect } from 'hypotes';
 import { fc, it } from 'hypotes/fast-check';
-import { formatJson, measureGroup, measureGroups, type GroupResult, type SyncVariant } from 'benk';
+import {
+    formatJson,
+    measureGroup,
+    measureGroups,
+    type GroupResult,
+    type HeapMeter,
+    type Runtime,
+    type SyncVariant
+} from 'benk';
 import { expectClose, expectPresent } from './expectations.ts';
 import { FakeRuntime } from './fake-runtime.ts';
 
@@ -561,5 +569,185 @@ describe('measureGroups', () => {
         );
 
         expect(JSON.parse(formatJson(result))).toStrictEqual(result);
+    });
+
+    describe('releasing the meters', () => {
+        /** The meters' releases before each call of the variant, as `heap/buffers` */
+        function recording(runtime: FakeRuntime, seen: Set<string>): SyncVariant {
+            return {
+                name: 'a',
+                run: () => {
+                    runtime.clock.spend(50);
+                    runtime.fakeHeap.allocate(48);
+                    seen.add(
+                        `${runtime.fakeHeap.releases()}/${runtime.fakeArrayBuffers.releases()}`
+                    );
+                }
+            };
+        }
+
+        it('releases them after the counts of each group, before the first call of the next', async () => {
+            const runtime = new FakeRuntime();
+            const first = new Set<string>();
+            const second = new Set<string>();
+
+            const result = await measureGroups(
+                [
+                    { name: 'first', variants: [recording(runtime, first)] },
+                    { name: 'second', variants: [recording(runtime, second)] }
+                ],
+                { ...QUICK, runtime }
+            );
+
+            // The first group's calls, its counts' too, run before any release
+            expect([...first]).toStrictEqual(['0/0']);
+            expect([...second]).toStrictEqual(['1/1']);
+            expect([
+                runtime.fakeHeap.releases(),
+                runtime.fakeArrayBuffers.releases()
+            ]).toStrictEqual([2, 2]);
+            expect(
+                result.groups.flatMap(group => group.variants.map(v => v.heapBytes))
+            ).toStrictEqual([48, 48, 48, 48]);
+        });
+
+        it('releases them when a call throws during the counts', async () => {
+            const runtime = new FakeRuntime();
+            let counting = false;
+            const throws: SyncVariant = {
+                name: 'throws',
+                run: () => {
+                    runtime.clock.spend(50);
+                    if (counting) {
+                        throw new Error('during the counts');
+                    }
+                }
+            };
+
+            const measurement = measureGroups([{ name: 'group', variants: [throws] }], {
+                ...QUICK,
+                runtime,
+                onRounds: (_group, rounds) => (counting = rounds === 'done')
+            });
+
+            await expect(measurement).rejects.toThrow(/"throws" of group "group" threw/);
+            expect([
+                runtime.fakeHeap.releases(),
+                runtime.fakeArrayBuffers.releases()
+            ]).toStrictEqual([1, 1]);
+        });
+
+        it('releases the instances that counted, including the heap meter with a cached baseline', async () => {
+            const fake = new FakeRuntime();
+            const inUse = new Set<symbol>();
+            function meter(): HeapMeter {
+                const id = Symbol('meter');
+                return {
+                    start() {
+                        inUse.add(id);
+                        return () => 0;
+                    },
+                    release() {
+                        inUse.delete(id);
+                    }
+                };
+            }
+
+            const runtime: Runtime = {
+                description: fake.description,
+                createTimer: () => fake.createTimer(),
+                createAsyncTimer: () => fake.createAsyncTimer(),
+                get heap() {
+                    return meter();
+                },
+                get arrayBuffers() {
+                    return { ...meter(), settle: () => Promise.resolve() };
+                }
+            };
+            const group = { name: 'counts', variants: [fake.variant('a', 50)] };
+            await measureGroups([group, group], {
+                ...QUICK,
+                runtime,
+                onGroup: () => expect(inUse.size).toBe(0)
+            });
+        });
+
+        it.each(['sync', 'async'])(
+            'stops a failed %s sample and reports both release failures',
+            async kind => {
+                const runtime = new FakeRuntime();
+                const failure = new Error('sample failed');
+                const heapFailure = new Error('heap release failed');
+                const bufferFailure = new Error('buffer release failed');
+                let active = 0;
+                runtime.fakeHeap.start = () => {
+                    active++;
+                    return () => --active;
+                };
+                runtime.fakeHeap.release = () => {
+                    throw heapFailure;
+                };
+                expectPresent(runtime.arrayBuffers).release = () => Promise.reject(bufferFailure);
+
+                const call = (): void => {
+                    if (active > 0) {
+                        throw failure;
+                    }
+                    runtime.clock.spend(50);
+                };
+                const variant =
+                    kind === 'sync'
+                        ? { name: 'sample', run: call }
+                        : {
+                              name: 'sample',
+                              async: true as const,
+                              run: () => Promise.resolve().then(call)
+                          };
+                const measurement = measureGroup(
+                    { name: 'counts', variants: [variant] },
+                    { ...QUICK, runtime }
+                );
+
+                const error: unknown = await measurement.catch((reason: unknown) => reason);
+                if (!(error instanceof AggregateError)) {
+                    expect.fail('Expected the counting and release errors');
+                }
+                const [countError, ...releaseErrors] = error.errors as unknown[];
+                expect(error.cause).toBe(countError);
+                expect(countError).toMatchObject({
+                    message: 'Variant "sample" of group "counts" threw',
+                    cause: failure
+                });
+                expect(releaseErrors).toStrictEqual([heapFailure, bufferFailure]);
+                expect(active).toBe(0);
+            }
+        );
+
+        it('rejects with a single release error after releasing the other meter', async () => {
+            const runtime = new FakeRuntime();
+            const failure = new Error('failed to release the heap');
+            runtime.fakeHeap.release = () => {
+                throw failure;
+            };
+
+            const group = { name: 'counts', variants: [runtime.variant('a', 50)] };
+            await expect(measureGroup(group, { ...QUICK, runtime })).rejects.toBe(failure);
+            expect(runtime.fakeArrayBuffers.releases()).toBe(1);
+        });
+
+        it('leaves them alone when the run counts no bytes', async () => {
+            const runtime = new FakeRuntime();
+
+            await measureGroups([{ name: 'group', variants: [runtime.variant('a', 50, 48)] }], {
+                ...QUICK,
+                heap: false,
+                runtime
+            });
+
+            expect([
+                runtime.fakeHeap.releases(),
+                runtime.fakeArrayBuffers.releases()
+            ]).toStrictEqual([0, 0]);
+        });
     });
 });

@@ -71,7 +71,22 @@ export interface BenchOptions {
     readonly print?: (line: string) => void;
     /** Writes the JSON to stdout, when `--json -` asks for it */
     readonly write?: (text: string) => void;
+    /**
+     * Prints what the script adds to the tables, such as a table of sizes,
+     * with the `print` that printed them: `bench()` calls it last, with
+     * the results too, and awaits it. A script that prints with the
+     * console instead has to find out itself whether `--json -` moved the
+     * tables to stderr. The traced run of `--v8-report` prints nothing, so
+     * it doesn't call it.
+     */
+    readonly after?: AfterBench;
 }
+
+/** What `bench()` calls after a run, with where it printed, and the results */
+export type AfterBench = (
+    print: (line: string) => void,
+    result: RunResult
+) => void | Promise<void>;
 
 /** The options of a run that `measureAndPrint()` measures and describes */
 type PrintedRunOptions = Required<MeasureOptions> &

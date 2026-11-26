@@ -198,7 +198,58 @@ describe('bench', () => {
         expect(printed.some(line => line.startsWith('second: '))).toBe(true);
     });
 
-    it('measures in the traced run of another process, without printing, writing JSON, or running again', async () => {
+    it('calls `after` last, with the print that printed the tables, and the results', async () => {
+        const runtime = new FakeRuntime();
+        const lines: string[] = [];
+        const written: string[] = [];
+        let handed: RunResult | undefined;
+
+        const result = await bench(groups(runtime), {
+            args: [...QUICK, '--json', '-'],
+            runtime,
+            print: line => lines.push(line),
+            write: text => written.push(text),
+            after: async (print, results) => {
+                await Promise.resolve();
+                print(`after ${written.length} written`);
+                handed = results;
+            }
+        });
+
+        expect(lines[lines.length - 1]).toBe('after 1 written');
+        expect(handed).toBe(result);
+    });
+
+    it("prints `after`'s lines where the tables go: to stdout, or to stderr for --json -", async () => {
+        const toStdout = await runAfter([]);
+        const toStderr = await runAfter(['--json', '-']);
+        const result = JSON.parse(toStderr.stdout) as RunResult;
+
+        expect(toStdout.stdout.trimEnd().split('\n').slice(-1)).toStrictEqual(['1 group measured']);
+        expect(toStdout.stderr).toBe('');
+        expect(result.groups.map(group => group.name)).toStrictEqual(['calls']);
+        expect(toStderr.stderr.trimEnd().split('\n').slice(-1)).toStrictEqual(['1 group measured']);
+    });
+
+    it('rejects with what `after` throws, after it wrote the JSON', async () => {
+        const runtime = new FakeRuntime();
+        const written: string[] = [];
+
+        const run = bench(groups(runtime), {
+            args: [...QUICK, '--json', '-'],
+            runtime,
+            print: () => undefined,
+            write: text => written.push(text),
+            after: () => {
+                throw new RangeError('Thrown after the tables');
+            }
+        });
+
+        await expect(run).rejects.toThrow(new RangeError('Thrown after the tables'));
+        expect(written).toHaveLength(1);
+    });
+
+    it('measures in the traced run of another process, without printing, writing JSON, calling `after`, or running again', async () => {
         const runtime = new FakeRuntime();
         const directory = await mkdtemp(join(tmpdir(), 'benk-'));
         const lines: string[] = [];
@@ -210,7 +261,10 @@ describe('bench', () => {
             const result = await bench(groups(runtime), {
                 args: [...QUICK, '--json', path, '--v8-report'],
                 runtime,
-                print: line => lines.push(line)
+                print: line => lines.push(line),
+                after: print => {
+                    print('after the tables');
+                }
             });
 
             expect(result.groups.map(group => group.name)).toStrictEqual(['first', 'second']);
@@ -272,6 +326,22 @@ async function runScriptWithCode(
         const { code, stdout, stderr } = error as { code: number; stdout: string; stderr: string };
         return { code, lines: stdout.split(/\r?\n/), stderr };
     }
+}
+
+/** What `fixtures/after.ts` wrote, whose `after` prints a line, run with the arguments */
+async function runAfter(args: readonly string[]): Promise<{ stdout: string; stderr: string }> {
+    return promisify(execFile)(
+        process.execPath,
+        [
+            '--no-strip-types',
+            '--import',
+            '@snovader/node-hooks/register',
+            join('test', 'fixtures', 'after.ts'),
+            ...args,
+            ...QUICK
+        ],
+        { cwd: REPOSITORY }
+    );
 }
 
 describe('--v8-report', () => {
@@ -413,6 +483,7 @@ async function runProcesses(
     runs: number;
     json: string;
     spawned: string;
+    after: string;
 }> {
     const directory = await mkdtemp(join(tmpdir(), 'benk-'));
     try {
@@ -429,7 +500,8 @@ async function runProcesses(
             ...run,
             runs: (await readFile(counter, 'utf8')).split('\n').length - 1,
             json: await readFile(path, 'utf8').catch(() => ''),
-            spawned: await readFile(join(directory, 'spawned.json'), 'utf8').catch(() => '')
+            spawned: await readFile(join(directory, 'spawned.json'), 'utf8').catch(() => ''),
+            after: await readFile(join(directory, 'after'), 'utf8').catch(() => '')
         };
     } finally {
         await rm(directory, { recursive: true });
@@ -590,6 +662,14 @@ describe('--processes', () => {
         expect(stderr).toContain(
             'Error: Expected process 2 to measure the groups of the first, with the same variants, got "renamed" of "base", "slower", "faster", "base A/A" where the first has "pairs" of "base", "slower", "faster", "base A/A"'
         );
+    });
+
+    it('calls after in the first process only', async () => {
+        const { code, stderr, runs, after } = await runProcesses(['--processes', '3']);
+
+        expect(code, stderr).toBe(0);
+        expect(runs).toBe(3);
+        expect(after).toBe('run 1\n');
     });
 
     it('takes no results from a process that a run starts, which runs as any other', async () => {

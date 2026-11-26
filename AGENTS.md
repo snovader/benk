@@ -146,6 +146,14 @@ between them: the author does.
   and its `bench()`, and loads none of Node's modules: a script in d8 takes
   the rest from `benk/core`. A runtime for browsers or Workers would be an
   entry point of its own too.
+- `source/compiling` has what a benchmark script compiles from a string
+  itself: `compiledCopy()` and `compiledFrom()`, and `inTurn()`, whose
+  function is compiled for each caller, so that callers don't share its
+  feedback. It's apart from the core, which compiles no strings, and from
+  the runtimes' folders, since it's the same in each host that compiles
+  them. `benk` and `benk/d8` export it, and `benk/core` doesn't. A helper
+  that V8 inlines into a variant's call belongs here, compiled for each
+  caller, rather than in the core as one function that every script shares.
 - `source/benk-d8.ts` is the entry point of the package's command,
   `benk-d8`, which runs a script in d8 from Node, so that `--v8-report` can
   run it again in d8, as d8 can't start a process. `source/node/d8-command.ts`

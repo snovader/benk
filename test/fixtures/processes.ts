@@ -16,6 +16,9 @@
 // `spawns`, the second run starts the script again after it measures, as
 // the third run, which inherits its environment, and writes its JSON to
 // `spawned.json` beside the counter.
+//
+// The second call's `after` writes a line to `after` beside the counter,
+// with the number of the run that called it.
 import { spawnSync } from 'node:child_process';
 import { appendFileSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -62,7 +65,12 @@ const crossing = bench(
             ]
         }
     ],
-    { runtime }
+    {
+        runtime,
+        after: () => {
+            appendFileSync(join(dirname(counter), 'after'), `run ${run + 1}\n`);
+        }
+    }
 );
 
 await Promise.all([pairs, crossing]);

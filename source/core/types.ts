@@ -81,9 +81,17 @@ export type AsyncTimer = (
 export interface HeapMeter {
     /**
      * Starts counting, and returns the function that stops and returns the
-     * bytes allocated since, whether or not they were collected meanwhile
+     * bytes allocated since, whether or not they were collected meanwhile.
+     * The core also stops a sample whose call fails.
      */
     start(): () => number;
+    /**
+     * Undoes what the counts left in the process that would change the time
+     * of later calls, as Node's stopped GC profilers do. The core calls it
+     * after a group's counts and waits for it before reporting the group.
+     * A meter whose counts leave nothing behind has none.
+     */
+    release?(): void | Promise<void>;
 }
 
 /**
@@ -101,9 +109,11 @@ export interface ArrayBufferMeter {
     /**
      * Starts counting, and returns the function that stops and returns the
      * bytes allocated since, or null if buffers were freed meanwhile, as a
-     * garbage collection frees them
+     * garbage collection frees them. The core also stops a failed sample.
      */
     start(): () => number | null;
+    /** Undoes what the counts left in the process, as `HeapMeter`'s does */
+    release?(): void | Promise<void>;
 }
 
 /**

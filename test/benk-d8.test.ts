@@ -214,7 +214,8 @@ describe.skipIf(process.platform === 'win32')('benk-d8 with d8 faked', () => {
             expect(d8Runs).toHaveLength(parsed.v8Report ? 2 : 1);
             expect(first).toStrictEqual({ flags, options: { ...parsed, ...report } });
             if (traced != null) {
-                expect(traced.flags.slice(0, -1)).toStrictEqual([...flags, ...TRACE_FLAGS]);
+                // d8 evaluates the marker before applying the script's flags.
+                expect(traced.flags.slice(2, -1)).toStrictEqual([...flags, ...TRACE_FLAGS]);
                 expect(traced.flags.at(-1)).toMatch(/^--logfile=.+code\.log$/);
                 expect(traced.options).toStrictEqual({ ...parsed, ...report, json: undefined });
             }
@@ -444,14 +445,14 @@ await bench([{ name: 'buffers', variants: [{ name: 'fill', run: fillNumbers }] }
 `;
 
 /**
- * Writes `BUFFERS_SCRIPT` to the directory, bundled with `benk/d8` as this
+ * Writes the script to the directory, bundled with `benk/d8` as this
  * process resolves it, from its source or from its bundle, as d8 runs a
  * script of one module, and returns the bundle's path
  */
-async function writeBuffersScript(directory: string): Promise<string> {
-    const source = join(directory, 'buffers-source.mjs');
-    const script = join(directory, 'buffers.mjs');
-    await writeFile(source, BUFFERS_SCRIPT);
+async function writeScript(directory: string, name: string, code: string): Promise<string> {
+    const source = join(directory, `${name}-source.mjs`);
+    const script = join(directory, `${name}.mjs`);
+    await writeFile(source, code);
 
     await build({
         input: source,
@@ -539,7 +540,7 @@ describe.runIf(version)('benk-d8 in d8', () => {
 
     it('summarizes the current d8 bundle with a trailing option terminator', async () => {
         await inDirectory(async directory => {
-            const script = await writeBuffersScript(directory);
+            const script = await writeScript(directory, 'buffers', BUFFERS_SCRIPT);
             const { status, stdout, stderr } = await runCommand([
                 script,
                 '--',
@@ -564,7 +565,7 @@ describe.runIf(version)('benk-d8 in d8', () => {
 
     it('counts array buffers with the flags of d8 that the count needs, and reports with them', async () => {
         await inDirectory(async directory => {
-            const script = await writeBuffersScript(directory);
+            const script = await writeScript(directory, 'buffers', BUFFERS_SCRIPT);
 
             const { status, stdout, stderr } = await runCommand([
                 ...BUFFER_FLAGS,
@@ -586,6 +587,36 @@ describe.runIf(version)('benk-d8 in d8', () => {
             ).toStrictEqual([8000, 8000]);
             expect(report[2]).toBe('Only the functions whose names match ^fillNumbers$.');
             expect(report[3]).toMatch(/^fillNumbers \S+buffers\.mjs:\d+:\d+, \d+ B of bytecode$/);
+        });
+    });
+
+    it('calls after only in the first run of --v8-report', async () => {
+        await inDirectory(async directory => {
+            const count = join(directory, 'calls');
+            await writeFile(count, '0');
+            const script = await writeScript(
+                directory,
+                'after',
+                `
+                import { bench } from 'benk/d8';
+                const count = ${JSON.stringify(count)};
+                await bench([{ name: 'calls', variants: [{ name: 'one', run: () => 1 }] }], {
+                    after() { writeFile(count, String(Number(read(count)) + 1)); }
+                });
+            `
+            );
+
+            const { status, stdout, stderr } = await runCommand([
+                '--module',
+                script,
+                '--',
+                ...QUICK,
+                '--v8-report'
+            ]);
+
+            expect(status, stderr).toBe(0);
+            expect(reportOf(stdout)[0]).toContain('V8 report of');
+            expect(await readFile(count, 'utf8')).toBe('1');
         });
     });
 
