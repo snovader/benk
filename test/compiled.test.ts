@@ -73,7 +73,7 @@ describe('compiledCopy', () => {
 
     it('rejects a function whose text is no expression', () => {
         const methods = {
-            method(): number {
+            method(this: void): number {
                 return 1;
             }
         };

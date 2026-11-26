@@ -50,6 +50,7 @@ export function compiledCopy<F extends AnyFunction>(fn: F): F {
  * @throws {SyntaxError} If the text isn't an expression.
  * @throws {TypeError} If the expression isn't a function.
  */
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- The caller says what the text is a function of, which a cast at each call would say worse
 export function compiledFrom<F extends AnyFunction>(source: string): F {
     // The text is on lines of its own: it may start with a line break,
     // after which `return` would return nothing, or end with a comment
