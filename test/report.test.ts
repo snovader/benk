@@ -6,7 +6,9 @@ import {
     formatJson,
     formatTime,
     summarize,
+    type ChangeShape,
     type GroupResult,
+    type SharedChange,
     type VariantResult
 } from 'benk';
 
@@ -24,6 +26,8 @@ function variant(
         samples,
         positions: samples.map((_, i) => i % 3),
         summary: summarize(samples),
+        change: null,
+        positionEffect: null,
         ratio: 1,
         interval: null,
         heapBytes: 0,
@@ -42,6 +46,7 @@ const group: GroupResult = {
     leadReason: 'short calls',
     rounds: 6,
     timerResolution: 41.7,
+    change: null,
     variants: [
         variant('tafla', 'reference', steady, {}),
         variant('tafla-gen', 'variant', bimodal, {
@@ -75,6 +80,216 @@ describe('formatGroup', () => {
             '  tafla-gen           85.0 ns    85.6 ns    41.0%    1.39×      1.37–1.95        24 B 1,048,576 B',
             '  tafla A/A           61.2 ns    63.0 ns     2.1%    1.00×      0.99–1.01         0 B         0 B',
             '  protobuf            1.22 µs    1.26 µs     2.1%    20.0×      19.5–20.5           –           –',
+            '  tafla-gen: two modes, 4 rounds near 85.4 ns and 3 near 121 ns'
+        ]);
+    });
+
+    it('notes where the rounds changed, in place of their two modes, with what to do', () => {
+        const [reference] = group.variants;
+        const changed = (
+            name: string,
+            before: [number, number],
+            after: [number, number],
+            shape: ChangeShape = 'step'
+        ): VariantResult =>
+            variant(name, 'variant', bimodal, {
+                change: {
+                    shape,
+                    before: { median: before[0], rounds: before[1] },
+                    after: { median: after[0], rounds: after[1] }
+                }
+            });
+        const variants = [
+            reference,
+            changed('early', [1450, 4], [805, 32]),
+            changed('late', [2070, 22], [757, 14]),
+            changed('slower', [2530, 6], [8220, 26]),
+            changed('slower late', [128, 28], [233, 4]),
+            changed('drift', [100, 4], [110, 4], 'drift'),
+            changed('drift down', [110, 4], [100, 4], 'drift'),
+            variant('modes', 'variant', bimodal, {})
+        ];
+        const rows = 3 + variants.length;
+
+        expect(formatGroup({ ...group, lead: 'median', variants }).slice(rows)).toStrictEqual([
+            '  early: the first 4 rounds ran near 1.45 µs, and the other 32 near 805 ns: 4 more warm-up rounds would leave the slower ones out',
+            '  late: the last 14 rounds ran near 757 ns, and the other 22 near 2.07 µs: 22 more warm-up rounds would leave the slower ones out',
+            "  slower: the first 6 rounds ran near 2.53 µs, and the other 26 near 8.22 µs: another run shows whether that repeats, and V8's report whether its code deoptimized",
+            "  slower late: the last 4 rounds ran near 233 ns, and the other 28 near 128 ns: another run shows whether that repeats, and V8's report whether its code deoptimized",
+            '  drift: its rounds slowed steadily, from near 100 ns in the first 4 to near 110 ns in the last 4: its median is of the middle rounds, and another run shows whether that repeats',
+            '  drift down: its rounds sped up steadily, from near 110 ns in the first 4 to near 100 ns in the last 4: its median is of the middle rounds, and another run shows whether that repeats',
+            '  modes: two modes, 4 rounds near 85.4 ns and 3 near 121 ns'
+        ]);
+    });
+
+    it('notes a change that every variant shares once, for the group, in place of its modes', () => {
+        // The first 4 of 36 rounds of every variant ran 1.8 times as long
+        const loaded = (name: string, role: VariantResult['role'], time: number): VariantResult => {
+            const samples = Array.from(
+                { length: 36 },
+                (_, round) => time * (round < 4 ? 1.8 : 1) * (1 + (round % 5) / 1000)
+            );
+            return variant(name, role, samples, {});
+        };
+        const variants = [
+            loaded('first', 'reference', 100),
+            loaded('second', 'variant', 300),
+            loaded('first A/A', 'aa', 100)
+        ];
+        const notesOf = (change: SharedChange): string[] =>
+            formatGroup({ ...group, lead: 'median', rounds: 36, change, variants }).slice(6);
+
+        expect(variants[1].summary.modes).not.toBeNull();
+        expect(
+            notesOf({
+                shape: 'step',
+                before: { factor: 1.8, rounds: 4 },
+                after: { factor: 1, rounds: 32 },
+                variants: [0, 1, 2]
+            })
+        ).toStrictEqual([
+            "  the first 4 rounds of every variant took 1.80× as long as the other 32, as when load from other processes stops, or V8's code takes over in all of them: the ratios hold, as each round's variants ran alike, and 4 more warm-up rounds would leave the slower ones out of the times"
+        ]);
+        expect(
+            notesOf({
+                shape: 'step',
+                before: { factor: 1, rounds: 31 },
+                after: { factor: 1.5, rounds: 5 },
+                variants: [0, 1, 2]
+            })[0]
+        ).toBe(
+            "  the last 5 rounds of every variant took 1.50× as long as the other 31, as when load from other processes starts, or code that all of them run slows down: the ratios hold, as each round's variants ran alike, and another run shows whether that repeats"
+        );
+        expect(
+            notesOf({
+                shape: 'drift',
+                before: { factor: 0.95, rounds: 4 },
+                after: { factor: 1.045, rounds: 4 },
+                variants: [0, 1, 2]
+            })[0]
+        ).toBe(
+            "  the rounds of every variant slowed alike, by 1.10× from the first 4 to the last 4, as when load from other processes rises, or code that all of them run changes: the ratios hold, as each round's variants ran alike"
+        );
+        // Shared by two, whose modes it explains, but not the other's
+        const partial = notesOf({
+            shape: 'step',
+            before: { factor: 1.8, rounds: 4 },
+            after: { factor: 1, rounds: 32 },
+            variants: [0, 2]
+        });
+        expect(partial[0]).toBe(
+            "  the first 4 rounds of first and first A/A took 1.80× as long as the other 32, as when V8's code takes over in all of them: the ratios between them hold, and 4 more warm-up rounds would leave the slower ones out of the times"
+        );
+        expect(partial.slice(1).map(note => note.split(':')[0])).toStrictEqual(['  second']);
+    });
+
+    it('notes a position whose rounds took longer or shorter, by its ordinal', () => {
+        const [reference] = group.variants;
+        const variants = [0, 1, 2, 3, 10, 11, 12, 20, 21, 22].map(position =>
+            variant(`at ${position}`, 'variant', steady, {
+                positionEffect: { position, median: 200, others: 100 }
+            })
+        );
+        const notes = formatGroup({ ...group, variants: [reference, ...variants] }).slice(
+            4 + variants.length
+        );
+
+        expect(notes[0]).toBe(
+            '  at 0: its rounds ran near 200 ns when 1st in a round, and near 100 ns otherwise: a group of its own would show whether another variant causes it'
+        );
+        expect(notes.map(note => note.split(' when ')[1].split(' in a round')[0])).toStrictEqual([
+            '1st',
+            '2nd',
+            '3rd',
+            '4th',
+            '11th',
+            '12th',
+            '13th',
+            '21st',
+            '22nd',
+            '23rd'
+        ]);
+    });
+
+    it('names what ran before a position, and notes its modes in its place', () => {
+        // The rotation of 3 variants, 6 times over: the second variant runs 2nd
+        // after the first, and after the third in the reversed orders
+        const orders = [
+            [0, 1, 2],
+            [1, 2, 0],
+            [2, 0, 1],
+            [2, 1, 0],
+            [0, 2, 1],
+            [1, 0, 2]
+        ];
+        const positionsOf = (index: number): number[] =>
+            Array.from({ length: 36 }, (_, round) => orders[round % 6].indexOf(index));
+        const timed = (
+            name: string,
+            index: number,
+            times: (position: number) => number
+        ): VariantResult => {
+            const positions = positionsOf(index);
+            const samples = positions.map((position, round) => times(position) + (round % 5) / 10);
+
+            return variant(name, index === 0 ? 'reference' : 'variant', samples, { positions });
+        };
+        const sensitive = timed('sensitive', 1, position => (position === 1 ? 200 : 100));
+        // Two modes by round, which the position doesn't explain
+        const mixed = timed('mixed', 1, () => 100);
+        const bimodalByRound = mixed.samples.map((sample, round) =>
+            round < 18 ? sample : 2 * sample
+        );
+        const effect = { position: 1, median: 200, others: 100 };
+        const variants = (second: VariantResult): VariantResult[] => [
+            timed('first', 0, () => 100),
+            second,
+            timed('third', 2, () => 100)
+        ];
+        const notesOf = (second: VariantResult): string[] =>
+            formatGroup({ ...group, rounds: 36, variants: variants(second) }).slice(6);
+
+        expect(sensitive.summary.modes).not.toBeNull();
+        expect(notesOf({ ...sensitive, positionEffect: effect })).toStrictEqual([
+            '  sensitive: its rounds ran near 200 ns when 2nd in a round, after first or third, and near 100 ns otherwise: a group without first and third would show whether they cause it'
+        ]);
+        const both = notesOf({
+            ...mixed,
+            samples: bimodalByRound,
+            summary: summarize(bimodalByRound),
+            positionEffect: effect
+        });
+        expect(both).toHaveLength(2);
+        expect(both[0]).toMatch(/^ {2}mixed: two modes, 18 rounds near/);
+    });
+
+    it('says that a variant ran after itself, as a rotation of 2 runs each one first', () => {
+        // Each variant's first position follows its own last in the round before
+        const positionsOf = (index: number): number[] =>
+            Array.from({ length: 36 }, (_, round) => (round % 2 === index ? 0 : 1));
+        const samples = positionsOf(0).map(position => (position === 0 ? 330 : 246));
+        const variants = [
+            variant('Float64Array of 1 KiB', 'reference', samples, {
+                positions: positionsOf(0),
+                positionEffect: { position: 0, median: 330, others: 246 }
+            }),
+            variant('Float64Array of 1 KiB A/A', 'aa', steady, { positions: positionsOf(1) })
+        ];
+
+        expect(formatGroup({ ...group, rounds: 36, variants }).slice(5)).toStrictEqual([
+            '  Float64Array of 1 KiB: its rounds ran near 330 ns when 1st in a round, after itself, and near 246 ns otherwise: its own calls just before it may leave it work, as garbage to collect'
+        ]);
+    });
+
+    it('notes two modes in results of schema 4, which have no change', () => {
+        const { change: _, ...before } = group.variants[1];
+        const lines = formatGroup({
+            ...group,
+            lead: 'median',
+            variants: [before as VariantResult]
+        });
+
+        expect(lines.slice(4)).toStrictEqual([
             '  tafla-gen: two modes, 4 rounds near 85.4 ns and 3 near 121 ns'
         ]);
     });

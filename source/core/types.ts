@@ -181,6 +181,83 @@ export interface Modes {
     readonly slow: Mode;
 }
 
+/** Rounds of a variant one after another, before or after a change */
+export interface Segment {
+    /** The median round of the segment, in nanoseconds per call */
+    readonly median: number;
+    readonly rounds: number;
+}
+
+/**
+ * How rounds changed partway: at one round, a step, as when V8's optimized
+ * code takes over, or steadily across them, a drift, as when a heap grows
+ */
+export type ChangeShape = 'step' | 'drift';
+
+/**
+ * A change in a variant's time partway through its rounds: the rounds before
+ * it and those after are apart by much more than their own spread, and its
+ * time against the other variants' in the same rounds moved too. The median
+ * and the fastest then describe a mix of the two, or one of them. A change
+ * that the others' rounds share, as load from other processes makes, is the
+ * group's, as `SharedChange`.
+ */
+export interface Change {
+    readonly shape: ChangeShape;
+    /**
+     * A step's rounds from the first to the change, or a drift's first
+     * rounds, as many as each of two modes needs at least
+     */
+    readonly before: Segment;
+    /** A step's rounds from the change to the last, or a drift's last rounds */
+    readonly after: Segment;
+}
+
+/** Rounds of a group one after another, before or after a shared change */
+export interface SharedSegment {
+    /**
+     * The median round of the segment, as a factor of each variant's median
+     * round, which all of them share
+     */
+    readonly factor: number;
+    readonly rounds: number;
+}
+
+/**
+ * A change partway through the rounds that several variants of a group
+ * share, in the same rounds, as when load from other processes starts or
+ * stops, or V8 tiers up code that all of them run, as a variant and its A/A
+ * copy do. Each round runs every variant, so the ratios of a round compare
+ * variants that it changed alike.
+ */
+export interface SharedChange {
+    readonly shape: ChangeShape;
+    /** A step's rounds before the change, or a drift's first rounds */
+    readonly before: SharedSegment;
+    /** A step's rounds after the change, or a drift's last rounds */
+    readonly after: SharedSegment;
+    /**
+     * The variants whose rounds changed alike, by their indexes in the
+     * group's `variants`: two or more, and every one where all did
+     */
+    readonly variants: readonly number[];
+}
+
+/**
+ * A position in the round whose rounds took longer or shorter than a
+ * variant's others, as when what runs before it leaves garbage to collect,
+ * or evicts its data from a cache. The rotation takes each variant through
+ * each position equally often, so the median mixes them alike.
+ */
+export interface PositionEffect {
+    /** The position, from 0 for the first in a round */
+    readonly position: number;
+    /** The median round in that position, in nanoseconds per call */
+    readonly median: number;
+    /** The median round in the other positions */
+    readonly others: number;
+}
+
 /** A summary of a variant's rounds, in nanoseconds per call */
 export interface Summary {
     readonly fastest: number;
@@ -212,6 +289,17 @@ export interface VariantResult {
     /** The variant's position in each round, from 0 */
     readonly positions: readonly number[];
     readonly summary: Summary;
+    /**
+     * The change in its time partway through its rounds, where its time
+     * against the other variants' moved too, or null where none did. A
+     * change that the others share is the group's.
+     */
+    readonly change: Change | null;
+    /**
+     * The position in the round whose rounds took longer or shorter than
+     * its others, or null where none did
+     */
+    readonly positionEffect: PositionEffect | null;
     /**
      * The ratio to the reference's time by the group's lead: the fastest
      * round's to the reference's fastest, or the median of the ratios of
@@ -277,6 +365,11 @@ export interface GroupResult {
      * time, as with a virtual clock that only a variant's calls move.
      */
     readonly timerResolution: number | null;
+    /**
+     * The change partway through the rounds that several variants share, or
+     * null where none did
+     */
+    readonly change: SharedChange | null;
     readonly variants: readonly VariantResult[];
 }
 
@@ -292,7 +385,7 @@ export interface RecordedOptions {
 }
 
 /** The JSON schema produced by this version of benk */
-export const RESULT_SCHEMA = 6;
+export const RESULT_SCHEMA = 7;
 
 /** A run's results, which `JSON.stringify` writes as they are */
 export interface RunResult {

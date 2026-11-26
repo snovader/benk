@@ -11,7 +11,7 @@ out of a comparison, or at least in view:
   variant, whose ratio to the first is the run's noise floor.
 - **Intervals and modes, not just a number.** Each ratio has a 95% interval,
   and a variant whose rounds fall into two clusters, as V8's tiering can make
-  them, is flagged rather than averaged.
+  them, or change partway, is flagged rather than averaged.
 - **A timer loop per variant.** Each variant is timed by a loop compiled from
   a source of its own, so that variants don't share a call site or type
   feedback.
@@ -473,6 +473,27 @@ Per call of each variant:
 - **two modes**: a note for a variant whose rounds form two clusters, far
   apart for their own spread, of at least 3 rounds and 10% each. Its median
   and fastest then describe one of the clusters: compare the modes instead.
+  A variant whose rounds changed partway gets the next note in its place,
+  and one whose modes are its rounds in one position gets the position's.
+- **the first … rounds ran near …, and the other … near …**: a note for a
+  variant whose rounds changed partway, against the other variants', as
+  [Rounds that changed](#rounds-that-changed) describes. Its median then
+  mixes the rounds before and after the change, or describes one of them.
+  A change in the second half names the last rounds instead.
+- **its rounds slowed steadily, from near … in the first … to near … in the
+  last …**: a note for a variant whose rounds drifted, rather than changed
+  at one round. Its median is of the middle rounds.
+- **the first … rounds of every variant took …× as long as the other …**:
+  a note for a change that several variants' rounds share, as load from
+  other processes makes, or code that all of them run, as a variant and its
+  A/A copy do. It names them, unless every variant shares it. Each round's
+  ratios compare variants that it changed alike, so theirs hold. It takes
+  the place of their notes of two modes.
+- **its rounds ran near … when … in a round, after …, and near …
+  otherwise**: a note for a variant whose rounds in one position of the
+  round took longer or shorter than its others. It names the variants that
+  ran just before it there, and a group without them shows whether they
+  cause it, as [Position effects](#position-effects) describes.
 - **by the fastest rounds, but … round by round**: a note in a group that
   leads with the fastest round, for a variant whose ratio lies more than 5%
   outside its interval, such as
@@ -498,6 +519,183 @@ some rounds and not in others: their fastest round leaves out work that the
 calls cause, which the median includes, and the spread shows how much it
 varies. A call that allocates a typed array allocates in its buffer, as
 [Array buffers outside the heap](#array-buffers-outside-the-heap) measures.
+
+### Rounds that changed
+
+A variant's rounds can change partway through the run. Its first rounds can
+run in code that V8 hasn't optimized yet, its heap can grow as it runs, and
+load from other processes can start or stop at any round. The median then
+mixes the rounds before and after the change, or describes one of them. A
+note says when each ran:
+
+```text
+  for loop: the first 5 rounds ran near 1.58 µs, and the other 31 near 866 ns: 5 more warm-up rounds would leave the slower ones out
+```
+
+This is the quick start's for loop with `--sample-ms 10`, in the run that
+[V8's report](#v8s-report) shows. Its first 5 rounds ran before Turbofan's
+code took over, and its median is of the other 31. The reference and its
+A/A copy call the same `run`, which can tier up in both loops at about the
+same round, so each gets a note of its own.
+
+How the rounds changed decides what the note suggests:
+
+| How                     | Possible cause          | The note suggests                                  |
+| ----------------------- | ----------------------- | -------------------------------------------------- |
+| A step to faster rounds | V8 optimized the code   | As many more warm-up rounds as ran before the step |
+| A step to slower rounds | V8 deoptimized the code | Another run, and V8's report for a deoptimization  |
+| A steady drift          | A heap that grows       | Another run                                        |
+
+No count of warm-up rounds leaves a drift out, and its median is of the
+middle rounds. Its note gives the medians of its first and last rounds.
+
+Load from other processes that lasts longer than a round slows its
+variants alike, as each round runs all of them, one after another. So a
+variant's own change is one of its time against the other variants' in the
+same rounds, where such load cancels. A change that several variants'
+rounds share gets one note, for the group, which names them, or says
+every variant. Their ratios hold, as each round compares variants that it
+changed alike. A variant and its A/A copy run the same code, so a change
+of that code is theirs together.
+
+benk tests a series of rounds for a change by rank, using the
+Mann–Whitney rank sum:
+
+1. A split qualifies when:
+   - each part has at least 3 rounds and 10% of them, as each of two
+     modes;
+   - the rank sum of the rounds before the split is 3 or more standard
+     deviations from its mean;
+   - 95% or more of the pairs of a round before and a round after are
+     ordered as the two parts' medians are;
+   - the medians are 5% or more apart.
+2. Among the qualifying splits, it chooses the one that minimizes the sum
+   of squared deviations from each part's mean log time. This lets it
+   locate a short early slowdown even when the later rounds drift by a few
+   percent.
+3. It's a step where a step at the split fits the rounds closer than a
+   straight line, Tukey's resistant line, and a drift otherwise.
+
+A variant's change is its own where either:
+
+- its rounds against the others' changed, each round's time divided by the
+  median of the others' in the same round, each against its own median;
+- or its own rounds changed, and its time against the others' moved by 5%
+  or more at that split, in the same direction.
+
+The first finds a change that load the variants share hides in each one's
+rounds. The second finds one that the others' own noise hides, as short
+load spikes make it. Either way, the variant's own times must be 5% apart
+at the change, in the same direction, so that it doesn't get the inverse
+of the others' change. benk takes the variants' changes one at a time, the
+greatest first, and leaves a variant whose change it took out of the
+others' baselines.
+
+The group's change is a change in the median of the other variants'
+rounds, each against its own median. It's the change of the variants whose
+own times are 5% apart at it, in the same direction, of two or more.
+
+In 100,000 shuffles each of rounds whose order doesn't matter, benk found
+a change in 0.11% to 0.16% of 31 to 40 rounds, and in none of 12 rounds or
+fewer, where a split that clean is too likely by chance. With 3 variants,
+20,000 runs each of 32 to 40 rounds with noise of 10% gave a variant a
+change of its own in 0.12% to 0.18% of variants, and the group a change in
+0.09% to 0.14% of runs.
+
+Rounds that load correlates look like a change. These are runs of 3
+variants whose noise in the logarithms follows an AR(1) process of sigma
+0.1, 20,000 each: shared by every variant, with noise of 2% of each
+variant's own, in 32 to 40 rounds, or each variant's own, in 36 rounds.
+
+| Correlation of neighbouring rounds | Shared: a variant's change | Shared: the group's change | Each variant's own: a variant's change |
+| ---------------------------------- | -------------------------- | -------------------------- | -------------------------------------- |
+| 0.3                                | 0.01%                      | 1.1% to 1.4%               | 1.6%                                   |
+| 0.6                                | 0.02% to 0.03%             | 8.9% to 10.9%              | 12%                                    |
+| 0.9                                | 0.08% to 0.11%             | 51% to 52%                 | 54%                                    |
+
+Load that every variant shares gives the group's note, whose ratios hold.
+Noise that one variant's rounds alone share can't cancel against the
+others', and reads as a change of its own nearly as often as in its rounds
+alone. Another run shows whether a change repeats.
+
+On an Apple M2 Pro with Node 26.13.0, benk timed 426 variants in 48 runs:
+6 each of the quick start with `--sample-ms 10` and with the default 1 ms,
+of `examples/numbers.ts`, of `benchmarks/`' loops, array buffers and
+allocations, and of its small integers with 1 ms and with 10 ms. The load
+average was 15 to 32. 67 variants got a note, 34 of their own, and 33 in
+a group's note, of 14 groups:
+
+| Variants                                                           | Notes                            | What changed                                                                                                |
+| ------------------------------------------------------------------ | -------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| The quick start's for loop and its A/A copy, with 10 ms            | 12 of 12, their own              | The first 4 to 8 rounds took 1.7 to 2.1 times as long, before Turbofan's code, in 10 of them                |
+| The quick start's `reduce`, with 10 ms                             | 1 of 6, its own                  | The first 5 rounds took 3.1 times as long                                                                   |
+| The small integers' `Int32Array` and `number[]` groups, with 10 ms | 26 of 36: 19 in 7 groups' notes  | The first 8 to 16 rounds took 1.4 to 3.4 times as long                                                      |
+| The allocations and array buffers, each a variant and its A/A copy | 28 of 192: 14 in 7 groups' notes | Mostly the first 4 to 8 rounds of a `Float64Array` of 1 KiB to 1 MiB, which took 0.11 to 0.57 times as long |
+| The other 180                                                      | None                             |                                                                                                             |
+
+The for loop's other 2 notes, and its A/A copy's, were of rounds that load
+slowed: 14 rounds at 3.6 times as long, and 6 at 14 times. With 1 ms, the
+quick start's for loop got no note, as no Turbofan compilation considered
+its `run`. In the small integers' groups, the variants tiered up at
+different rounds in some runs, which their own notes say, and at the same
+round in others, which a group's note says. A variant and its A/A copy run
+the same code, so a change of that code is in their group's note, unless
+only one of them showed it.
+
+### Position effects
+
+A variant's time can depend on its position in the round, as on what runs
+just before it: garbage that another variant leaves to collect, or data
+that another evicts from a cache. The rotation takes every variant through
+every position equally often, so its median mixes the positions alike. A
+note says when one position's rounds differ from the variant's others:
+
+```text
+  Float64Array of 1 KiB: its rounds ran near 330 ns when 1st in a round, after itself, and near 246 ns otherwise: its own calls just before it may leave it work, as garbage to collect
+```
+
+The note names the variants that ran just before it in that position. The
+rotation's orders give one or two. Time the variant in a group without
+them to see whether they cause it. With 2 variants, as a variant and its
+A/A copy, each runs first in a round straight after its own round before,
+which ends with it, as above. Its own calls are then the likely cause.
+
+Where the variant's rounds form two modes, and the modes are its rounds in
+that position and the others, the note takes the modes' place: they have
+one cause, and this note names it.
+
+benk compares the rounds in each position with the variant's other rounds
+by their ranks, as for a change. A position qualifies when:
+
+- its rank sum is 3.7 or more standard deviations from its mean;
+- its median differs from the median of the other rounds by at least 5%
+  of the faster median.
+
+Of the positions that qualify, the note names the one with the greatest
+rank distance. A tie goes to the earliest position, as when there are only
+two.
+
+A position has few rounds: 31 rounds over 3 to 7 positions give 6 to 12
+each, which noise easily makes look different. So the bar is high. In
+200,000 shuffles of rounds, with the rotation's positions for 2 to 7
+variants, 0.002% to 0.019% of variants got the note at the default 31
+rounds, 32 to 42 in whole rotations. With more rounds, more of them do:
+0.024% to 0.090% at 120 to 126 rounds. A position whose every round is
+slower than the others reaches the bar with up to 7 positions of 6 rounds
+each, and 8 positions of 4 can't.
+
+Within a complete rotation, each variant immediately follows every other
+variant equally often within rounds. A given pair can still occur at a
+fixed position. With four variants numbered from 0, variant 3 precedes
+variant 0 only when variant 0 runs second within the round. A slowdown in
+that position could reflect what variant 3 left behind. A periodic change
+in the workload can also line up with the rotation.
+
+In the runs of [Rounds that changed](#rounds-that-changed), 48 with each
+load average, 1 of 852 variants got the note, and none of the 336 A/A
+copies. It was the run above, of `benchmarks/array-buffers.ts`. Its A/A
+copy's rounds leaned the other way in the same run, and the group's 11
+other runs didn't differ by position.
 
 ### The collection after the counts
 
@@ -703,7 +901,7 @@ them, not of every script: the option is how to check another.
 
 ```jsonc
 {
-  "schema": 6,
+  "schema": 7,
   "date": "2026-11-22T12:33:03.133Z",
   "runtime": { "name": "Node", "version": "v26.13.0", "engine": "V8 14.6.202.34-node.40",
                "platform": "darwin", "arch": "arm64", "cpu": "Apple M2 Pro", "flags": [],
@@ -712,11 +910,14 @@ them, not of every script: the option is how to check another.
   "groups": [{
     "name": "sum 1,000 numbers", "lead": "median", "leadReason": "long calls", "rounds": 32,
     "timerResolution": 166.99999999758575, // nanoseconds: the shortest time that a timer loop read
+    "change": null,                       // a change that every variant's rounds share, or null
     "variants": [{
       "name": "for over number[]", "role": "reference", "async": false, "repetitions": 712,
       "samples": [1409.88, 1405.72, …],   // nanoseconds per call, in the rounds' order
       "positions": [0, 2, 3, 1, …],       // the variant's position in each round
       "summary": { "fastest": …, "q1": …, "median": …, "q3": …, "slowest": …, "spread": …, "modes": null },
+      "change": null,                     // the change in its rounds partway, or null
+      "positionEffect": null,             // a position whose rounds differ, or null
       "ratio": 1, "interval": null, "heapBytes": 16, "arrayBufferBytes": 0,
       "v8": null                          // what V8 did with its code, with --v8-report
     }]
@@ -726,8 +927,17 @@ them, not of every script: the option is how to check another.
 }
 ```
 
-`schema` changes when a field does. `v8Report`, and each variant's `v8`,
-are V8's report, which `--v8-report` adds, as
+`schema` changes when a field does. A variant's `change` has its `shape`,
+`step` or `drift`, and the median and the count of the rounds `before` and
+`after` it: a step's rounds before and after it, or a drift's first and
+last rounds. A group's `change` is one that every variant's rounds share,
+whose `before` and `after` have a `factor` of each variant's median in
+place of a median, as [Rounds that changed](#rounds-that-changed)
+describes. A variant's
+`positionEffect` has the `position` whose rounds differ, from 0, and the
+`median` round there and in the `others`, as
+[Position effects](#position-effects) describes. `v8Report`, and each
+variant's `v8`, are V8's report, which `--v8-report` adds, as
 [In the results](#in-the-results) describes. They're `null` without it, in
 the results of `measureGroups()`, and in d8. The runtime's flags include
 `NODE_OPTIONS`, as V8's flags change what's measured. Its process state is
@@ -803,11 +1013,11 @@ the fastest and median round, the interquartile range as a share of the median, 
 
 sum 1,000 numbers: 36 rounds, by the median round (a call of 1 µs or more)
                       fastest     median   spread    ratio   95% interval        heap     buffers
-  for loop             794 ns     806 ns     2.9%    1.00×                       16 B         0 B
-  reduce              6.99 µs    7.11 µs     1.0%    8.80×      8.75–8.87    32,040 B         0 B
-  for loop A/A         793 ns     806 ns     1.5%    1.00×      0.99–1.01        16 B         0 B
-  for loop: two modes, 32 rounds near 805 ns and 4 near 1.45 µs
-  for loop A/A: two modes, 32 rounds near 805 ns and 4 near 1.46 µs
+  for loop             851 ns     871 ns    20.3%    1.00×                       16 B         0 B
+  reduce              7.22 µs    7.54 µs    16.6%    8.49×      8.36–8.66    32,040 B         0 B
+  for loop A/A         851 ns     859 ns    10.5%    1.00×      0.98–1.00        16 B         0 B
+  for loop: the first 5 rounds ran near 1.58 µs, and the other 31 near 866 ns: 5 more warm-up rounds would leave the slower ones out
+  for loop A/A: the first 5 rounds ran near 1.55 µs, and the other 31 near 854 ns: 5 more warm-up rounds would leave the slower ones out
 
 V8 report of bench.ts, from a run of it with V8's traces, whose times aren't reported.
 Per function of the script, and per function that deoptimized in the script's code: the tiers that V8 compiled it to, what Turbofan inlined into it and where it inlined it, with sizes of bytecode, and its deoptimizations.
@@ -824,24 +1034,18 @@ run bench.ts:20:22, 24 B of bytecode
 (anonymous) bench.ts:20:43, 6 B of bytecode
   compiled to Maglev ×2, Turbofan
 
-By variant, of the tables: where V8 placed its run, the tiers that V8 compiled the run to on its own, and its timer loops that the traces tie to the run, with their tiers, what Turbofan inlined into them, and the deoptimizations of both.
+By variant, of the tables: where V8 placed its run, the tiers that V8 compiled the run to on its own, and its timer loops that the traces tie to the run, with their tiers, what Turbofan inlined into them of the script's functions, and the deoptimizations of both.
 sum 1,000 numbers
   for loop: run bench.ts:17:38, 13 B of bytecode, compiled to Maglev
     2 timer loops, also of for loop A/A, compiled to Maglev ×2, Turbofan ×2
-    inlines now node:internal/perf/performance:137:6 (30 B) ×2
-    inlines wrappedFn node:internal/errors:542:21 (75 B) ×2
     inlines run bench.ts:17:38 (13 B) ×2
     inlines sumLoop bench.ts:5:17 (38 B) ×2
-    inlines (anonymous) node:internal/validators:547:51 (37 B) ×2
   reduce: run bench.ts:20:22, 24 B of bytecode, compiled to Maglev
     no timer loop that the traces tie to its run
   for loop A/A: run bench.ts:17:38, 13 B of bytecode, compiled to Maglev
     2 timer loops, also of for loop, compiled to Maglev ×2, Turbofan ×2
-    inlines now node:internal/perf/performance:137:6 (30 B) ×2
-    inlines wrappedFn node:internal/errors:542:21 (75 B) ×2
     inlines run bench.ts:17:38 (13 B) ×2
     inlines sumLoop bench.ts:5:17 (38 B) ×2
-    inlines (anonymous) node:internal/validators:547:51 (37 B) ×2
 
 Turbofan's limits, from V8's flags: 460 B of bytecode for a function that it inlines, 920 B for the functions that one compilation inlines, in all, and 30 B for a small function, which it inlines beyond that.
 ```
@@ -857,10 +1061,18 @@ and its A/A copy's, which calls the same `run`. No Turbofan compilation of
 
 With the default rounds of 1 ms, the same script's report had no line of
 inlining, as no Turbofan compilation considered `run` or `sumLoop`, and the
-for loop took 1.41 µs rather than 794–799 ns. These are the fastest rounds
-of 3 runs of each, on an Apple M2 Pro with Node 26.13.0, with benk's bundle
-in another project, and each sample time's 3 reports were the same. The two
-modes with 10 ms are the rounds before Turbofan's code: 4 to 6 near 1.45 µs.
+for loop took 1.41 to 1.45 µs rather than 808 to 821 ns. These are the
+fastest rounds of 3 runs of each, on an Apple M2 Pro with Node 26.13.0 and a
+load average near 6, with benk's bundle in another project, and each sample
+time's 3 reports were the same.
+
+The block above is one of 3 later runs with 10 ms, under a load average
+near 15, whose reports were the same as those. The for loop's fastest round
+took 851 ns in each. In 2 of them, the notes said that the first 5 or 13
+rounds of the for loop and its A/A copy ran near 1.55 to 1.67 µs, before
+Turbofan's code, as [Rounds that changed](#rounds-that-changed) describes.
+In the third, load spread every variant's rounds by 60% or more, and no
+note was found.
 
 A script in d8 gets the same report through the command `benk-d8`, as
 [In d8](#in-d8) describes.
@@ -1196,11 +1408,11 @@ command line:
 
    sum 1,000 numbers: 36 rounds, by the median round (a call of 1 µs or more)
                          fastest     median   spread    ratio   95% interval        heap     buffers
-     for loop             791 ns     809 ns     2.5%    1.00×                          –           –
-     reduce              6.35 µs    6.49 µs     1.5%    8.03×      7.89–8.07           –           –
-     for loop A/A         790 ns     811 ns     2.2%    1.01×      1.00–1.01           –           –
-     for loop: two modes, 31 rounds near 806 ns and 5 near 1.44 µs
-     for loop A/A: two modes, 31 rounds near 810 ns and 5 near 1.44 µs
+     for loop             848 ns     850 ns     3.5%    1.00×                          –           –
+     reduce              6.53 µs    6.59 µs     1.3%    7.70×      7.59–7.73           –           –
+     for loop A/A         848 ns     849 ns     1.1%    1.00×      1.00–1.00           –           –
+     for loop: the first 5 rounds ran near 1.51 µs, and the other 31 near 849 ns: 5 more warm-up rounds would leave the slower ones out
+     for loop A/A: the first 5 rounds ran near 1.52 µs, and the other 31 near 849 ns: 5 more warm-up rounds would leave the slower ones out
 
    V8 report of bench.mjs, from a run of it in d8 15.8.62.9 with V8's traces, whose times aren't reported.
    Per function of the script, and per function that deoptimized in the script's code: the tiers that V8 compiled it to, what Turbofan inlined into it and where it inlined it, with sizes of bytecode, and its deoptimizations.
@@ -1223,10 +1435,15 @@ would, and that run prints the tables. It then runs the script again in d8,
 with V8's trace flags, and prints the report, whose heading names d8's
 version. Here, as in Node, Turbofan inlined the for loop's `run` and
 `sumLoop` into two timer loops. These are of 3 runs on an Apple M2 Pro,
-with Homebrew's d8 15.8.62.9, whose reports were the same. With the
-default rounds of 1 ms, the report had no line of inlining in 3 runs, and
-the for loop's fastest round took 1.41 to 1.49 µs, against 790 or 791 ns
-with 10 ms.
+with Homebrew's d8 15.8.62.9 and a load average near 6, whose reports were
+the same. With the default rounds of 1 ms, the report had no line of
+inlining in 3 runs, and the for loop's fastest round took 1.45 to 1.47 µs,
+against 818 to 824 ns with 10 ms. In one of the runs with 10 ms, Turbofan's
+code took over only after the for loop's first 14 rounds, and its note said
+so. The block above is one of 3 later runs with 10 ms, under a load
+average near 15, whose reports were the same as those. The for loop's
+fastest round took 822 to 848 ns, and the notes of the for loop and its
+A/A copy said that the first 5 or 6 rounds ran near 1.50 to 1.53 µs.
 
 - The first run gets the script's options but `--v8-report` and
   `--v8-filter`, which benk-d8 carries out. The traced run gets none of
@@ -2177,7 +2394,8 @@ benk keeps these in view rather than out of the results:
   and 795 ns with `--sample-ms 10`, when Turbofan inlined `run` and
   `sumLoop` into its timer loop. These are the fastest rounds of 3 runs of
   each, on an Apple M2 Pro with Node 26.13.0. [V8's report](#v8s-report)
-  shows the tiers.
+  shows the tiers, and benk notes the rounds before Turbofan's code took
+  over, as [Rounds that changed](#rounds-that-changed) describes.
 
 - **The width of small integers.** V8 keeps an integer in place of a
   pointer, as a small integer, when it fits: in 32 bits in Node, and in 31
@@ -2239,8 +2457,6 @@ Not built yet:
 - **Runtimes for browsers and Workers**, with timer loops written at build
   time and no heap bytes, in place of the one that a script writes itself,
   as [Runtimes](#runtimes) describes.
-- **Position effects in the report.** The JSON has each round's position;
-  the table could flag a variant whose time depends on it.
 
 ## Development
 

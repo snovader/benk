@@ -1,6 +1,7 @@
 import { describe, expect } from 'hypotes';
 import { fc, it } from 'hypotes/fast-check';
 import {
+    formatGroup,
     formatJson,
     measureGroup,
     measureGroups,
@@ -530,6 +531,192 @@ describe('measureGroup', () => {
 });
 
 describe('measureGroups', () => {
+    it.prop([fc.integer({ min: 4, max: 28 }), fc.boolean()], { numRuns: 30 })(
+        "records where a variant's calls changed, in the rounds' order",
+        async (changedAfter, faster) => {
+            const runtime = new FakeRuntime({ heap: false });
+            const [first, rest] = faster ? [300, 100] : [100, 300];
+            // Each timed loop's calls take up to 0.5% longer, in an order that
+            // neither rises nor falls, as the rounding of the fake clock's
+            // sums would otherwise order rounds of the same time by when
+            // they ran. A loop next to the change takes the middle time.
+            const changeAt = changedAfter + 1;
+            let timed = false;
+            let timedLoops = 0;
+            let time = first;
+            const changing: SyncVariant = {
+                name: 'changing',
+                setup: () => {
+                    timedLoops += timed ? 1 : 0;
+                    const edge = [1, changedAfter, changeAt, 32].includes(timedLoops);
+                    const jitter = edge ? 5 : (7 * timedLoops) % 11;
+                    time = (timedLoops < changeAt ? first : rest) * (1 + (0.005 * jitter) / 10);
+                },
+                run: () => runtime.clock.spend(time)
+            };
+
+            const result = await measureGroups(
+                [
+                    {
+                        name: 'change',
+                        variants: [runtime.variant('steady', 100), changing],
+                        aa: false
+                    }
+                ],
+                {
+                    ...QUICK,
+                    runtime,
+                    onRounds: (_, rounds) => {
+                        timed = rounds === 'timed';
+                    }
+                }
+            );
+            const [group] = result.groups;
+            const change = expectPresent(variantNamed(group, 'changing').change);
+
+            expect(group.rounds).toBe(32);
+            expect(variantNamed(group, 'steady').change).toBeNull();
+            expect(group.change).toBeNull();
+            expect(change.shape).toBe('step');
+            expect([change.before.rounds, change.after.rounds]).toStrictEqual([
+                changedAfter,
+                32 - changedAfter
+            ]);
+            expect(change.before.median / first).toBeGreaterThanOrEqual(1 - 1e-9);
+            expect(change.before.median / first).toBeLessThanOrEqual(1.005);
+            expect(change.after.median / rest).toBeGreaterThanOrEqual(1 - 1e-9);
+            expect(change.after.median / rest).toBeLessThanOrEqual(1.005);
+        }
+    );
+
+    it.prop(
+        [
+            fc.integer({ min: 4, max: 28 }),
+            fc.double({ min: 1.2, max: 2, noNaN: true }),
+            fc.option(fc.integer({ min: 4, max: 28 }), { nil: undefined })
+        ],
+        { numRuns: 30 }
+    )(
+        "records load that every variant's rounds share as the group's change, apart from a variant's own",
+        async (loadedRounds, load, ownAfter) => {
+            // The first rounds of every variant ran under load, and one variant
+            // may change on its own too, at another round
+            fc.pre(ownAfter == null || Math.abs(ownAfter - loadedRounds) >= 4);
+            const runtime = new FakeRuntime({ heap: false });
+            const bases = { first: 100, second: 200, changing: 150 };
+            let timed = false;
+            let timedLoops = 0;
+            let time = 0;
+            const loaded = (name: keyof typeof bases): SyncVariant => ({
+                name,
+                setup: () => {
+                    timedLoops += timed ? 1 : 0;
+                    // Each round runs the 3 variants, one loop each
+                    const round = Math.floor((timedLoops - 1) / 3);
+                    const own = name === 'changing' && ownAfter != null && round < ownAfter ? 2 : 1;
+                    // Up to 0.5% longer, in an order that neither rises nor falls
+                    const jitter = 1 + (0.005 * ((7 * timedLoops) % 11)) / 10;
+                    time = bases[name] * (timed && round < loadedRounds ? load : 1) * own * jitter;
+                },
+                run: () => runtime.clock.spend(time)
+            });
+
+            const result = await measureGroups(
+                [
+                    {
+                        name: 'load',
+                        variants: [loaded('first'), loaded('second'), loaded('changing')],
+                        aa: false
+                    }
+                ],
+                {
+                    ...QUICK,
+                    rounds: 33,
+                    runtime,
+                    onRounds: (_, rounds) => {
+                        timed = rounds === 'timed';
+                    }
+                }
+            );
+            const [group] = result.groups;
+
+            expect(variantNamed(group, 'first').change).toBeNull();
+            expect(variantNamed(group, 'second').change).toBeNull();
+            if (ownAfter == null) {
+                const shared = expectPresent(group.change);
+                expect(shared.variants).toStrictEqual([0, 1, 2]);
+                expect(shared.shape).toBe('step');
+                expect(shared.before.rounds).toBe(loadedRounds);
+                expect(
+                    Math.abs(shared.before.factor / shared.after.factor / load - 1)
+                ).toBeLessThan(0.01);
+                expect(variantNamed(group, 'changing').change).toBeNull();
+            } else {
+                const own = expectPresent(variantNamed(group, 'changing').change);
+                expect(own.shape).toBe('step');
+                expect(own.before.rounds).toBe(ownAfter);
+            }
+        }
+    );
+
+    it.prop([fc.integer({ min: 2, max: 4 }), fc.nat(), fc.boolean()], { numRuns: 20 })(
+        'records a variant whose rounds in one position took longer or shorter',
+        async (count, which, slower) => {
+            const runtime = new FakeRuntime({ heap: false });
+            // With the A/A copy, each round runs this many loops, one in each
+            // position, in order
+            const total = count + 1;
+            const position = which % total;
+            const sensitiveTime = slower ? 200 : 50;
+            let timed = false;
+            let timedLoops = 0;
+            let time = 100;
+            const counted = (name: string, onSetup: () => void): SyncVariant => ({
+                name,
+                setup: () => {
+                    timedLoops += timed ? 1 : 0;
+                    onSetup();
+                },
+                run: () => runtime.clock.spend(time)
+            });
+            const steady = (): void => {
+                time = 100;
+            };
+            const variants = [
+                counted('reference', steady),
+                counted('sensitive', () => {
+                    time = timed && (timedLoops - 1) % total === position ? sensitiveTime : 100;
+                }),
+                ...Array.from({ length: count - 2 }, (_, i) => counted(`other ${i}`, steady))
+            ];
+
+            const result = await measureGroups([{ name: 'positions', variants }], {
+                ...QUICK,
+                runtime,
+                onRounds: (_, rounds) => {
+                    timed = rounds === 'timed';
+                }
+            });
+            const [group] = result.groups;
+            const effect = expectPresent(variantNamed(group, 'sensitive').positionEffect);
+
+            expect(effect.position).toBe(position);
+            expectClose(effect.median, sensitiveTime);
+            expectClose(effect.others, 100);
+            for (const variant of group.variants) {
+                if (variant.name !== 'sensitive') {
+                    expect(variant.positionEffect, variant.name).toBeNull();
+                }
+            }
+            // Its rounds form two modes, by position, which the position's note
+            // explains in place of the modes' note
+            expect(variantNamed(group, 'sensitive').summary.modes).not.toBeNull();
+            const notes = formatGroup(group).filter(line => line.startsWith('  sensitive: '));
+            expect(notes.filter(note => note.includes(' in a round, after '))).toHaveLength(1);
+            expect(notes.filter(note => note.includes('two modes'))).toStrictEqual([]);
+        }
+    );
+
     it('measures the groups that the filter selects, and reports each as it goes', async () => {
         const runtime = new FakeRuntime();
         const groups = ['apple', 'banana', 'blueberry', 'cherry'].map(name => ({
@@ -548,7 +735,7 @@ describe('measureGroups', () => {
 
         expect(reported).toStrictEqual(['banana', 'blueberry']);
         expect(result.groups.map(group => group.name)).toStrictEqual(['banana', 'blueberry']);
-        expect(result.schema).toBe(6);
+        expect(result.schema).toBe(7);
         expect(result.v8Report).toBeNull();
         expect(result.runtime).toBe(runtime.description);
         expect(result.options).toStrictEqual({

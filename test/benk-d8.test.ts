@@ -542,7 +542,7 @@ describe.runIf(version)('benk-d8 in d8', () => {
         ]);
 
         expect(status).toBe(1);
-        expect(stderr).toContain('write result schema 6, got 3: rebuild the script');
+        expect(stderr).toContain('write result schema 7, got 3: rebuild the script');
         expect(stdout).toBe('');
     });
 
@@ -562,7 +562,7 @@ describe.runIf(version)('benk-d8 in d8', () => {
 
             expect(status, stderr).toBe(0);
             const result = JSON.parse(stdout) as RunResult;
-            expect(result.schema).toBe(6);
+            expect(result.schema).toBe(7);
             expect(result.v8Report).toBeNull();
             expect(result.runtime.name).toBe('d8');
             expect(result.processes?.runs).toHaveLength(1);

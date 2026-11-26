@@ -3,10 +3,17 @@ import { timerResolutionOf } from './clock.ts';
 import { heapCounterOf } from './heap.ts';
 import { chooseLead, ratioByLead } from './lead.ts';
 import { rotation } from './rotation.ts';
-import { medianInterval, pairedRatios, summarize } from './statistics.ts';
+import {
+    changesOf,
+    medianInterval,
+    pairedRatios,
+    positionEffectOf,
+    summarize
+} from './statistics.ts';
 import { TimedVariant } from './timed-variant.ts';
 import {
     RESULT_SCHEMA,
+    type Change,
     type Group,
     type GroupResult,
     type Lead,
@@ -238,6 +245,8 @@ export async function measureGroup(
     }
 
     const { lead, reason } = chooseLead(group.lead ?? 'auto', measured);
+    // Of the variants together, as load changes the rounds of all of them
+    const changes = changesOf(samples);
 
     return {
         name: group.name,
@@ -245,8 +254,9 @@ export async function measureGroup(
         leadReason: reason,
         rounds,
         timerResolution,
-        variants: measured.map(variant =>
-            variantResult(variant, measured[0], lead)
+        change: changes.shared,
+        variants: measured.map((variant, i) =>
+            variantResult(variant, measured[0], lead, changes.variants[i])
         )
     };
 }
@@ -327,7 +337,10 @@ async function timeRounds(
     return { samples, positions };
 }
 
-/** A variant's results, with its ratio to the reference by the lead */
+/**
+ * A variant's results, with its ratio to the reference by the lead, and its
+ * change against the other variants, as `changesOf()` finds it
+ */
 function variantResult(
     {
         variant,
@@ -338,7 +351,8 @@ function variantResult(
         arrayBufferBytes
     }: Measured,
     reference: Measured,
-    lead: Lead
+    lead: Lead,
+    change: Change | null
 ): VariantResult {
     const role = variant.role();
     const ratios = pairedRatios(samples, reference.samples);
@@ -354,6 +368,8 @@ function variantResult(
         samples: Array.from(samples),
         positions: Array.from(positions),
         summary,
+        change,
+        positionEffect: positionEffectOf(samples, positions),
         ratio:
             role === 'reference'
                 ? 1

@@ -448,7 +448,7 @@ describe('--v8-check', () => {
                 const position = v8?.run?.position;
                 return [name, position?.line, position?.column];
             });
-            expect(result.schema).toBe(6);
+            expect(result.schema).toBe(7);
             expect(result.v8Report?.check).toBeNull();
             expect(result.v8Report?.functions.map(fn => fn.name)).toContain('mix');
             expect(runs).toStrictEqual([
@@ -550,7 +550,7 @@ describe('--processes', () => {
         );
         expect(lines).toContain('  grows: faster than base in 1 process, and slower in 1');
         // The JSON is of the last call, as without the option
-        expect(result.schema).toBe(6);
+        expect(result.schema).toBe(7);
         expect(result.groups.map(group => group.name)).toStrictEqual(['crossing']);
         // Each run's own runtime, as the first's describes its own
         expect(processes.runs.map(run => run.runtime)).toStrictEqual([
