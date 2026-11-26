@@ -296,7 +296,7 @@ start or stop at any round. The median then mixes the rounds before and
 after the change, or describes one of them. A note says when each ran:
 
 ```text
-  for loop: the first 4 rounds ran near 1.47 µs, and the other 32 near 830 ns: more warm-up rounds, or a longer sample time, would time only the faster rounds
+  for loop: the first 4 rounds ran near 1.47 µs, and the other 32 near 830 ns: try a longer warm-up and check whether the early slowdown repeats
 ```
 
 This is the quick start's for loop with `--sample-ms 10`, in the run that
@@ -305,21 +305,19 @@ code took over, and its median is of the other 32.
 
 The note's suggestion depends on whether the rounds got faster or slower:
 
-| Rounds after the change | More often                                     | The note suggests                                 |
-| ----------------------- | ---------------------------------------------- | ------------------------------------------------- |
-| Faster                  | Code that V8 optimized after the first rounds  | More warm-up rounds, or a longer sample time      |
-| Slower                  | A deoptimization, or load from other processes | Another run, and V8's report for a deoptimization |
+| Later rounds | Possible cause        | What to try                                              |
+| ------------ | --------------------- | -------------------------------------------------------- |
+| Faster       | V8 optimized the code | Repeat with more warm-up rounds and compare the timings. |
+| Slower       | V8 deoptimized        | Repeat and check V8's report for a deoptimization.       |
 
-Load from other processes changes every variant of a group in the same
-rounds, the A/A copy too. V8 optimizes each variant's timer loop on its
-own, but a reference and its A/A copy call the same `run`, which can tier
-up in both loops at about the same round.
+Load from another process can start or stop during the run. Look for a
+change in the same rounds across variants, including the A/A copy. V8
+optimizes each variant's timer loop on its own, but the reference and its
+A/A copy call the same `run`, which can tier up in both loops at about the
+same round.
 
-benk splits the rounds where the ranks of those before the split are the
-furthest from what rounds in an order that doesn't matter give, as Mann and
-Whitney's test measures it. Ranks assume nothing about the distribution of
-the rounds' times, and an outlier counts as any slow round. The rounds
-changed when:
+benk compares the rounds on either side of each possible split by rank,
+using the Mann–Whitney rank sum. A split qualifies when:
 
 - each part has at least 3 rounds and 10% of them, as each of two modes;
 - the rank sum of the rounds before the split is 3 or more standard
@@ -328,8 +326,12 @@ changed when:
   as the two parts' medians are;
 - the medians are 5% or more apart.
 
+Among the qualifying splits, benk chooses the one that minimizes the sum
+of squared deviations from each part's mean log time. This lets it locate
+a short early slowdown even when the later rounds drift by a few percent.
+
 In shuffled rounds, whose order doesn't matter, benk found a change in
-0.08% to 0.15% of 31 to 40 rounds, and in none of 12 rounds or fewer, where
+0.13% to 0.17% of 31 to 40 rounds, and in none of 12 rounds or fewer, where
 a split that clean is too likely by chance. It looks for one change: a
 steady drift reads as a change near its middle.
 
@@ -360,16 +362,19 @@ every position equally often, so its median mixes the positions alike. A
 note says when one position's rounds differ from the variant's others:
 
 ```text
-  Float64Array of 1 KiB: its rounds ran near 330 ns when 1st in a round, and near 246 ns otherwise: what runs before it changes its time, which the rotation balances
+  Float64Array of 1 KiB: its rounds ran near 330 ns when 1st in a round, and near 246 ns otherwise
 ```
 
 benk compares the rounds in each position with the variant's other rounds
-by their ranks, as for a change, and takes the position whose rank sum is
-the furthest from its mean. With two positions, each is as far from the
-other, and the note names the first. It's an effect when:
+by their ranks, as for a change. A position qualifies when:
 
-- the rank sum is 3.7 or more standard deviations from its mean;
-- the two medians are 5% or more apart.
+- its rank sum is 3.7 or more standard deviations from its mean;
+- its median differs from the median of the other rounds by at least 5%
+  of the faster median.
+
+Of the positions that qualify, the note names the one with the greatest
+rank distance. A tie goes to the earliest position, as when there are only
+two.
 
 A position has few rounds: 31 rounds over 3 to 7 positions give 6 to 12
 each, which noise easily makes look different. So the bar is high. In
@@ -378,15 +383,18 @@ variants got the note. A position whose every round is slower than the
 others reaches it with up to 7 positions of 6 rounds each, and 8 positions
 of 4 can't.
 
-The rounds run straight after one another, and a round's first variant
-follows the last of the round before. Williams' design, which `rotation()`
-orders the variants by, spreads what one variant leaves the next over
-every position, so a position test sees such an effect only in part. In
-the runs of [Rounds that changed](#rounds-that-changed), 48 with each load
-average, 1 of 852 variants got the note, and none of the 336 A/A copies.
-It was the run above, of `benchmarks/array-buffers.ts`. Its A/A copy's rounds leaned the
-other way in the same run, and the group's 11 other runs didn't differ by
-position.
+Within a complete rotation, each variant immediately follows every other
+variant equally often within rounds. A given pair can still occur at a
+fixed position. With four variants numbered from 0, variant 3 precedes
+variant 0 only when variant 0 runs second within the round. A slowdown in
+that position could reflect what variant 3 left behind. A periodic change
+in the workload can also line up with the rotation.
+
+In the runs of [Rounds that changed](#rounds-that-changed), 48 with each
+load average, 1 of 852 variants got the note, and none of the 336 A/A
+copies. It was the run above, of `benchmarks/array-buffers.ts`. Its A/A
+copy's rounds leaned the other way in the same run, and the group's 11
+other runs didn't differ by position.
 
 ## JSON results
 
@@ -493,8 +501,8 @@ sum 1,000 numbers: 36 rounds, by the median round (a call of 1 µs or more)
   for loop             819 ns     832 ns     0.9%    1.00×                       16 B         0 B
   reduce              7.21 µs    7.37 µs     1.4%    8.86×      8.78–8.88    32,040 B         0 B
   for loop A/A         821 ns     830 ns     0.5%    1.00×      1.00–1.00        16 B         0 B
-  for loop: the first 4 rounds ran near 1.47 µs, and the other 32 near 830 ns: more warm-up rounds, or a longer sample time, would time only the faster rounds
-  for loop A/A: the first 4 rounds ran near 1.48 µs, and the other 32 near 829 ns: more warm-up rounds, or a longer sample time, would time only the faster rounds
+  for loop: the first 4 rounds ran near 1.47 µs, and the other 32 near 830 ns: try a longer warm-up and check whether the early slowdown repeats
+  for loop A/A: the first 4 rounds ran near 1.48 µs, and the other 32 near 829 ns: try a longer warm-up and check whether the early slowdown repeats
 
 V8 report of bench.ts, from a run of it with V8's traces, whose times aren't reported.
 Per function of the script, and per function that deoptimized in the script's code: the tiers that V8 compiled it to, what Turbofan inlined into it and where it inlined it, with sizes of bytecode, and its deoptimizations.
@@ -882,8 +890,8 @@ command line:
      for loop             819 ns     837 ns     2.3%    1.00×                          –           –
      reduce              6.41 µs    6.56 µs     1.3%    7.88×      7.76–7.91           –           –
      for loop A/A         818 ns     836 ns     1.9%    1.00×      1.00–1.01           –           –
-     for loop: the first 5 rounds ran near 1.50 µs, and the other 31 near 832 ns: more warm-up rounds, or a longer sample time, would time only the faster rounds
-     for loop A/A: the first 5 rounds ran near 1.48 µs, and the other 31 near 832 ns: more warm-up rounds, or a longer sample time, would time only the faster rounds
+     for loop: the first 5 rounds ran near 1.50 µs, and the other 31 near 832 ns: try a longer warm-up and check whether the early slowdown repeats
+     for loop A/A: the first 5 rounds ran near 1.48 µs, and the other 31 near 832 ns: try a longer warm-up and check whether the early slowdown repeats
 
    V8 report of bench.mjs, from a run of it in d8 15.8.62.9 with V8's traces, whose times aren't reported.
    Per function of the script, and per function that deoptimized in the script's code: the tiers that V8 compiled it to, what Turbofan inlined into it and where it inlined it, with sizes of bytecode, and its deoptimizations.

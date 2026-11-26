@@ -195,10 +195,8 @@ function formatRounds(variant: VariantResult): string[] {
 
 /**
  * A note for a variant whose rounds changed partway, which names the shorter
- * part first. Rounds that got faster are more often those before V8's
- * optimized code took over, which more warm-up rounds would leave out.
- * Rounds that got slower are more often a deoptimization, or load from other
- * processes, which another run shows.
+ * part first. A longer warm-up can help distinguish tiering from other
+ * changes during the run, such as load from another process.
  */
 function formatChange(name: string, { before, after }: Change): string[] {
     const parts =
@@ -207,7 +205,7 @@ function formatChange(name: string, { before, after }: Change): string[] {
             : `the last ${after.rounds} rounds ran near ${formatTime(after.median)}, and the other ${before.rounds} near ${formatTime(before.median)}`;
     const advice =
         after.median < before.median
-            ? 'more warm-up rounds, or a longer sample time, would time only the faster rounds'
+            ? 'try a longer warm-up and check whether the early slowdown repeats'
             : "another run shows whether that repeats, and V8's report whether its code deoptimized";
 
     return [`  ${name}: ${parts}: ${advice}`];
@@ -228,7 +226,7 @@ function formatPositionEffect({
 
     const { position, median, others } = positionEffect;
     return [
-        `  ${name}: its rounds ran near ${formatTime(median)} when ${ordinal(position + 1)} in a round, and near ${formatTime(others)} otherwise: what runs before it changes its time, which the rotation balances`
+        `  ${name}: its rounds ran near ${formatTime(median)} when ${ordinal(position + 1)} in a round, and near ${formatTime(others)} otherwise`
     ];
 }
 

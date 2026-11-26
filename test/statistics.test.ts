@@ -176,8 +176,8 @@ describe('changes', () => {
 
             expect(change.before.rounds).toBe(before);
             expect(change.after.rounds).toBe(count - before);
-            expect(first).toContain(change.before.median);
-            expect(rest).toContain(change.after.median);
+            expect(change.before.median).toBe(summarize(first).median);
+            expect(change.after.median).toBe(summarize(rest).median);
         }
     );
 
@@ -260,6 +260,19 @@ function cyclic(count: number, rounds: number): Int32Array {
 }
 
 describe('position effects', () => {
+    it('checks both thresholds when a different position ranks just as far from its mean', () => {
+        const positions = cyclic(4, 32);
+        const times = [100, 101, 102, 200];
+        for (let position = 0; position < times.length; position++) {
+            const samples = Float64Array.from(positions, p => times[(p + 3 - position) % 4]);
+            expect(positionEffectOf(samples, positions)).toStrictEqual({
+                position,
+                median: 200,
+                others: 101
+            });
+        }
+    });
+
     it.prop([
         fc.integer({ min: 2, max: 6 }),
         fc.integer({ min: 6, max: 20 }),

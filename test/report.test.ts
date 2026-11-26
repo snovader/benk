@@ -105,8 +105,8 @@ describe('formatGroup', () => {
         const rows = 3 + variants.length;
 
         expect(formatGroup({ ...group, lead: 'median', variants }).slice(rows)).toStrictEqual([
-            '  early: the first 4 rounds ran near 1.45 µs, and the other 32 near 805 ns: more warm-up rounds, or a longer sample time, would time only the faster rounds',
-            '  late: the last 14 rounds ran near 757 ns, and the other 22 near 2.07 µs: more warm-up rounds, or a longer sample time, would time only the faster rounds',
+            '  early: the first 4 rounds ran near 1.45 µs, and the other 32 near 805 ns: try a longer warm-up and check whether the early slowdown repeats',
+            '  late: the last 14 rounds ran near 757 ns, and the other 22 near 2.07 µs: try a longer warm-up and check whether the early slowdown repeats',
             "  slower: the first 6 rounds ran near 2.53 µs, and the other 26 near 8.22 µs: another run shows whether that repeats, and V8's report whether its code deoptimized",
             "  slower late: the last 4 rounds ran near 233 ns, and the other 28 near 128 ns: another run shows whether that repeats, and V8's report whether its code deoptimized",
             '  modes: two modes, 4 rounds near 85.4 ns and 3 near 121 ns'
@@ -125,7 +125,7 @@ describe('formatGroup', () => {
         );
 
         expect(notes[0]).toBe(
-            '  at 0: its rounds ran near 200 ns when 1st in a round, and near 100 ns otherwise: what runs before it changes its time, which the rotation balances'
+            '  at 0: its rounds ran near 200 ns when 1st in a round, and near 100 ns otherwise'
         );
         expect(notes.map(note => note.split(' when ')[1].split(' in a round')[0])).toStrictEqual([
             '1st',

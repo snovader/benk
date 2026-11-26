@@ -223,11 +223,16 @@ export function changeOf(samples: Float64Array): Change | null {
         return null;
     }
 
-    const ranks = ranksOf(samples);
+    const order = orderByTime(samples);
+    const ranks = ranksOf(samples, order);
     const logs = samples.map(Math.log);
     const logTotal = logs.reduce((sum, log) => sum + log, 0);
-    const firstMedians = runningMedians(samples);
-    const lastMedians = runningMedians(samples.toReversed());
+    const offsets = new Int32Array(count);
+    for (const [offset, round] of order.entries()) {
+        offsets[round] = offset;
+    }
+    const firstMedians = runningMedians(samples, order, offsets, 'prefix');
+    const lastMedians = runningMedians(samples, order, offsets, 'suffix');
 
     let best = 0;
     let bestScore = 0;
@@ -311,65 +316,63 @@ function compareRanks(
  * A position in the round whose rounds took longer or shorter than a
  * variant's others, or null if none did. Each position has as many rounds,
  * as the rotation balances them. It compares the rounds in each position
- * with the others by their ranks, as Mann and Whitney's test does, and takes
- * the position whose rank sum is the furthest from its mean, or the first
- * of those as far, as each of two positions is from the other. That's a
- * position effect when the distance is greater than chance makes it, and
- * the two medians are far enough apart. A test of one position against the
- * rest, rather than of all of them at once, finds a single position as
- * often with many positions as with few, as when only the first is slower.
+ * with the others by their ranks, as Mann and Whitney's test does. Among
+ * positions passing both the rank distance and median difference thresholds,
+ * it takes the greatest distance, with the first position breaking a tie.
  */
 export function positionEffectOf(
     samples: Float64Array,
     positions: ArrayLike<number>
 ): PositionEffect | null {
     const count = samples.length;
-    const ranks = ranksOf(samples);
+    const order = orderByTime(samples);
+    const ranks = ranksOf(samples, order);
     const rankSums: number[] = [];
-    const sizes: number[] = [];
-    for (let i = 0; i < count; i++) {
-        const position = positions[i];
-        rankSums[position] = (rankSums[position] ?? 0) + ranks[i];
-        sizes[position] = (sizes[position] ?? 0) + 1;
+    const byPosition: number[][] = [];
+    for (const [offset, round] of order.entries()) {
+        const position = positions[round];
+        (byPosition[position] ??= []).push(offset);
+        rankSums[position] = (rankSums[position] ?? 0) + ranks[round];
     }
 
-    let farthest = -1;
+    let best: PositionEffect | null = null;
     let greatest = 0;
-    for (const [position, size] of sizes.entries()) {
-        if (size > 0 && size < count) {
-            const { distance } = compareRanks(rankSums[position], size, count);
-            if (distance > greatest) {
-                farthest = position;
-                greatest = distance;
-            }
+    for (const [position, offsets] of byPosition.entries()) {
+        if (offsets.length === count) {
+            return null;
+        }
+        const { distance } = compareRanks(
+            rankSums[position],
+            offsets.length,
+            count
+        );
+        if (distance < POSITION_SIGNIFICANCE || distance <= greatest) {
+            continue;
+        }
+
+        const median = samples[order[quantile(offsets, 0.5)]];
+        const others = samples[order[otherMedianOffset(count, offsets)]];
+        if (Math.min(median, others) > 0 && areApart(median, others)) {
+            best = { position, median, others };
+            greatest = distance;
         }
     }
-    if (greatest < POSITION_SIGNIFICANCE) {
-        return null;
-    }
 
-    const median = positionMedian(samples, positions, farthest, true);
-    const others = positionMedian(samples, positions, farthest, false);
-    if (!(Math.min(median, others) > 0) || !areApart(median, others)) {
-        return null;
-    }
-
-    return { position: farthest, median, others };
+    return best;
 }
 
-/** The median of the rounds in a position, or of those in the others */
-function positionMedian(
-    samples: Float64Array,
-    positions: ArrayLike<number>,
-    position: number,
-    inPosition: boolean
-): number {
-    const chosen = samples.filter(
-        (_, i) => (positions[i] === position) === inPosition
-    );
-    chosen.sort();
+/** The upper median's offset in sorted rounds after excluding one position */
+function otherMedianOffset(count: number, excluded: readonly number[]): number {
+    let middle = Math.floor((count - excluded.length) / 2);
+    // Each excluded round at or before the target moves it one place right.
+    for (const offset of excluded) {
+        if (offset > middle) {
+            break;
+        }
+        middle++;
+    }
 
-    return quantile(chosen, 0.5);
+    return middle;
 }
 
 /** Whether two positive medians are `PART_DIFFERENCE` or more apart */
@@ -378,42 +381,62 @@ function areApart(a: number, b: number): boolean {
 }
 
 /**
- * The median of each count of the first samples, at that count less one, as
- * `quantile()` takes it. It keeps them sorted by insertion, whose moves cost
- * less than sorting each count anew.
+ * The upper median for every prefix or suffix, indexed by its length minus
+ * one. Start with all rounds sorted and remove one end of the time series
+ * at a time. Deleting a round moves the median at most one surviving
+ * neighbor, so all medians take linear time once the rounds are sorted.
  */
-function runningMedians(samples: Float64Array): Float64Array {
-    const sorted = new Float64Array(samples.length);
-    const medians = new Float64Array(samples.length);
-    for (const [count, sample] of samples.entries()) {
-        let low = 0;
-        let high = count;
-        while (low < high) {
-            const middle = (low + high) >>> 1;
-            if (sorted[middle] < sample) {
-                low = middle + 1;
-            } else {
-                high = middle;
-            }
+function runningMedians(
+    samples: Float64Array,
+    order: Int32Array,
+    offsets: Int32Array,
+    segment: 'prefix' | 'suffix'
+): Float64Array {
+    const count = samples.length;
+    const previous = new Int32Array(count);
+    const next = new Int32Array(count);
+    for (let i = 0; i < count; i++) {
+        previous[i] = i - 1;
+        next[i] = i + 1;
+    }
+
+    const medians = new Float64Array(count);
+    let middle = Math.floor(count / 2);
+    for (let size = count; size > 0; size--) {
+        medians[size - 1] = samples[order[middle]];
+        const round = segment === 'prefix' ? size - 1 : count - size;
+        const removed = offsets[round];
+        if (size % 2 === 0 && removed >= middle) {
+            middle = previous[middle];
+        } else if (size % 2 === 1 && removed <= middle) {
+            middle = next[middle];
         }
 
-        sorted.copyWithin(low + 1, low, count);
-        sorted[low] = sample;
-        medians[count] = sorted[Math.ceil(count / 2)];
+        const left = previous[removed];
+        const right = next[removed];
+        if (left >= 0) {
+            next[left] = right;
+        }
+        if (right < count) {
+            previous[right] = left;
+        }
     }
 
     return medians;
+}
+
+/** Round indices in ascending sample order */
+function orderByTime(samples: Float64Array): Int32Array {
+    const order = Int32Array.from({ length: samples.length }, (_, i) => i);
+    return order.sort((a, b) => samples[a] - samples[b]);
 }
 
 /**
  * Each sample's rank among them, from 1 for the fastest, with tied samples
  * taking the mean of their ranks
  */
-function ranksOf(samples: ArrayLike<number>): Float64Array {
+function ranksOf(samples: Float64Array, order: Int32Array): Float64Array {
     const count = samples.length;
-    const order = Int32Array.from({ length: count }, (_, i) => i);
-    order.sort((a, b) => samples[a] - samples[b]);
-
     const ranks = new Float64Array(count);
     for (let first = 0; first < count;) {
         let last = first;
