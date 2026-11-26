@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { describe, expect, it, vi } from 'hypotes';
 import { bench, parseOptions, type Group, type RunResult } from 'benk';
+import { expectClose, expectPresent } from './expectations.ts';
 import { FakeRuntime } from './fake-runtime.ts';
 import { BENCH, BUNDLE, BUNDLED, REPOSITORY } from './v8-fixtures.ts';
 
@@ -221,22 +222,28 @@ describe('bench', () => {
 });
 
 /** The lines that a script prints, with the arguments, from the repository's directory */
-async function runScript(script: string, args: readonly string[]): Promise<string[]> {
-    const { code, lines } = await runScriptWithCode(script, args);
-    expect(code, lines.join('\n')).toBe(0);
+async function runScript(
+    script: string,
+    args: readonly string[],
+    env: NodeJS.ProcessEnv = {}
+): Promise<string[]> {
+    const { code, lines, stderr } = await runScriptWithCode(script, args, [], env);
+    expect(code, `${lines.join('\n')}\n${stderr}`).toBe(0);
 
     return lines;
 }
 
 /**
- * The lines that a script prints, and the code that it exits with, run with
- * Node's flags, if any, before the script
+ * The lines that a script prints, what it writes to stderr, and the code
+ * that it exits with, run with Node's flags, if any, before the script, and
+ * with the variables of `env` in its environment
  */
 async function runScriptWithCode(
     script: string,
     args: readonly string[],
-    flags: readonly string[] = []
-): Promise<{ code: number; lines: string[] }> {
+    flags: readonly string[] = [],
+    env: NodeJS.ProcessEnv = {}
+): Promise<{ code: number; lines: string[]; stderr: string }> {
     // Run as the package's scripts run the tests, whose flags the traced run has too
     const run = promisify(execFile)(
         process.execPath,
@@ -252,16 +259,16 @@ async function runScriptWithCode(
             '--warmup-rounds',
             '1'
         ],
-        { cwd: REPOSITORY }
+        { cwd: REPOSITORY, env: { ...process.env, ...env } }
     );
 
     try {
-        const { stdout } = await run;
-        return { code: 0, lines: stdout.split(/\r?\n/) };
+        const { stdout, stderr } = await run;
+        return { code: 0, lines: stdout.split(/\r?\n/), stderr };
     } catch (error) {
         // A child that exits with another code than 0 rejects with its code and output
-        const { code, stdout } = error as { code: number; stdout: string };
-        return { code, lines: stdout.split(/\r?\n/) };
+        const { code, stdout, stderr } = error as { code: number; stdout: string; stderr: string };
+        return { code, lines: stdout.split(/\r?\n/), stderr };
     }
 }
 
@@ -366,6 +373,174 @@ describe('--v8-check', () => {
                 ['mixed', 94, 9],
                 ['integers A/A', 80, 9]
             ]);
+        } finally {
+            await rm(directory, { recursive: true });
+        }
+    });
+});
+
+/** The script of the tests of `--processes`, which the fake runtime times */
+const PROCESSES = join('test', 'fixtures', 'processes.ts');
+
+/**
+ * Runs `PROCESSES` with the arguments, and a quick sample time, in a
+ * directory of its own, where it counts its runs and writes its JSON to
+ * `results.json`, and returns what it wrote, its runs, and its results
+ */
+async function runProcesses(
+    args: readonly string[],
+    env: NodeJS.ProcessEnv = {}
+): Promise<{ code: number; lines: string[]; stderr: string; runs: number; json: string }> {
+    const directory = await mkdtemp(join(tmpdir(), 'benk-'));
+    try {
+        const counter = join(directory, 'runs');
+        const path = join(directory, 'results.json');
+        const run = await runScriptWithCode(
+            PROCESSES,
+            [...args.map(arg => (arg === 'results.json' ? path : arg)), '--sample-ms', '0.01'],
+            [],
+            { ...env, PROCESSES_RUNS: counter }
+        );
+
+        return {
+            ...run,
+            runs: (await readFile(counter, 'utf8')).split('\n').length - 1,
+            json: await readFile(path, 'utf8').catch(() => '')
+        };
+    } finally {
+        await rm(directory, { recursive: true });
+    }
+}
+
+/** The words of a table's row, which `heading` starts, by the variant's name */
+function rowOf(lines: readonly string[], heading: string, name: string): string[] {
+    const at = lines.indexOf(heading);
+    expect(at, lines.join('\n')).not.toBe(-1);
+
+    const row = lines.slice(at).find(line => line.startsWith(`  ${name} `));
+    return expectPresent(row, `Expected a row of ${name} after ${heading}`).trim().split(/\s+/);
+}
+
+describe('--processes', () => {
+    it("runs the script again in other processes, and prints each variant's ratio in each", async () => {
+        const { code, lines, stderr, runs, json } = await runProcesses([
+            '--processes',
+            '3',
+            '--json',
+            'results.json'
+        ]);
+        const result = JSON.parse(json) as RunResult;
+        const processes = expectPresent(result.processes);
+        const [, grows] = processes.groups[0].variants;
+
+        // Each call of bench() takes its results from the same runs
+        expect(code, stderr).toBe(0);
+        expect(runs).toBe(3);
+        // Only the first process prints, and its tables come first
+        expect(lines.filter(line => line.startsWith('run '))).toStrictEqual(['run 1']);
+        expect(
+            lines.indexOf('pairs: 8 rounds, by the fastest round (every call under 1 µs and 1 KiB)')
+        ).toBeLessThan(lines.indexOf('pairs: 3 processes, by the fastest round'));
+        expect(rowOf(lines, 'pairs: 3 processes, by the fastest round', 'slower')).toStrictEqual([
+            'slower',
+            '2.00×',
+            '2.20×',
+            '2.40×',
+            '2.20×',
+            '2.00–2.40'
+        ]);
+        expect(lines).toContain(
+            "  slower: the intervals of processes 1 and 3 don't overlap, 2.00–2.00 and 2.40–2.40"
+        );
+        expect(lines).toContain('  grows: faster than base in 1 process, and slower in 1');
+        // The JSON is of the last call, as without the option
+        expect(result.schema).toBe(5);
+        expect(result.groups.map(group => group.name)).toStrictEqual(['crossing']);
+        const fastest = processes.runs.map(run => run.groups[0].variants[1].summary.fastest);
+        expect(fastest).toHaveLength(2);
+        expectClose(fastest[0], 50);
+        expectClose(fastest[1], 75);
+        for (const [i, ratio] of [0.5, 1, 1.5].entries()) {
+            expectClose(grows.ratios[i], ratio);
+        }
+    });
+
+    it('measures in each process the groups that --filter selects', async () => {
+        const { code, lines, stderr } = await runProcesses([
+            '--processes',
+            '2',
+            '--filter',
+            '^cross'
+        ]);
+
+        expect(code, stderr).toBe(0);
+        expect(lines).toContain('crossing: 2 processes, by the fastest round');
+        expect(lines.some(line => line.startsWith('pairs'))).toBe(false);
+    });
+
+    it('writes the JSON to stdout for --json -, and the ratios across processes with the tables to stderr', async () => {
+        const { code, lines, stderr } = await runProcesses(['--processes', '2', '--json', '-']);
+        // The script prints its run's number first, and bench() writes JSON twice
+        const [first, ...json] = lines;
+        const results = json
+            .join('\n')
+            .trimEnd()
+            .split(/\n(?=\{)/)
+            .map(text => JSON.parse(text) as RunResult);
+
+        expect(code, stderr).toBe(0);
+        expect(first).toBe('run 1');
+        expect(results.map(result => result.processes?.runs.length)).toStrictEqual([1, 1]);
+        expect(stderr).toContain('\npairs: 2 processes, by the fastest round\n');
+    });
+
+    it('throws for a run in another process that fails, after it writes the JSON without the other processes', async () => {
+        const { code, stderr, runs, json } = await runProcesses(
+            ['--processes', '3', '--json', 'results.json'],
+            { PROCESSES_FAULT: 'fails' }
+        );
+
+        expect(code).toBe(1);
+        expect(runs).toBe(2);
+        expect(stderr).toContain('Error: The second run fails');
+        expect(stderr).toContain(
+            `Error: Expected the run of ${join(REPOSITORY, PROCESSES)} in process 2 of 3 to exit with 0, got 1`
+        );
+        expect((JSON.parse(json) as RunResult).processes).toBeNull();
+    });
+
+    it('throws for a run in another process that measured other groups', async () => {
+        const { code, stderr } = await runProcesses(['--processes', '2'], {
+            PROCESSES_FAULT: 'renames'
+        });
+
+        expect(code).toBe(1);
+        expect(stderr).toContain(
+            'Error: Expected process 2 to measure the groups of the first, with the same variants, got "renamed" of "base", "slower", "faster", "base A/A" where the first has "pairs" of "base", "slower", "faster", "base A/A"'
+        );
+    });
+
+    it('reports on V8 after the ratios across processes, and records both', async () => {
+        const directory = await mkdtemp(join(tmpdir(), 'benk-'));
+        try {
+            const path = join(directory, 'results.json');
+            const lines = await runScript(BENCH, [
+                '--processes',
+                '2',
+                '--v8-filter',
+                '^sum$',
+                '--json',
+                path
+            ]);
+            const result = JSON.parse(await readFile(path, 'utf8')) as RunResult;
+            const heading = lines.findIndex(line => line.startsWith('V8 report of '));
+
+            expect(
+                lines.findIndex(line => line.startsWith('sums: 2 processes, by the '))
+            ).toBeLessThan(heading);
+            expect(heading).toBeGreaterThan(-1);
+            expect(result.processes?.groups.map(group => group.name)).toStrictEqual(['sums']);
+            expect(result.v8Report?.functions.map(fn => fn.name)).toStrictEqual(['sum']);
         } finally {
             await rm(directory, { recursive: true });
         }
