@@ -8,4 +8,4 @@ export { compiledCopy, compiledFrom } from './compiling/compiled-copy.ts';
 export { inTurn } from './compiling/in-turn.ts';
 export { bench } from './d8/bench.ts';
 export { D8Runtime } from './d8/runtime.ts';
-export type { BenchOptions } from './core/command-line.ts';
+export type { AfterBench, BenchOptions } from './core/command-line.ts';

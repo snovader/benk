@@ -98,11 +98,17 @@ function variants(reader: Reader): Variant[] {
     const { name } = reader.constructor;
 
     return [
-        { name: `${name}, own source`, run: compiledCopy(reads)(reader, FIELDS) },
+        {
+            name: `${name}, own source`,
+            run: compiledCopy(reads)(reader, FIELDS)
+        },
         { name: `${name}, shared`, run: reads(reader, FIELDS) }
     ];
 }
 
 await bench([
-    { name: `read ${FIELDS.toLocaleString('en-US')} fields`, variants: READERS.flatMap(variants) }
+    {
+        name: `read ${FIELDS.toLocaleString('en-US')} fields`,
+        variants: READERS.flatMap(variants)
+    }
 ]);

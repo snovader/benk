@@ -29,7 +29,11 @@ export type {
     TimedRounds
 } from './core/measure.ts';
 export type { LeadChoice, LeadInput } from './core/lead.ts';
-export type { CommandOptions, BenchOptions } from './core/command-line.ts';
+export type {
+    AfterBench,
+    BenchOptions,
+    CommandOptions
+} from './core/command-line.ts';
 export type * from './core/types.ts';
 
 /** Where a run's variants are timed: in Node's runtime by default */

@@ -43,7 +43,8 @@ declare function writeFile(path: string, data: string | ArrayBuffer): void;
  * Runs a benchmark script in d8, as `benk`'s `bench()` does in Node: reads
  * its options from the script's arguments, prints a description of the run,
  * measures each group whose name matches the filter and prints its table,
- * and then writes the results as JSON, if the options ask for it.
+ * and then writes the results as JSON, if the options ask for it. Last, it
+ * calls the `after` option, with the `print` that printed the tables.
  *
  * What d8 can't do as Node does:
  *
@@ -70,7 +71,8 @@ declare function writeFile(path: string, data: string | ArrayBuffer): void;
  * @throws {Error} With `--v8-report`, `--v8-check` or an option that implies
  * either, or if the JSON's file can't be
  * written, which it checks before it measures, if the runtime's clock reads
- * no time, or if a variant throws, with its error as the cause.
+ * no time, if a variant throws, with its error as the cause, or if `after`
+ * throws, with its error.
  */
 export async function bench(
     groups: Iterable<Group>,
@@ -109,6 +111,8 @@ export async function bench(
     } else if (json != null) {
         writeResults(json, formatJson(result));
     }
+
+    await options.after?.(printLine, result);
 
     return result;
 }
