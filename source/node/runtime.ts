@@ -4,13 +4,8 @@
 // need a runtime of their own.
 import { cpus } from 'node:os';
 import { setTimeout as wait } from 'node:timers/promises';
-import {
-    getHeapStatistics,
-    setFlagsFromString,
-    GCProfiler,
-    type GCProfilerResult
-} from 'node:v8';
-import { runInNewContext } from 'node:vm';
+import { getHeapStatistics, GCProfiler, type GCProfilerResult } from 'node:v8';
+import { measureMemory } from 'node:vm';
 import { asyncTimerSource, timerSource } from '#source/core/timer-source';
 import type {
     ArrayBufferMeter,
@@ -207,45 +202,40 @@ function startProfiler(): () => GCStatistics {
     };
 }
 
-/** V8's `gc()`, once `collectProfilers()` needs it */
-let gc: (() => void) | undefined;
+/** A collection already requested in this isolate, shared by its meters. */
+let collecting: Promise<void> | undefined;
 
-/**
- * Runs a full collection, if a count's GC profiler saw a collection, which
- * collects the profilers and removes their callbacks. A group whose samples
- * saw none leaves the heap as it is for the next. With it, the groups after
- * the first took as long as with `--no-heap`, in Node 24, 26 and 27, as the
- * README measures. On an Apple M2 Pro, it paused for 1.2 to 1.9 ms with
- * about 5 MB alive, and 52 ms with 210 MB, and left the size of V8's young
- * generation as it was.
- */
-function collectProfilers(): void {
-    if (profilersToCollect) {
-        profilersToCollect = false;
-        gc ??= exposedGc();
-        gc();
+async function collectProfilers(): Promise<void> {
+    // A sample may stop while a collection requested by another group runs.
+    if (collecting) {
+        return collecting.then(collectProfilers);
+    }
+    if (!profilersToCollect) {
+        return;
+    }
+
+    profilersToCollect = false;
+    collecting = collectGarbage();
+    try {
+        await collecting;
+    } catch (error) {
+        profilersToCollect = true;
+        throw error;
+    } finally {
+        collecting = undefined;
     }
 }
 
-/**
- * V8's `gc()`, which runs a full collection: the process's own, where Node
- * started with `--expose-gc`, or else one of a context of its own, which
- * benk creates with the flag, and then turns it off again, so that the
- * contexts that the process creates later don't get one
- */
-function exposedGc(): () => void {
-    const processGc = globalThis.gc;
-    if (processGc != null) {
-        return () => {
-            processGc();
-        };
+/** Collects this isolate's stopped profilers without changing V8's process-wide flags. */
+async function collectGarbage(): Promise<void> {
+    if (typeof globalThis.gc === 'function') {
+        globalThis.gc();
+        return;
     }
 
-    setFlagsFromString('--expose-gc');
-    const contextGc = runInNewContext('gc') as () => void;
-    setFlagsFromString('--no-expose-gc');
-
-    return contextGc;
+    // Eager measurement starts a full collection in this isolate. An inspector
+    // collection slowed later rounds in the four-group run in the README.
+    await measureMemory({ execution: 'eager' });
 }
 
 function freedBytes(statistics: GCStatistics): number {

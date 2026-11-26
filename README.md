@@ -291,14 +291,17 @@ collects.
 So the counts would slow the next groups' allocating calls, until a full
 collection came, in some processes and not in others. After a group's
 counts, if a sample saw a collection, benk runs a full collection itself.
-That removes the profilers, and takes a few milliseconds.
+When Node exposes `gc()`, benk calls it directly. Otherwise benk requests
+an eager memory measurement and waits for the collection in the current
+isolate. Node emits an experimental warning on first use of
+[`vm.measureMemory()`](https://nodejs.org/api/vm.html#vmmeasurememoryoptions).
 `--no-heap` leaves out both the counts and the collection.
 
 On an Apple M2 Pro, with a load average of 4 to 5, 20 processes of each kind
 timed four groups of allocating calls, in turn: without the collection,
-with it, and with `--no-heap`. The first variant of each
-group built 100 small objects, in groups 1, 2 and 4, or a string of 200
-characters, in group 3. These are the medians of the 20 processes' median
+with a full collection from V8's `gc()`, and with `--no-heap`. The first
+variant built 100 small objects in groups 1, 2 and 4, or a string of 200
+characters in group 3. These are the medians of the 20 processes' median
 rounds of each first variant:
 
 | Node         | Run         | Group 1 | Group 2 | Group 3  | Group 4 |
@@ -313,16 +316,25 @@ rounds of each first variant:
 |              | with it     | 319 ns  | 292 ns  | 671 ns   | 281 ns  |
 |              | `--no-heap` | 315 ns  | 287 ns  | 667 ns   | 283 ns  |
 
-Without it, groups 2 and 3 took more than 1.3 times as long as with
-`--no-heap` in 119 of the 120 processes of the three versions, and group 4
-in all of Node 27's and 3 of Node 24's. With it, none did. The heap bytes didn't change,
-beyond the few bytes that they vary by between processes.
+Across the 60 processes without a forced collection, groups 2 and 3 gave
+120 group measurements. Of those, 119 took more than 1.3 times as long as
+with `--no-heap`. Group 4 exceeded that threshold in all 20 Node 27
+processes and 3 Node 24 processes. With the collection, none did. Heap
+bytes varied by only a few bytes between processes.
 
 A run took 0.80–0.82 s with the collection, 1.09–1.37 s without it, and
 0.56–0.57 s with `--no-heap`: the profilers slowed the counts too. The
 collection itself paused for 1.2–1.9 ms in these runs, with about 5 MB
 alive. It takes longer as more is alive: 17 ms with 73 MB, and 52 ms with
 210 MB, in Node 26.13.0.
+
+On the same Apple M2 Pro with Node 26.13.0, a separate run compared ways
+to request the collection. Each of four groups built an array of 100 small
+objects per call. Across 12 fresh processes per method, the fourth group's
+median round took 192 ns per call with eager VM measurement, 190 ns with
+V8's `gc()`, 191 ns with `--no-heap`, and 251 ns with an inspector
+collection. Releasing the meters took a median of 2.11 ms per group with
+eager measurement and 1.64 ms with `gc()`.
 
 ## JSON results
 
@@ -1094,9 +1106,13 @@ array buffers' bytes with `process.memoryUsage()`. A runtime without
 `arrayBuffers` counts none, as the runtime below. The `runtime` option takes
 another `Runtime`, such as one with a fake clock for a test.
 
-A meter can have a `release()` method. benk calls it after a group's
-counts, before anything else runs, to undo what the counts left in the
-process. Node's meters run a full collection there, as
+A meter can have a `release()` method to undo what its counts left in the
+process. benk stops each sample even if a variant throws. After the counts,
+it releases both meters and awaits their releases before reporting the
+group. A single failure rejects the measurement with that error. Multiple
+count and release failures produce an `AggregateError` whose `errors` are
+in occurrence order and whose `cause` is the first error. Node's meters run
+a full collection when a sample saw a collection, as
 [The collection after the counts](#the-collection-after-the-counts)
 describes.
 
