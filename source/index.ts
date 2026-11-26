@@ -19,6 +19,8 @@ export { rotation } from './core/rotation.ts';
 export { medianInterval, summarize } from './core/statistics.ts';
 export { asyncTimerSource, timerSource } from './core/timer-source.ts';
 export { parseOptions } from './core/command-line.ts';
+export { compiledCopy, compiledFrom } from './compiling/compiled-copy.ts';
+export { inTurn } from './compiling/in-turn.ts';
 export { bench } from './node/cli.ts';
 export { NodeRuntime } from './node/runtime.ts';
 export type {
@@ -27,7 +29,11 @@ export type {
     TimedRounds
 } from './core/measure.ts';
 export type { LeadChoice, LeadInput } from './core/lead.ts';
-export type { CommandOptions, BenchOptions } from './core/command-line.ts';
+export type {
+    AfterBench,
+    BenchOptions,
+    CommandOptions
+} from './core/command-line.ts';
 export type * from './core/types.ts';
 
 /** Where a run's variants are timed: in Node's runtime by default */

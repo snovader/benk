@@ -1,5 +1,3 @@
-import { access, constants, writeFile } from 'node:fs/promises';
-import { dirname, resolve } from 'node:path';
 import {
     measureAndPrint,
     parseOptions,
@@ -7,7 +5,8 @@ import {
     type CommandOptions
 } from '#source/core/command-line';
 import { measureGroups, type MeasureOptions } from '#source/core/measure';
-import { formatJson } from '#source/core/report';
+import { withProcesses } from '#source/core/processes';
+import { formatProcesses } from '#source/core/report';
 import type {
     Group,
     GroupResult,
@@ -19,6 +18,12 @@ import type {
     VariantV8
 } from '#source/core/types';
 import { functionPositions } from './function-positions.ts';
+import { checkDirectory, writeJson } from './json-results.ts';
+import {
+    processRunFile,
+    recordProcessRun,
+    runInProcesses
+} from './process-runs.ts';
 import { NodeRuntime } from './runtime.ts';
 import { writeMarker, type TracedGroup } from './traced-markers.ts';
 import {
@@ -50,7 +55,7 @@ export const V8_CHECK_FAILED = 2;
 /**
  * The calls of `bench()` in this process so far. The traced run's calls
  * are numbered alike, as it runs the same script, so that a call's report
- * is of its own groups.
+ * is of its own groups, and so are the calls of the runs of `--processes`.
  */
 let benchCalls = 0;
 
@@ -60,42 +65,72 @@ let benchCalls = 0;
  * filter and prints its table, and then writes the results as JSON, if the
  * options ask for it.
  *
+ * With `--processes <n>`, after its tables, it runs the script again in
+ * n − 1 other processes, one after another, as `runInProcesses()` does,
+ * and prints each variant's ratio in each process, with their median and
+ * range. The results have the other processes' too.
+ *
  * With `--v8-report`, it runs the script again with V8's traces before it
  * writes the JSON, and prints a report of its hot functions, or of those
  * that `--v8-filter` selects, and of each variant's code. The results have
  * the report too. With `--v8-check`, it checks the report's functions, and
  * sets `process.exitCode` to `V8_CHECK_FAILED` if one fails, unless the
  * script has set another. It doesn't exit: the script's code after it runs.
+ * Last, it calls the `after` option, with the `print` that printed the
+ * tables, and the results.
  *
  * In that traced run, it measures as in any other, but prints nothing,
- * writes no JSON, and doesn't run the script again. It writes markers among
+ * writes no JSON, doesn't call `after`, and doesn't run the script again. It writes markers among
  * V8's traces, of its calls and groups' timed rounds, and of where each
  * variant's `run` starts, which it reads after measuring. It then reads the
  * source maps of the scripts that V8 compiled, before it returns.
+ *
+ * In a run of `--processes`, it measures and formats the tables as the
+ * first process does, but prints nothing, writes no JSON, doesn't call
+ * `after`, and doesn't run the script again. It records its results for the
+ * first process.
  *
  * @throws {TypeError} If an argument isn't one of the options, or a group is
  * malformed, as `measureGroups()` describes.
  * @throws {RangeError} If a number is out of its range.
  * @throws {SyntaxError} If a filter isn't a regular expression.
  * @throws {Error} If the JSON's directory can't be written to, or
- * `--v8-report` has no script to run again, which it checks before it
- * measures, if the runtime's clock reads no time, if a variant throws, with
- * its error as the cause, if the traced run fails, or writes no traces, or
- * if `--v8-check` has no limits from V8. If the traced run fails, it writes
- * the JSON without the report first.
+ * `--processes` or `--v8-report` has no script to run again, which it checks
+ * before it measures, if the runtime's clock reads no time, if a variant
+ * throws, with its error as the cause, if a run in another process fails,
+ * or measures other groups, if the traced run fails, or writes no traces,
+ * if `--v8-check` has no limits from V8, or if `after` throws, with its
+ * error. If a run in another process fails, it writes the JSON without the
+ * other processes first, and if the traced run fails, without the report.
  */
 export async function bench(
     groups: Iterable<Group>,
     options: BenchOptions = {}
 ): Promise<RunResult> {
-    const { json, v8Report, v8Filter, v8Check, v8MaxBytecode, ...command } =
-        parseOptions(options.args ?? process.argv.slice(2));
+    const {
+        json,
+        processes,
+        v8Report,
+        v8Filter,
+        v8Check,
+        v8MaxBytecode,
+        ...command
+    } = parseOptions(options.args ?? process.argv.slice(2));
     const runtime = options.runtime ?? defaultRuntime();
     const call = benchCalls++;
     if (isTracedRun()) {
         // The process that runs this one prints the report, and the results
         const result = await measureTraced(groups, command, runtime, call);
         await recordSourceMaps();
+        return result;
+    }
+
+    const processFile = processRunFile();
+    if (processFile) {
+        // Formats the tables, as the first process does between groups, and
+        // drops them: the first process prints, and writes the results
+        const result = await measureAndPrint(groups, command, runtime, drop);
+        recordProcessRun(processFile, call, result);
         return result;
     }
 
@@ -106,15 +141,27 @@ export async function bench(
     if (json != null && !toStdout) {
         await checkDirectory(json);
     }
-    const script = v8Report ? scriptToTrace() : undefined;
+    const again = processes > 1 ? '--processes' : v8Report ? '--v8-report' : '';
+    const script = again ? scriptToRunAgain(again) : undefined;
 
     const measured = await measureAndPrint(groups, command, runtime, print);
 
-    let result = measured;
+    let result: RunResult = measured;
     let report: string[] = [];
     try {
-        if (script != null) {
-            ({ result, lines: report } = await traceScript(script, measured, {
+        if (script != null && processes > 1) {
+            const runs = await runInProcesses(script, process.argv.slice(2), {
+                call,
+                processes
+            });
+            const repeated = withProcesses(measured, runs);
+            result = repeated;
+            for (const line of formatProcesses(repeated.processes)) {
+                print(line);
+            }
+        }
+        if (script != null && v8Report) {
+            ({ result, lines: report } = await traceScript(script, result, {
                 call,
                 filter: v8Filter,
                 check: v8Check,
@@ -122,11 +169,7 @@ export async function bench(
             }));
         }
     } finally {
-        if (toStdout) {
-            (options.write ?? writeStdout)(formatJson(result));
-        } else if (json != null) {
-            await writeFile(json, formatJson(result));
-        }
+        await writeJson(json, result, options.write ?? writeStdout);
     }
 
     for (const line of report) {
@@ -137,6 +180,8 @@ export async function bench(
     if (result.v8Report?.check?.passed === false && Number(exitCode) === 0) {
         process.exitCode = V8_CHECK_FAILED;
     }
+
+    await options.after?.(print, result);
 
     return result;
 }
@@ -234,32 +279,17 @@ export function defaultRuntime(): Runtime {
 }
 
 /**
- * Checks that the directory of the results' file can be written to, before
- * the run rather than after it, when a mistyped path would lose the
- * measurements
- */
-async function checkDirectory(path: string): Promise<void> {
-    const directory = dirname(resolve(path));
-    try {
-        await access(directory, constants.W_OK);
-    } catch (error) {
-        throw new Error(
-            `Expected the directory of --json to be writable, got ${directory}`,
-            { cause: error }
-        );
-    }
-}
-
-/**
- * The script that `--v8-report` runs again: the process's entry script
+ * The script that `--processes` and `--v8-report` run again: the process's
+ * entry script
  *
- * @throws {Error} If the process has none, as in Node's REPL.
+ * @throws {Error} If the process has none, as in Node's REPL, naming the
+ * option that asked for it.
  */
-function scriptToTrace(): string {
+function scriptToRunAgain(option: string): string {
     const script = process.argv.at(1);
     if (script == null) {
         throw new Error(
-            'Expected a script to run again for --v8-report, as process.argv[1]'
+            `Expected a script to run again for ${option}, as process.argv[1]`
         );
     }
 
@@ -395,6 +425,11 @@ function withReport(
 
 function printError(line: string): void {
     console.error(line);
+}
+
+/** Prints nothing, as a run of `--processes` does */
+function drop(): void {
+    // The first process prints
 }
 
 function writeStdout(text: string): void {

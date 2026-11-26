@@ -185,7 +185,13 @@ export class TimedVariant {
         try {
             loop.variant.setup?.(repetitions);
             const stop = meter?.start();
-            const elapsed = loop.timer(loop.variant.run, repetitions);
+            let elapsed: number;
+            try {
+                elapsed = loop.timer(loop.variant.run, repetitions);
+            } catch (error) {
+                stopFailedSample(stop, error);
+            }
+
             const result = stop === undefined ? elapsed : stop();
             loop.variant.teardown?.();
 
@@ -202,7 +208,13 @@ export class TimedVariant {
     ): Promise<number | T> {
         await variant.setup?.(repetitions);
         const stop = meter?.start();
-        const elapsed = await timer(variant.run, repetitions);
+        let elapsed: number;
+        try {
+            elapsed = await timer(variant.run, repetitions);
+        } catch (error) {
+            stopFailedSample(stop, error);
+        }
+
         const result = stop === undefined ? elapsed : stop();
         await variant.teardown?.();
 
@@ -248,6 +260,26 @@ export class TimedVariant {
         const { group, name } = this.#placement;
         return `Variant "${name}" of group "${group}"`;
     }
+}
+
+/** A failed loop still owes its meter a stop before the group releases it. */
+function stopFailedSample(
+    stop: (() => unknown) | undefined,
+    error: unknown
+): never {
+    try {
+        stop?.();
+    } catch (stopError) {
+        // oxlint-disable-next-line preserve-caught-error -- The call is the cause; the stop error is included in errors.
+        throw new AggregateError(
+            [error, stopError],
+            'The call and its sample both failed',
+            {
+                cause: error
+            }
+        );
+    }
+    throw error;
 }
 
 function perCall(milliseconds: number, repetitions: number): number {

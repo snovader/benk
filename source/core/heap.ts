@@ -48,6 +48,11 @@ export class HeapCounter {
         return (quantile(samples, 0.5) - baseline) / repetitions;
     }
 
+    /** Releases the same meter that took the samples and their baseline. */
+    release(): void | Promise<void> {
+        return this.#meter.release?.();
+    }
+
     #baseline(async: boolean): Promise<number> {
         if (async) {
             this.#asyncBaseline ??= this.#measureBaseline(

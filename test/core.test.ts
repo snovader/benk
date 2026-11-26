@@ -5,7 +5,7 @@ import { registerHooks } from 'node:module';
 import { describe, expect } from 'hypotes';
 import { fc, it } from 'hypotes/fast-check';
 import type { AsyncTimer, Group, Timer, Variant } from 'benk/core';
-import { expectClose } from './expectations.ts';
+import { expectClose, expectPresent } from './expectations.ts';
 import { FakeRuntime } from './fake-runtime.ts';
 
 /** The modules of Node that modules other than this file's own imported */
@@ -43,8 +43,8 @@ describe('benk/core', () => {
         expect(result.variants.map(variant => variant.name)).toStrictEqual(['a', 'b', 'a A/A']);
         // The fake clock's sums round
         expectClose(a.summary.median, 100);
-        expectClose(b.ratio, 2);
-        expectClose(copy.ratio, 1);
+        expectClose(expectPresent(b.ratio), 2);
+        expectClose(expectPresent(copy.ratio), 1);
     });
 
     it('records the runtime of a run of groups', async () => {

@@ -266,13 +266,14 @@ describe('bench of benk/d8', () => {
                 ...(aa ? [] : ['--no-aa']),
                 ...(heap ? [] : ['--no-heap'])
             ];
-            const { json, v8Report, v8Filter, v8Check, v8MaxBytecode, ...parsed } =
+            const { json, processes, v8Report, v8Filter, v8Check, v8MaxBytecode, ...parsed } =
                 parseOptions(args);
 
             const result = await bench(groups(runtime), { args, runtime, print: () => undefined });
 
-            expect([json, v8Report, v8Filter, v8Check, v8MaxBytecode]).toStrictEqual([
+            expect([json, processes, v8Report, v8Filter, v8Check, v8MaxBytecode]).toStrictEqual([
                 undefined,
+                1,
                 false,
                 undefined,
                 false,
@@ -318,12 +319,50 @@ describe('bench of benk/d8', () => {
         expect(printed.some(line => line.startsWith('second: '))).toBe(true);
     });
 
+    it('measures in one process with --processes 1, as without it', async () => {
+        const runtime = new FakeRuntime();
+
+        const result = await bench(groups(runtime), {
+            args: [...FAKE_ARGS, '--processes', '1'],
+            runtime,
+            print: () => undefined
+        });
+
+        expect(result.groups).toHaveLength(2);
+        expect(result.processes).toBeNull();
+    });
+
+    it('calls `after` last, with the print that printed the tables, and the results', async () => {
+        const runtime = new FakeRuntime();
+        const lines: string[] = [];
+        const written: string[] = [];
+        let handed: RunResult | undefined;
+
+        const result = await bench(groups(runtime), {
+            args: [...FAKE_ARGS, '--json', '-'],
+            runtime,
+            print: line => lines.push(line),
+            write: text => written.push(text),
+            after: (print, results) => {
+                print(`after ${written.length} written`);
+                handed = results;
+            }
+        });
+
+        expect(lines[lines.length - 1]).toBe('after 1 written');
+        expect(handed).toBe(result);
+    });
+
     it("rejects V8's report's options and mistaken arguments before it measures", async () => {
         for (const [args, error] of [
             [['--v8-report'], /no --v8-report in d8/],
             [['--v8-filter', 'sum'], /no --v8-report or --v8-filter in d8/],
             [['--v8-check'], /no --v8-check in d8, nor in benk-d8/],
             [['--v8-max-bytecode', '400'], /no --v8-max-bytecode in d8, nor in benk-d8/],
+            [
+                ['--processes', '3'],
+                /^Expected no --processes 3 in d8, which can't start a process: run it with benk-d8, as benk-d8 bench\.mjs -- --processes 3$/
+            ],
             [['--round', '6'], TypeError],
             [['--rounds', '0'], RangeError]
         ] as const) {
@@ -401,6 +440,8 @@ describe.runIf(shell)('benk/d8 in d8', () => {
             rows.every(row => row != null && /–\s+–$/.test(row)),
             stderr
         ).toBe(true);
+        // The line that the driver's `after` prints, where the tables went
+        expect(stderr.trimEnd().split('\n').slice(-1)).toStrictEqual(['1 group measured']);
     });
 
     it('writes the results to the file of --json, and the tables to stdout', async () => {
@@ -416,6 +457,7 @@ describe.runIf(shell)('benk/d8 in d8', () => {
         expect(result.groups.map(({ name }) => name)).toStrictEqual(['calls']);
         expect(run.stdout.split('\n')[0]).toMatch(/^d8 /);
         expect(run.stdout).toContain('\ncalls: ');
+        expect(run.stdout.trimEnd().split('\n').slice(-1)).toStrictEqual(['1 group measured']);
         expect(run.stderr).toBe('');
     });
 
