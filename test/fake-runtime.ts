@@ -49,6 +49,7 @@ export class FakeClock {
 export class FakeHeap implements HeapMeter {
     #allocated = 0;
     #samples = 0;
+    #releases = 0;
     readonly #overhead: number;
     readonly #errors: readonly number[];
 
@@ -71,11 +72,21 @@ export class FakeHeap implements HeapMeter {
 
         return () => this.#allocated - before + this.#overhead + error;
     }
+
+    release(): void {
+        this.#releases++;
+    }
+
+    /** How many times the core released the meter */
+    releases(): number {
+        return this.#releases;
+    }
 }
 
 export class FakeArrayBuffers implements ArrayBufferMeter {
     #allocated = 0;
     #samples = 0;
+    #releases = 0;
     readonly #collectedAbove: number;
     readonly #freed: readonly number[];
 
@@ -109,6 +120,15 @@ export class FakeArrayBuffers implements ArrayBufferMeter {
                 ? null
                 : counted;
         };
+    }
+
+    release(): void {
+        this.#releases++;
+    }
+
+    /** How many times the core released the meter */
+    releases(): number {
+        return this.#releases;
     }
 }
 

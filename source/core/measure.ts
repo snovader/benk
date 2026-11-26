@@ -154,7 +154,9 @@ export async function measureGroups(
  * Then it counts the bytes that each variant's calls allocate on the heap,
  * and in array buffers outside it, with the same timer loops, in samples
  * apart from the timed rounds, and compares each variant with the first, as
- * `VariantResult` describes.
+ * `VariantResult` describes. After the counts, the meters release what they
+ * left in the process, as `HeapMeter.release()` describes, so that the time
+ * of what runs next doesn't depend on them.
  *
  * It calls `onRounds` before the first timed round and after the last, as
  * `RunOptions` describes.
@@ -195,17 +197,47 @@ export async function measureGroup(
     const arrayBuffers = options.heap ? runtime.arrayBuffers : undefined;
 
     const measured: Measured[] = [];
-    for (const [i, variant] of variants.entries()) {
-        measured.push({
-            variant,
-            samples: samples[i],
-            positions: positions[i],
-            summary: summarize(samples[i]),
-            heapBytes: (await heap?.bytesPerCall(variant)) ?? null,
-            arrayBufferBytes: arrayBuffers
-                ? await arrayBufferBytesPerCall(arrayBuffers, variant)
-                : null
-        });
+    const errors: unknown[] = [];
+    try {
+        for (const [i, variant] of variants.entries()) {
+            measured.push({
+                variant,
+                samples: samples[i],
+                positions: positions[i],
+                summary: summarize(samples[i]),
+                heapBytes: (await heap?.bytesPerCall(variant)) ?? null,
+                arrayBufferBytes: arrayBuffers
+                    ? await arrayBufferBytesPerCall(arrayBuffers, variant)
+                    : null
+            });
+        }
+    } catch (error) {
+        errors.push(error);
+    }
+
+    // Release the meters that actually took the samples, even if a count or
+    // another release failed. A runtime can provide its meters via getters.
+    for (const meter of [heap, arrayBuffers]) {
+        if (meter == null) {
+            continue;
+        }
+        try {
+            await meter.release?.();
+        } catch (error) {
+            errors.push(error);
+        }
+    }
+    if (errors.length === 1) {
+        throw errors[0];
+    }
+    if (errors.length > 1) {
+        throw new AggregateError(
+            errors,
+            `Multiple errors counting bytes of group "${group.name}"`,
+            {
+                cause: errors[0]
+            }
+        );
     }
 
     const { lead, reason } = chooseLead(group.lead ?? 'auto', measured);

@@ -1,10 +1,23 @@
 // Node's own runtime, with its compiled timer loops and V8's heap statistics.
 // Times vary, so these check only what doesn't.
+import { spawnSync } from 'node:child_process';
+import { GCProfiler } from 'node:v8';
+import { runInNewContext } from 'node:vm';
 import { describe, expect, it } from 'hypotes';
 import { bench, measureGroup, NodeRuntime } from 'benk';
 import { expectPresent } from './expectations.ts';
 
 const QUICK = { sampleTime: 0.2, warmupRounds: 2, rounds: 6 };
+
+/** The full collections that V8 ran during a call, as a `GCProfiler` sees them */
+async function fullCollectionsDuring(call: () => void | Promise<void>): Promise<number> {
+    const profiler = new GCProfiler();
+    profiler.start();
+    await call();
+    const { statistics } = profiler.stop();
+
+    return statistics.filter(({ gcType }) => gcType === 'MarkSweepCompact').length;
+}
 
 /** What the runtime records of benk's own loading: its source, or its bundle */
 const LOADED = [
@@ -99,6 +112,47 @@ describe('NodeRuntime', () => {
         ]);
         // By their bytes, if not by their time
         expect(result.lead).toBe('median');
+    });
+
+    it('runs a full collection after counts that saw a collection, without exposing gc', async () => {
+        const { heap } = new NodeRuntime();
+        const exposed = runInNewContext('typeof gc');
+
+        // Arrays of about 80 MB, over which V8 scavenges several times
+        const stop = heap.start();
+        let kept: number[] = [];
+        for (let i = 0; i < 10_000; i++) {
+            kept = new Array<number>(1000).fill(i);
+        }
+        stop();
+
+        expect(await fullCollectionsDuring(() => heap.release?.())).toBeGreaterThan(0);
+        // The profilers are collected, and no count has run since
+        expect(await fullCollectionsDuring(() => heap.release?.())).toBe(0);
+        expect(runInNewContext('typeof gc')).toBe(exposed);
+        expect(kept[999]).toBe(9999);
+    });
+
+    it('collects with a custom GC name and preserves it in later contexts', () => {
+        const script = `
+            import assert from 'node:assert/strict';
+            import { runInNewContext } from 'node:vm';
+            import { NodeRuntime } from 'benk';
+
+            const { heap } = new NodeRuntime();
+            const stop = heap.start();
+            globalThis.collect();
+            stop();
+            await heap.release();
+            assert.equal(runInNewContext('typeof collect'), 'function');
+            assert.equal(runInNewContext('typeof gc'), 'undefined');
+        `;
+        const child = spawnSync(
+            process.execPath,
+            ['--expose-gc-as=collect', '--input-type=module', '--eval', script],
+            { encoding: 'utf8' }
+        );
+        expect(child.status, child.stderr).toBe(0);
     });
 
     it('prints what it knows of the process in the description of a run', async () => {
