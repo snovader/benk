@@ -125,7 +125,7 @@ describe('formatGroup', () => {
         );
 
         expect(notes[0]).toBe(
-            '  at 0: its rounds ran near 200 ns when 1st in a round, and near 100 ns otherwise'
+            '  at 0: its rounds ran near 200 ns when 1st in a round, and near 100 ns otherwise: a group of its own would show whether another variant causes it'
         );
         expect(notes.map(note => note.split(' when ')[1].split(' in a round')[0])).toStrictEqual([
             '1st',
@@ -138,6 +138,76 @@ describe('formatGroup', () => {
             '21st',
             '22nd',
             '23rd'
+        ]);
+    });
+
+    it('names what ran before a position, and notes its modes in its place', () => {
+        // The rotation of 3 variants, 6 times over: the second variant runs 2nd
+        // after the first, and after the third in the reversed orders
+        const orders = [
+            [0, 1, 2],
+            [1, 2, 0],
+            [2, 0, 1],
+            [2, 1, 0],
+            [0, 2, 1],
+            [1, 0, 2]
+        ];
+        const positionsOf = (index: number): number[] =>
+            Array.from({ length: 36 }, (_, round) => orders[round % 6].indexOf(index));
+        const timed = (
+            name: string,
+            index: number,
+            times: (position: number) => number
+        ): VariantResult => {
+            const positions = positionsOf(index);
+            const samples = positions.map((position, round) => times(position) + (round % 5) / 10);
+
+            return variant(name, index === 0 ? 'reference' : 'variant', samples, { positions });
+        };
+        const sensitive = timed('sensitive', 1, position => (position === 1 ? 200 : 100));
+        // Two modes by round, which the position doesn't explain
+        const mixed = timed('mixed', 1, () => 100);
+        const bimodalByRound = mixed.samples.map((sample, round) =>
+            round < 18 ? sample : 2 * sample
+        );
+        const effect = { position: 1, median: 200, others: 100 };
+        const variants = (second: VariantResult): VariantResult[] => [
+            timed('first', 0, () => 100),
+            second,
+            timed('third', 2, () => 100)
+        ];
+        const notesOf = (second: VariantResult): string[] =>
+            formatGroup({ ...group, rounds: 36, variants: variants(second) }).slice(6);
+
+        expect(sensitive.summary.modes).not.toBeNull();
+        expect(notesOf({ ...sensitive, positionEffect: effect })).toStrictEqual([
+            '  sensitive: its rounds ran near 200 ns when 2nd in a round, after first or third, and near 100 ns otherwise: a group without first and third would show whether they cause it'
+        ]);
+        const both = notesOf({
+            ...mixed,
+            samples: bimodalByRound,
+            summary: summarize(bimodalByRound),
+            positionEffect: effect
+        });
+        expect(both).toHaveLength(2);
+        expect(both[0]).toMatch(/^ {2}mixed: two modes, 18 rounds near/);
+    });
+
+    it('says that a variant ran after itself, as a rotation of 2 runs each one first', () => {
+        // Each variant's first position follows its own last in the round before
+        const positionsOf = (index: number): number[] =>
+            Array.from({ length: 36 }, (_, round) => (round % 2 === index ? 0 : 1));
+        const samples = positionsOf(0).map(position => (position === 0 ? 330 : 246));
+        const variants = [
+            variant('Float64Array of 1 KiB', 'reference', samples, {
+                positions: positionsOf(0),
+                positionEffect: { position: 0, median: 330, others: 246 }
+            }),
+            variant('Float64Array of 1 KiB A/A', 'aa', steady, { positions: positionsOf(1) })
+        ];
+
+        expect(formatGroup({ ...group, rounds: 36, variants }).slice(5)).toStrictEqual([
+            '  Float64Array of 1 KiB: its rounds ran near 330 ns when 1st in a round, after itself, and near 246 ns otherwise: its own calls just before it may leave it work, as garbage to collect'
         ]);
     });
 

@@ -1,4 +1,5 @@
 import { ALLOCATING_CALL, LONG_CALL } from './lead.ts';
+import { modesAreOf } from './statistics.ts';
 import type {
     Change,
     GroupAcrossProcesses,
@@ -112,7 +113,7 @@ export function formatGroup({
         ...variants.map(variant => formatRow(variant, nameWidth)),
         ...formatResolution(timerResolution, variants),
         ...variants.flatMap(formatRounds),
-        ...variants.flatMap(formatPositionEffect),
+        ...variants.flatMap(variant => formatPositionEffect(variant, variants)),
         ...(lead === 'fastest' ? variants.flatMap(formatOutside) : [])
     ];
 }
@@ -192,9 +193,33 @@ function formatResolution(
  * modes' note.
  */
 function formatRounds(variant: VariantResult): string[] {
-    return variant.change == null
-        ? formatModes(variant)
-        : formatChange(variant.name, variant.change);
+    if (variant.change != null) {
+        return formatChange(variant.name, variant.change);
+    }
+
+    // The position's note says it, once
+    return modesByPosition(variant) ? [] : formatModes(variant);
+}
+
+/**
+ * Whether a variant's two modes are the rounds of its position effect and
+ * the others, which the position's note then explains
+ */
+function modesByPosition({
+    samples,
+    positions,
+    summary: { modes },
+    positionEffect
+}: VariantResult): boolean {
+    return (
+        modes != null &&
+        positionEffect != null &&
+        modesAreOf(
+            samples,
+            modes,
+            round => positions[round] === positionEffect.position
+        )
+    );
 }
 
 /**
@@ -217,21 +242,75 @@ function formatChange(name: string, { before, after }: Change): string[] {
 
 /**
  * A note for a variant whose rounds in one position took longer or shorter
- * than its others. Results that a version before `schema` 7 wrote have no
- * position effect.
+ * than its others, which names what ran just before it there, and how to
+ * tell whether that's the cause. It takes the place of the note of two
+ * modes, where the modes are the position's rounds and the others. Results
+ * that a version before `schema` 7 wrote have no position effect.
  */
-function formatPositionEffect({
-    name,
-    positionEffect
-}: VariantResult): string[] {
+function formatPositionEffect(
+    variant: VariantResult,
+    variants: readonly VariantResult[]
+): string[] {
+    const { name, positionEffect } = variant;
     if (positionEffect == null) {
         return [];
     }
 
     const { position, median, others } = positionEffect;
+    const before = ranBefore(variant, variants, position);
+    const named = before.map(other => (other === name ? 'itself' : other));
+    const where = `${ordinal(position + 1)} in a round${named.length > 0 ? `, after ${named.join(' or ')}` : ''}`;
+
     return [
-        `  ${name}: its rounds ran near ${formatTime(median)} when ${ordinal(position + 1)} in a round, and near ${formatTime(others)} otherwise`
+        `  ${name}: its rounds ran near ${formatTime(median)} when ${where}, and near ${formatTime(others)} otherwise: ${checkBefore(name, before)}`
     ];
+}
+
+/**
+ * How to tell whether the variants that ran before a variant's position
+ * cause its effect: a group without them. A variant that ran straight after
+ * itself, at the end of the round before, as a rotation of 2 runs each,
+ * can't be left out, and its own calls are the likely cause.
+ */
+function checkBefore(name: string, before: readonly string[]): string {
+    const others = before.filter(other => other !== name);
+    if (others.length > 0) {
+        return `a group without ${others.join(' and ')} would show whether ${others.length === 1 ? 'it causes' : 'they cause'} it`;
+    }
+
+    return before.length > 0
+        ? 'its own calls just before it may leave it work, as garbage to collect'
+        : 'a group of its own would show whether another variant causes it';
+}
+
+/**
+ * The variants that ran just before a variant in its rounds at a position:
+ * the one before it in the round, or, at the first position, the last of the
+ * round before, which it ran straight after. The rotation's orders give one
+ * or two. It gives none where there are more, which no rotation makes.
+ */
+function ranBefore(
+    { positions }: VariantResult,
+    variants: readonly VariantResult[],
+    position: number
+): string[] {
+    const names = new Set<string>();
+    for (const [round, at] of positions.entries()) {
+        const [previousRound, previousPosition] =
+            position > 0
+                ? [round, position - 1]
+                : [round - 1, variants.length - 1];
+        if (at === position && previousRound >= 0) {
+            const previous = variants.find(
+                other => other.positions[previousRound] === previousPosition
+            );
+            if (previous != null) {
+                names.add(previous.name);
+            }
+        }
+    }
+
+    return names.size <= 2 ? Array.from(names) : [];
 }
 
 /** 1st, 2nd, 3rd, 4th, …, 11th, 12th, 13th, 21st, … */

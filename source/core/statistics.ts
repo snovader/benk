@@ -57,15 +57,27 @@ const CHANGE_SIGNIFICANCE = 3;
  * A position has few rounds, 6 to 12 of 31 over 3 to 7 positions, and the
  * furthest of several is often far by chance. With the rotation's positions
  * at 31 rounds, 50,000 shuffles of rounds whose order doesn't matter gave
- * 0.05% to 0.18% of variants of 2 to 7 positions an effect at 3.3, 0.02% to
- * 0.06% at 3.5, and 0.004% to 0.014% at 3.7. A position whose rounds are
- * all slower than the others' reaches 3.7 with up to 7 positions of 6
- * rounds. On an Apple M2 Pro with Node 26.13.0, of 852 variants in 96 runs
+ * 0.05% to 0.18% of variants of 2 to 7 positions an effect at 3.3, and
+ * 0.02% to 0.06% at 3.5. At 3.7, with both thresholds, 200,000 shuffles
+ * gave 0.002% to 0.019% at 31 rounds, 32 to 42 in whole rotations, and
+ * 0.024% to 0.090% at 120 to 126. A position whose rounds are all slower
+ * than the others' reaches 3.7 with up to 7 positions of 6 rounds. On an Apple M2 Pro with Node 26.13.0, of 852 variants in 96 runs
  * of the README's quick start, `examples/numbers.ts` and `benchmarks/`,
  * with load averages near 5 and of 30 to 47, 4 had an effect at 3.3, 1 of
  * them an A/A copy, and 1 at 3.7, none of them an A/A copy.
  */
 const POSITION_SIGNIFICANCE = 3.7;
+
+/**
+ * The share of the rounds, at least, whose mode agrees with whether a cause
+ * picks them, for the cause to explain two modes, as `modesAreOf()` tells.
+ * It allows a round in ten to fall in the other mode, as noise moves a round
+ * across the middle when the modes are close for their spread. In 5,000
+ * simulated runs of 36 rounds, with one of 3 positions at twice the time and
+ * noise of 2% in the logarithms, the modes agreed with the position in every
+ * round.
+ */
+const MODES_AGREEMENT = 0.9;
 
 /**
  * Summarizes samples: the fastest and slowest, the quartiles, the spread
@@ -319,11 +331,21 @@ function compareRanks(
  * with the others by their ranks, as Mann and Whitney's test does. Among
  * positions passing both the rank distance and median difference thresholds,
  * it takes the greatest distance, with the first position breaking a tie.
+ *
+ * It finds none unless every sample is positive, as `changeOf()` does. A
+ * sample of 0 is a round that took less than the clock's tick, as with a
+ * coarse clock, whose times are too few to rank by position, and which the
+ * table's note of the timer's resolution flags. A sample that isn't a number
+ * ranks nowhere.
  */
 export function positionEffectOf(
     samples: Float64Array,
     positions: ArrayLike<number>
 ): PositionEffect | null {
+    if (!samples.every(sample => sample > 0)) {
+        return null;
+    }
+
     const count = samples.length;
     const order = orderByTime(samples);
     const ranks = ranksOf(samples, order);
@@ -352,7 +374,7 @@ export function positionEffectOf(
 
         const median = samples[order[quantile(offsets, 0.5)]];
         const others = samples[order[otherMedianOffset(count, offsets)]];
-        if (Math.min(median, others) > 0 && areApart(median, others)) {
+        if (areApart(median, others)) {
             best = { position, median, others };
             greatest = distance;
         }
@@ -373,6 +395,38 @@ function otherMedianOffset(count: number, excluded: readonly number[]): number {
     }
 
     return middle;
+}
+
+/**
+ * Whether two modes of samples are the rounds that `selected` picks and the
+ * others, as when a position's rounds are the slow mode: nearly every picked
+ * round in one mode, and nearly every other round in the other. A round is
+ * in the mode on its side of the geometric mean of the modes' medians.
+ */
+export function modesAreOf(
+    samples: ArrayLike<number>,
+    { fast, slow }: Modes,
+    selected: (round: number) => boolean
+): boolean {
+    const middle = Math.sqrt(fast.median * slow.median);
+    let slowPicked = 0;
+    let picked = 0;
+    for (let round = 0; round < samples.length; round++) {
+        if (selected(round)) {
+            picked++;
+            slowPicked += samples[round] >= middle ? 1 : 0;
+        }
+    }
+    // The mode that the picked rounds are in, most of them
+    const pickedSlow = slowPicked * 2 >= picked;
+
+    let agree = 0;
+    for (let round = 0; round < samples.length; round++) {
+        const isSlow = samples[round] >= middle;
+        agree += isSlow === (selected(round) === pickedSlow) ? 1 : 0;
+    }
+
+    return agree >= MODES_AGREEMENT * samples.length;
 }
 
 /** Whether two positive medians are `PART_DIFFERENCE` or more apart */

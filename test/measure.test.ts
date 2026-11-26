@@ -1,6 +1,7 @@
 import { describe, expect } from 'hypotes';
 import { fc, it } from 'hypotes/fast-check';
 import {
+    formatGroup,
     formatJson,
     measureGroup,
     measureGroups,
@@ -635,6 +636,12 @@ describe('measureGroups', () => {
                     expect(variant.positionEffect, variant.name).toBeNull();
                 }
             }
+            // Its rounds form two modes, by position, which the position's note
+            // explains in place of the modes' note
+            expect(variantNamed(group, 'sensitive').summary.modes).not.toBeNull();
+            const notes = formatGroup(group).filter(line => line.startsWith('  sensitive: '));
+            expect(notes.filter(note => note.includes(' in a round, after '))).toHaveLength(1);
+            expect(notes.filter(note => note.includes('two modes'))).toStrictEqual([]);
         }
     );
 

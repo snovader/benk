@@ -260,6 +260,22 @@ function cyclic(count: number, rounds: number): Int32Array {
 }
 
 describe('position effects', () => {
+    it('finds none where a sample is 0 or not a number, as a coarse clock or a failed read gives', () => {
+        // The second of 3 positions at twice the time, which is an effect
+        const positions = Int32Array.from({ length: 36 }, (_, round) => round % 3);
+        const samples = Float64Array.from(positions, (position, round) =>
+            position === 1 ? 200 + (round % 5) : 100 + (round % 5)
+        );
+        const withNaN = samples.slice();
+        withNaN[7] = Number.NaN;
+        // Rounds shorter than the clock's tick in the first position
+        const coarse = Float64Array.from(positions, position => (position === 0 ? 0 : 42));
+
+        expect(positionEffectOf(samples, positions)?.position).toBe(1);
+        expect(positionEffectOf(withNaN, positions)).toBeNull();
+        expect(positionEffectOf(coarse, positions)).toBeNull();
+    });
+
     it('checks both thresholds when a different position ranks just as far from its mean', () => {
         const positions = cyclic(4, 32);
         const times = [100, 101, 102, 200];

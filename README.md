@@ -473,16 +473,18 @@ Per call of each variant:
 - **two modes**: a note for a variant whose rounds form two clusters, far
   apart for their own spread, of at least 3 rounds and 10% each. Its median
   and fastest then describe one of the clusters: compare the modes instead.
-  A variant whose rounds changed partway gets the next note in its place.
+  A variant whose rounds changed partway gets the next note in its place,
+  and one whose modes are its rounds in one position gets the position's.
 - **the first … rounds ran near …, and the other … near …**: a note for a
   variant whose rounds changed partway, as
   [Rounds that changed](#rounds-that-changed) describes. Its median then
   mixes the rounds before and after the change, or describes one of them.
   A change in the second half names the last rounds instead.
-- **its rounds ran near … when … in a round, and near … otherwise**: a note
-  for a variant whose rounds in one position of the round took longer or
-  shorter than its others, as [Position effects](#position-effects)
-  describes.
+- **its rounds ran near … when … in a round, after …, and near …
+  otherwise**: a note for a variant whose rounds in one position of the
+  round took longer or shorter than its others. It names the variants that
+  ran just before it there, and a group without them shows whether they
+  cause it, as [Position effects](#position-effects) describes.
 - **by the fastest rounds, but … round by round**: a note in a group that
   leads with the fastest round, for a variant whose ratio lies more than 5%
   outside its interval, such as
@@ -583,8 +585,18 @@ every position equally often, so its median mixes the positions alike. A
 note says when one position's rounds differ from the variant's others:
 
 ```text
-  Float64Array of 1 KiB: its rounds ran near 330 ns when 1st in a round, and near 246 ns otherwise
+  Float64Array of 1 KiB: its rounds ran near 330 ns when 1st in a round, after itself, and near 246 ns otherwise: its own calls just before it may leave it work, as garbage to collect
 ```
+
+The note names the variants that ran just before it in that position. The
+rotation's orders give one or two. Time the variant in a group without
+them to see whether they cause it. With 2 variants, as a variant and its
+A/A copy, each runs first in a round straight after its own round before,
+which ends with it, as above. Its own calls are then the likely cause.
+
+Where the variant's rounds form two modes, and the modes are its rounds in
+that position and the others, the note takes the modes' place: they have
+one cause, and this note names it.
 
 benk compares the rounds in each position with the variant's other rounds
 by their ranks, as for a change. A position qualifies when:
@@ -599,10 +611,12 @@ two.
 
 A position has few rounds: 31 rounds over 3 to 7 positions give 6 to 12
 each, which noise easily makes look different. So the bar is high. In
-shuffled rounds, with the rotation's positions, 0.004% to 0.014% of
-variants got the note. A position whose every round is slower than the
-others reaches it with up to 7 positions of 6 rounds each, and 8 positions
-of 4 can't.
+200,000 shuffles of rounds, with the rotation's positions for 2 to 7
+variants, 0.002% to 0.019% of variants got the note at the default 31
+rounds, 32 to 42 in whole rotations. With more rounds, more of them do:
+0.024% to 0.090% at 120 to 126 rounds. A position whose every round is
+slower than the others reaches the bar with up to 7 positions of 6 rounds
+each, and 8 positions of 4 can't.
 
 Within a complete rotation, each variant immediately follows every other
 variant equally often within rounds. A given pair can still occur at a
