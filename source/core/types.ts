@@ -192,6 +192,21 @@ export interface Change {
     readonly after: Segment;
 }
 
+/**
+ * A position in the round whose rounds took longer or shorter than a
+ * variant's others, as when what runs before it leaves garbage to collect,
+ * or evicts its data from a cache. The rotation takes each variant through
+ * each position equally often, so the median mixes them alike.
+ */
+export interface PositionEffect {
+    /** The position, from 0 for the first in a round */
+    readonly position: number;
+    /** The median round in that position, in nanoseconds per call */
+    readonly median: number;
+    /** The median round in the other positions */
+    readonly others: number;
+}
+
 /** A summary of a variant's rounds, in nanoseconds per call */
 export interface Summary {
     readonly fastest: number;
@@ -228,6 +243,11 @@ export interface VariantResult {
      * didn't change
      */
     readonly change: Change | null;
+    /**
+     * The position in the round whose rounds took longer or shorter than
+     * its others, or null where none did
+     */
+    readonly positionEffect: PositionEffect | null;
     /**
      * The ratio to the reference's time by the group's lead: the fastest
      * round's to the reference's fastest, or the median of the ratios of

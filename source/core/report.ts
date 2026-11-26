@@ -83,8 +83,9 @@ export function describeRun(
 /**
  * A group's table: its name and lead, a row for each variant, a note if its
  * rounds are few times the timer's resolution, a note for each variant whose
- * rounds changed partway or else form two modes, and one for each whose ratio
- * by the fastest round lies outside its interval
+ * rounds changed partway or else form two modes, one for each whose time
+ * depends on its position in the round, and one for each whose ratio by the
+ * fastest round lies outside its interval
  */
 export function formatGroup({
     name,
@@ -107,6 +108,7 @@ export function formatGroup({
         ...variants.map(variant => formatRow(variant, nameWidth)),
         ...formatResolution(timerResolution, variants),
         ...variants.flatMap(formatRounds),
+        ...variants.flatMap(formatPositionEffect),
         ...(lead === 'fastest' ? variants.flatMap(formatOutside) : [])
     ];
 }
@@ -209,6 +211,34 @@ function formatChange(name: string, { before, after }: Change): string[] {
             : "another run shows whether that repeats, and V8's report whether its code deoptimized";
 
     return [`  ${name}: ${parts}: ${advice}`];
+}
+
+/**
+ * A note for a variant whose rounds in one position took longer or shorter
+ * than its others. Results that a version before `schema` 5 wrote have no
+ * position effect.
+ */
+function formatPositionEffect({
+    name,
+    positionEffect
+}: VariantResult): string[] {
+    if (positionEffect == null) {
+        return [];
+    }
+
+    const { position, median, others } = positionEffect;
+    return [
+        `  ${name}: its rounds ran near ${formatTime(median)} when ${ordinal(position + 1)} in a round, and near ${formatTime(others)} otherwise: what runs before it changes its time, which the rotation balances`
+    ];
+}
+
+/** 1st, 2nd, 3rd, 4th, …, 11th, 12th, 13th, 21st, … */
+function ordinal(count: number): string {
+    const tens = Math.floor(count / 10) % 10;
+    const suffix =
+        tens === 1 ? 'th' : (['th', 'st', 'nd', 'rd'][count % 10] ?? 'th');
+
+    return `${count}${suffix}`;
 }
 
 function formatModes({ name, summary }: VariantResult): string[] {

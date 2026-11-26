@@ -7,6 +7,7 @@ import {
     changeOf,
     medianInterval,
     pairedRatios,
+    positionEffectOf,
     quantile,
     summarize
 } from './statistics.ts';
@@ -330,6 +331,7 @@ function variantResult(
         positions: Array.from(positions),
         summary,
         change: changeOf(samples),
+        positionEffect: positionEffectOf(samples, positions),
         ratio: role === 'reference' ? 1 : ratio,
         interval: role === 'reference' ? null : medianInterval(ratios),
         heapBytes,

@@ -1,7 +1,7 @@
 import { describe, expect } from 'hypotes';
 import { fc, it } from 'hypotes/fast-check';
 import { medianInterval, summarize } from 'benk';
-import { changeOf, modesOf, sortedCopy } from '#source/core/statistics';
+import { changeOf, modesOf, positionEffectOf, sortedCopy } from '#source/core/statistics';
 import { expectPresent } from './expectations.ts';
 
 const sample = fc.double({ min: 1e-3, max: 1e9, noNaN: true });
@@ -252,6 +252,81 @@ describe('changes', () => {
         expect(changeOf(rounds(12))).toBeNull();
         expect(changeOf(rounds(13))?.before.rounds).toBe(6);
     });
+});
+
+/** The positions of rounds that take `count` positions in turn */
+function cyclic(count: number, rounds: number): Int32Array {
+    return Int32Array.from({ length: rounds }, (_, round) => round % count);
+}
+
+describe('position effects', () => {
+    it.prop([
+        fc.integer({ min: 2, max: 6 }),
+        fc.integer({ min: 6, max: 20 }),
+        fc.nat(),
+        fc.double({ min: 1.2, max: 5, noNaN: true }),
+        fc.boolean()
+    ])(
+        'finds the position whose rounds took longer or shorter than the others',
+        (count, perPosition, which, factor, slower) => {
+            const rounds = count * perPosition;
+            // A position whose rounds are all slower than the others' is this
+            // far from its mean, which needs to reach 3.7
+            const others = rounds - perPosition;
+            fc.pre(Math.sqrt((3 * perPosition * others) / (rounds + 1)) >= 3.7);
+
+            const position = which % count;
+            const positions = cyclic(count, rounds);
+            const time = slower ? 100 * factor : 100 / factor;
+            const samples = steady(rounds, 100).map((sample, round) =>
+                positions[round] === position ? (sample * time) / 100 : sample
+            );
+            const effect = expectPresent(positionEffectOf(Float64Array.from(samples), positions));
+            // Of two positions, each differs from the other as much, and the
+            // first is taken
+            const [expected, median, other] =
+                count === 2 && position === 1 ? [0, 100, time] : [position, time, 100];
+
+            expect(effect.position).toBe(expected);
+            expect(effect.median / median).toBeGreaterThanOrEqual(1);
+            expect(effect.median / median).toBeLessThanOrEqual(1.005);
+            expect(effect.others / other).toBeGreaterThanOrEqual(1);
+            expect(effect.others / other).toBeLessThanOrEqual(1.005);
+        }
+    );
+
+    it.prop([fc.integer({ min: 2, max: 6 }), fc.integer({ min: 6, max: 20 })])(
+        "finds none where the positions' rounds differ by under 5%",
+        (count, perPosition) => {
+            const positions = cyclic(count, count * perPosition);
+            const samples = Float64Array.from(
+                positions,
+                (position, round) => 100 * (1 + (0.04 * position) / (count - 1) + 1e-6 * round)
+            );
+
+            expect(positionEffectOf(samples, positions)).toBeNull();
+        }
+    );
+
+    it.prop([
+        fc.integer({ min: 2, max: 6 }),
+        fc.integer({ min: 6, max: 20 }),
+        fc.nat(),
+        fc.double({ min: 1.06, max: 1.1, noNaN: true })
+    ])(
+        "finds none where a position's rounds are as spread as the others', if slower",
+        (count, perPosition, which, factor) => {
+            const position = which % count;
+            const positions = cyclic(count, count * perPosition);
+            // Each position's rounds spread evenly over a factor of 3
+            const samples = Float64Array.from(positions, (at, round) => {
+                const time = evenly(perPosition, 100, 300)[Math.floor(round / count)];
+                return at === position ? time * factor : time;
+            });
+
+            expect(positionEffectOf(samples, positions)).toBeNull();
+        }
+    );
 });
 
 /** The standard normal distribution's quantile, by bisection of its CDF */

@@ -258,6 +258,10 @@ Per call of each variant:
   [Rounds that changed](#rounds-that-changed) describes. Its median then
   mixes the rounds before and after the change, or describes one of them.
   A change in the second half names the last rounds instead.
+- **its rounds ran near … when … in a round, and near … otherwise**: a note
+  for a variant whose rounds in one position of the round took longer or
+  shorter than its others, as [Position effects](#position-effects)
+  describes.
 - **by the fastest rounds, but … round by round**: a note in a group that
   leads with the fastest round, for a variant whose ratio lies more than 5%
   outside its interval, such as
@@ -347,6 +351,43 @@ compilation considered its `run`. With a load average of 30 to 47, 60
 variants got it: the quick start's in 9 of 12, as load slowed some later
 rounds as much as the first, and more variants whose rounds load changed.
 
+### Position effects
+
+A variant's time can depend on its position in the round, as on what runs
+just before it: garbage that another variant leaves to collect, or data
+that another evicts from a cache. The rotation takes every variant through
+every position equally often, so its median mixes the positions alike. A
+note says when one position's rounds differ from the variant's others:
+
+```text
+  Float64Array of 1 KiB: its rounds ran near 330 ns when 1st in a round, and near 246 ns otherwise: what runs before it changes its time, which the rotation balances
+```
+
+benk compares the rounds in each position with the variant's other rounds
+by their ranks, as for a change, and takes the position whose rank sum is
+the furthest from its mean. With two positions, each is as far from the
+other, and the note names the first. It's an effect when:
+
+- the rank sum is 3.7 or more standard deviations from its mean;
+- the two medians are 5% or more apart.
+
+A position has few rounds: 31 rounds over 3 to 7 positions give 6 to 12
+each, which noise easily makes look different. So the bar is high. In
+shuffled rounds, with the rotation's positions, 0.004% to 0.014% of
+variants got the note. A position whose every round is slower than the
+others reaches it with up to 7 positions of 6 rounds each, and 8 positions
+of 4 can't.
+
+The rounds run straight after one another, and a round's first variant
+follows the last of the round before. Williams' design, which `rotation()`
+orders the variants by, spreads what one variant leaves the next over
+every position, so a position test sees such an effect only in part. In
+the runs of [Rounds that changed](#rounds-that-changed), 48 with each load
+average, 1 of 852 variants got the note, and none of the 336 A/A copies.
+It was the run above, of `benchmarks/array-buffers.ts`. Its A/A copy's rounds leaned the
+other way in the same run, and the group's 11 other runs didn't differ by
+position.
+
 ## JSON results
 
 `--json` writes a `RunResult`, whose types `benk` exports:
@@ -368,6 +409,7 @@ rounds as much as the first, and more variants whose rounds load changed.
       "positions": [0, 2, 3, 1, …],       // the variant's position in each round
       "summary": { "fastest": …, "q1": …, "median": …, "q3": …, "slowest": …, "spread": …, "modes": null },
       "change": null,                     // the change in its rounds partway, or null
+      "positionEffect": null,             // a position whose rounds differ, or null
       "ratio": 1, "interval": null, "heapBytes": 16, "arrayBufferBytes": 0,
       "v8": null                          // what V8 did with its code, with --v8-report
     }]
@@ -378,8 +420,11 @@ rounds as much as the first, and more variants whose rounds load changed.
 
 `schema` changes when a field does. A variant's `change` has the median
 and the count of the rounds `before` the change and `after` it, as
-[Rounds that changed](#rounds-that-changed) describes. `v8Report`, and
-each variant's `v8`, are V8's report, which `--v8-report` adds, as
+[Rounds that changed](#rounds-that-changed) describes. Its
+`positionEffect` has the `position` whose rounds differ, from 0, and the
+`median` round there and in the `others`, as
+[Position effects](#position-effects) describes. `v8Report`, and each
+variant's `v8`, are V8's report, which `--v8-report` adds, as
 [In the results](#in-the-results) describes. They're `null` without it, in
 the results of `measureGroups()`, and in d8. The runtime's flags include
 `NODE_OPTIONS`, as V8's flags change what's measured. Its process state is
@@ -1788,8 +1833,6 @@ Not built yet:
 - **Runtimes for browsers and Workers**, with timer loops written at build
   time and no heap bytes, in place of the one that a script writes itself,
   as [Runtimes](#runtimes) describes.
-- **Position effects in the report.** The JSON has each round's position;
-  the table could flag a variant whose time depends on it.
 
 ## Development
 

@@ -563,6 +563,58 @@ describe('measureGroups', () => {
         }
     );
 
+    it.prop([fc.integer({ min: 2, max: 4 }), fc.nat(), fc.boolean()], { numRuns: 20 })(
+        'records a variant whose rounds in one position took longer or shorter',
+        async (count, which, slower) => {
+            const runtime = new FakeRuntime({ heap: false });
+            // With the A/A copy, each round runs this many loops, one in each
+            // position, in order
+            const total = count + 1;
+            const position = which % total;
+            const sensitiveTime = slower ? 200 : 50;
+            let timed = false;
+            let timedLoops = 0;
+            let time = 100;
+            const counted = (name: string, onSetup: () => void): SyncVariant => ({
+                name,
+                setup: () => {
+                    timedLoops += timed ? 1 : 0;
+                    onSetup();
+                },
+                run: () => runtime.clock.spend(time)
+            });
+            const steady = (): void => {
+                time = 100;
+            };
+            const variants = [
+                counted('reference', steady),
+                counted('sensitive', () => {
+                    time = timed && (timedLoops - 1) % total === position ? sensitiveTime : 100;
+                }),
+                ...Array.from({ length: count - 2 }, (_, i) => counted(`other ${i}`, steady))
+            ];
+
+            const result = await measureGroups([{ name: 'positions', variants }], {
+                ...QUICK,
+                runtime,
+                onRounds: (_, rounds) => {
+                    timed = rounds === 'timed';
+                }
+            });
+            const [group] = result.groups;
+            const effect = expectPresent(variantNamed(group, 'sensitive').positionEffect);
+
+            expect(effect.position).toBe(position);
+            expectClose(effect.median, sensitiveTime);
+            expectClose(effect.others, 100);
+            for (const variant of group.variants) {
+                if (variant.name !== 'sensitive') {
+                    expect(variant.positionEffect, variant.name).toBeNull();
+                }
+            }
+        }
+    );
+
     it('measures the groups that the filter selects, and reports each as it goes', async () => {
         const runtime = new FakeRuntime();
         const groups = ['apple', 'banana', 'blueberry', 'cherry'].map(name => ({

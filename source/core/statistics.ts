@@ -1,4 +1,4 @@
-import type { Change, Modes, Summary } from './types.ts';
+import type { Change, Modes, PositionEffect, Summary } from './types.ts';
 
 /**
  * The share of the rounds that each of two parts needs at least: each of two
@@ -50,6 +50,22 @@ const CHANGE_SEPARATION = 0.95;
  * to 40, and 0.006% of 60.
  */
 const CHANGE_SIGNIFICANCE = 3;
+
+/**
+ * How far the rank sum of a variant's rounds in one position needs to be
+ * from its mean, at least, in standard deviations, for a position effect.
+ * A position has few rounds, 6 to 12 of 31 over 3 to 7 positions, and the
+ * furthest of several is often far by chance. With the rotation's positions
+ * at 31 rounds, 50,000 shuffles of rounds whose order doesn't matter gave
+ * 0.05% to 0.18% of variants of 2 to 7 positions an effect at 3.3, 0.02% to
+ * 0.06% at 3.5, and 0.004% to 0.014% at 3.7. A position whose rounds are
+ * all slower than the others' reaches 3.7 with up to 7 positions of 6
+ * rounds. On an Apple M2 Pro with Node 26.13.0, of 852 variants in 96 runs
+ * of the README's quick start, `examples/numbers.ts` and `benchmarks/`,
+ * with load averages near 5 and of 30 to 47, 4 had an effect at 3.3, 1 of
+ * them an A/A copy, and 1 at 3.7, none of them an A/A copy.
+ */
+const POSITION_SIGNIFICANCE = 3.7;
 
 /**
  * Summarizes samples: the fastest and slowest, the quartiles, the spread
@@ -250,18 +266,110 @@ export function changeOf(samples: Float64Array): Change | null {
  * enough from its mean, and separated from those after it
  */
 function isSeparated(rankSum: number, before: number, count: number): boolean {
-    const pairs = before * (count - before);
-    // The pairs whose round before the split is the slower, with a tie as
-    // half, as Mann and Whitney's U counts them
-    const slower = rankSum - (before * (before + 1)) / 2;
-    const distance =
-        (slower - pairs / 2) / Math.sqrt((pairs * (count + 1)) / 12);
-    const separation = Math.max(slower, pairs - slower) / pairs;
+    const { distance, separation } = compareRanks(rankSum, before, count);
 
-    return (
-        Math.abs(distance) >= CHANGE_SIGNIFICANCE &&
-        separation >= CHANGE_SEPARATION
+    return distance >= CHANGE_SIGNIFICANCE && separation >= CHANGE_SEPARATION;
+}
+
+/** How some of the rounds compare with the others, by their ranks */
+interface RankComparison {
+    /**
+     * How far the rank sum of those rounds is from its mean for rounds
+     * whose order doesn't matter, in standard deviations, either way
+     */
+    readonly distance: number;
+    /**
+     * The share of the pairs of one of those rounds and one of the others
+     * that are ordered as the greater part of them are, from 0.5 to 1
+     */
+    readonly separation: number;
+}
+
+/**
+ * How `size` of `count` rounds, whose ranks among them sum to `rankSum`,
+ * compare with the others, as Mann and Whitney's test compares two parts
+ */
+function compareRanks(
+    rankSum: number,
+    size: number,
+    count: number
+): RankComparison {
+    const pairs = size * (count - size);
+    // The pairs whose round of the `size` is the slower, with a tie as half,
+    // as Mann and Whitney's U counts them
+    const slower = rankSum - (size * (size + 1)) / 2;
+
+    return {
+        distance: Math.abs(
+            (slower - pairs / 2) / Math.sqrt((pairs * (count + 1)) / 12)
+        ),
+        separation: Math.max(slower, pairs - slower) / pairs
+    };
+}
+
+/**
+ * A position in the round whose rounds took longer or shorter than a
+ * variant's others, or null if none did. Each position has as many rounds,
+ * as the rotation balances them. It compares the rounds in each position
+ * with the others by their ranks, as Mann and Whitney's test does, and takes
+ * the position whose rank sum is the furthest from its mean, or the first
+ * of those as far, as each of two positions is from the other. That's a
+ * position effect when the distance is greater than chance makes it, and
+ * the two medians are far enough apart. A test of one position against the
+ * rest, rather than of all of them at once, finds a single position as
+ * often with many positions as with few, as when only the first is slower.
+ */
+export function positionEffectOf(
+    samples: Float64Array,
+    positions: ArrayLike<number>
+): PositionEffect | null {
+    const count = samples.length;
+    const ranks = ranksOf(samples);
+    const rankSums: number[] = [];
+    const sizes: number[] = [];
+    for (let i = 0; i < count; i++) {
+        const position = positions[i];
+        rankSums[position] = (rankSums[position] ?? 0) + ranks[i];
+        sizes[position] = (sizes[position] ?? 0) + 1;
+    }
+
+    let farthest = -1;
+    let greatest = 0;
+    for (const [position, size] of sizes.entries()) {
+        if (size > 0 && size < count) {
+            const { distance } = compareRanks(rankSums[position], size, count);
+            if (distance > greatest) {
+                farthest = position;
+                greatest = distance;
+            }
+        }
+    }
+    if (greatest < POSITION_SIGNIFICANCE) {
+        return null;
+    }
+
+    const median = positionMedian(samples, positions, farthest, true);
+    const others = positionMedian(samples, positions, farthest, false);
+    if (!(Math.min(median, others) > 0) || !areApart(median, others)) {
+        return null;
+    }
+
+    return { position: farthest, median, others };
+}
+
+/** The median of the rounds in a position, or of those in the others */
+function positionMedian(
+    samples: Float64Array,
+    positions: ArrayLike<number>,
+    position: number,
+    inPosition: boolean
+): number {
+    const chosen = samples.filter(
+        (_, i) => (positions[i] === position) === inPosition
     );
+    chosen.sort();
+
+    return quantile(chosen, 0.5);
 }
 
 /** Whether two positive medians are `PART_DIFFERENCE` or more apart */

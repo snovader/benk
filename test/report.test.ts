@@ -25,6 +25,7 @@ function variant(
         positions: samples.map((_, i) => i % 3),
         summary: summarize(samples),
         change: null,
+        positionEffect: null,
         ratio: 1,
         interval: null,
         heapBytes: 0,
@@ -109,6 +110,34 @@ describe('formatGroup', () => {
             "  slower: the first 6 rounds ran near 2.53 µs, and the other 26 near 8.22 µs: another run shows whether that repeats, and V8's report whether its code deoptimized",
             "  slower late: the last 4 rounds ran near 233 ns, and the other 28 near 128 ns: another run shows whether that repeats, and V8's report whether its code deoptimized",
             '  modes: two modes, 4 rounds near 85.4 ns and 3 near 121 ns'
+        ]);
+    });
+
+    it('notes a position whose rounds took longer or shorter, by its ordinal', () => {
+        const [reference] = group.variants;
+        const variants = [0, 1, 2, 3, 10, 11, 12, 20, 21, 22].map(position =>
+            variant(`at ${position}`, 'variant', steady, {
+                positionEffect: { position, median: 200, others: 100 }
+            })
+        );
+        const notes = formatGroup({ ...group, variants: [reference, ...variants] }).slice(
+            4 + variants.length
+        );
+
+        expect(notes[0]).toBe(
+            '  at 0: its rounds ran near 200 ns when 1st in a round, and near 100 ns otherwise: what runs before it changes its time, which the rotation balances'
+        );
+        expect(notes.map(note => note.split(' when ')[1].split(' in a round')[0])).toStrictEqual([
+            '1st',
+            '2nd',
+            '3rd',
+            '4th',
+            '11th',
+            '12th',
+            '13th',
+            '21st',
+            '22nd',
+            '23rd'
         ]);
     });
 
