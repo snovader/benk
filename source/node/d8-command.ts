@@ -12,6 +12,7 @@ import { parseOptions } from '#source/core/command-line';
 import { withProcesses } from '#source/core/processes';
 import { formatProcesses } from '#source/core/report';
 import { RESULT_SCHEMA, type RunResult } from '#source/core/types';
+import { D8_PROCESS_RUN } from '#source/d8/process-run';
 import { inTemporaryDirectory, isMissing } from './child-run.ts';
 import { checkDirectory, writeJson } from './json-results.ts';
 import { reportTracedRun, runTracedInD8, type D8Run } from './traced-run.ts';
@@ -223,10 +224,13 @@ interface D8ProcessesOptions {
 
 /**
  * Runs d8 on the script in several processes, one after another, and
- * returns the code that benk-d8 exits with. d8's runs can't tell that
- * they're repeated, so each prints its tables, and writes its results to a
- * file of benk-d8's, by `--json`, in place of the script's. The first run's
- * output shows where the tables go, and the others' doesn't. Then it prints
+ * returns the code that benk-d8 exits with. Each run prints its tables, and
+ * writes its results to a file of benk-d8's, by `--json`, in place of the
+ * script's. The first run's output shows where the tables go, and the
+ * others' doesn't. d8 can't read the environment, so a short script sets a
+ * global symbol before the script loads in the runs after the first, whose
+ * `bench()` then doesn't call `after`, as in Node. The first run's calls it,
+ * before the ratios across processes. Then it prints
  * each variant's ratio in each run, and writes the results where the
  * script's `--json` says, with the other runs'.
  *
@@ -258,8 +262,17 @@ async function runInD8Processes(
             ];
             const stdout =
                 number > 1 ? 'drop' : json === '-' ? 'stderr' : 'inherit';
+            // Before the user's flags, as --module applies to the next script
+            const flags =
+                number > 1
+                    ? [
+                          '-e',
+                          `globalThis[Symbol.for('${D8_PROCESS_RUN}')] = true`,
+                          ...run.flags
+                      ]
+                    : run.flags;
 
-            const exit = await runD8({ ...run, args }, stdout);
+            const exit = await runD8({ ...run, flags, args }, stdout);
             if (exit !== 0 && number === 1) {
                 return exit;
             }

@@ -11,6 +11,7 @@ import {
 import { measureGroups } from '#source/core/measure';
 import { formatJson } from '#source/core/report';
 import type { Group, RunResult, Runtime } from '#source/core/types';
+import { D8_PROCESS_RUN } from './process-run.ts';
 import { D8Runtime } from './runtime.ts';
 import { D8_TRACED_RUN } from './traced-run.ts';
 
@@ -46,7 +47,9 @@ declare function writeFile(path: string, data: string | ArrayBuffer): void;
  * its options from the script's arguments, prints a description of the run,
  * measures each group whose name matches the filter and prints its table,
  * and then writes the results as JSON, if the options ask for it. Last, it
- * calls the `after` option, with the `print` that printed the tables.
+ * calls the `after` option, with the `print` that printed the tables, but
+ * not in a run of benk-d8's `--processes` after the first, whose output
+ * benk-d8 drops.
  *
  * What d8 can't do as Node does:
  *
@@ -126,7 +129,11 @@ export async function bench(
         writeResults(json, formatJson(result));
     }
 
-    await options.after?.(printLine, result);
+    // A run of benk-d8's --processes after the first, whose output benk-d8
+    // drops, doesn't call it, as a run of --processes in Node doesn't
+    if (!Object.hasOwn(globalThis, Symbol.for(D8_PROCESS_RUN))) {
+        await options.after?.(printLine, result);
+    }
 
     return result;
 }

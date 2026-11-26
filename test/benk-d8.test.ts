@@ -345,6 +345,14 @@ describe.skipIf(process.platform === 'win32')('benk-d8 with d8 faked', () => {
             ]);
             expect(new Set(options.map(({ json }) => json)).size).toBe(3);
             expect(options.map(({ json }) => json)).not.toContain(path);
+            // The runs after the first are marked before the script, which benk/d8's
+            // bench() reads, so that it doesn't call after there
+            const mark = ['-e', "globalThis[Symbol.for('benk.d8.processRun')] = true"];
+            expect(d8Runs.map(args => args.slice(0, args.indexOf(D8_BUNDLE)))).toStrictEqual([
+                [],
+                mark,
+                mark
+            ]);
             // Only the first run's output shows
             expect(lines.filter(line => line.startsWith('d8 measured'))).toStrictEqual([
                 'd8 measured other in 100 ns'
@@ -617,6 +625,47 @@ describe.runIf(version)('benk-d8 in d8', () => {
             expect(status, stderr).toBe(0);
             expect(reportOf(stdout)[0]).toContain('V8 report of');
             expect(await readFile(count, 'utf8')).toBe('1');
+        });
+    });
+
+    it('calls after only in the first run of --processes, whose output shows', async () => {
+        await inDirectory(async directory => {
+            const count = join(directory, 'calls');
+            await writeFile(count, '0');
+            const script = await writeScript(
+                directory,
+                'after',
+                `
+                import { bench } from 'benk/d8';
+                const count = ${JSON.stringify(count)};
+                await bench([{ name: 'calls', variants: [{ name: 'one', run: () => 1 }] }], {
+                    after(print, { processes }) {
+                        writeFile(count, String(Number(read(count)) + 1));
+                        print(\`after: \${processes === null ? 'no' : 'with'} processes\`);
+                    }
+                });
+            `
+            );
+
+            const { status, stdout, stderr } = await runCommand([
+                '--module',
+                script,
+                '--',
+                ...QUICK,
+                '--processes',
+                '3'
+            ]);
+            const lines = stdout.split('\n');
+
+            expect(status, stderr).toBe(0);
+            expect(await readFile(count, 'utf8')).toBe('1');
+            // d8's first run calls it, before benk-d8 prints the ratios across processes
+            expect(lines.filter(line => line.startsWith('after: '))).toStrictEqual([
+                'after: no processes'
+            ]);
+            expect(lines.indexOf('after: no processes')).toBeLessThan(
+                lines.indexOf('calls: 3 processes, by the fastest round')
+            );
         });
     });
 

@@ -400,9 +400,10 @@ encode 1,000 characters: 1000 bytes
 ```
 
 `bench()` awaits `after`, and rejects with what it throws. By then it has
-written the JSON. The traced run of `--v8-report`, and in Node the other
-processes of `--processes`, print nothing, so they don't call `after`,
-although they run the script's code after `bench()`.
+written the JSON. The traced run of `--v8-report`, and the other processes
+of `--processes`, show nothing, so they don't call `after`, although they
+run the script's code after `bench()`. In d8, `after` comes before the
+tables across processes, as [In d8](#in-d8) describes.
 
 ## What the table reports
 
@@ -1256,9 +1257,15 @@ describes it in Node, but runs d8 once for each process:
 npx benk-d8 bench.mjs -- --processes 5
 ```
 
-- d8's runs can't tell that they're repeated, so each prints its tables,
-  and writes its results to a temporary file of benk-d8's, by `--json`, in
-  place of the script's. Only the first run's output shows.
+- Each of d8's runs prints its tables, and writes its results to a
+  temporary file of benk-d8's, by `--json`, in place of the script's. Only
+  the first run's output shows.
+- benk-d8 marks the runs after the first before the script loads, as it
+  marks the traced run. Their `bench()` doesn't call `after`, as in Node.
+  The first run's `bench()` calls it, with that run's results, whose
+  `processes` is null, before benk-d8 prints the tables across processes.
+  In Node, `after` comes after those tables, and has the other processes'
+  results too.
 - For multiple processes the bundle and benk-d8 must use the same result
   schema. If they differ, rebuild the script with the version of benk that
   supplies benk-d8.
