@@ -186,6 +186,218 @@ the group gets an A/A copy, whatever `--no-aa` says.
 A group needs at least one variant, and its variants need different names.
 The A/A copy takes the reference's name with ` A/A` after it.
 
+### Variants from one function
+
+A script often makes its variants from one function, with a variant for
+each class or each size. V8 keeps what it learns of a call site, its type
+feedback, with the function's code, which every closure of that function
+shares. So each variant is timed through call sites that have seen every
+variant's types, and not as code that uses one type runs.
+
+`compiledCopy(fn)` compiles a function again from its text, as a source of
+its own, whose feedback no other function shares. This script, `bench.ts`,
+sums typed arrays of 6 types, each with a copy of `sumOf`:
+
+```ts
+import { bench, compiledCopy, type Variant } from 'benk';
+
+const TYPES = [
+    Int8Array,
+    Uint8Array,
+    Int16Array,
+    Uint16Array,
+    Int32Array,
+    Uint32Array
+];
+
+/** Takes what the call needs, and returns the call that a variant runs */
+function sumOf(values: ArrayLike<number>): () => number {
+    return () => {
+        let sum = 0;
+        for (let i = 0; i < values.length; i++) {
+            sum += values[i];
+        }
+
+        return sum;
+    };
+}
+
+const variants: Variant[] = TYPES.map(TypedArray => ({
+    name: TypedArray.name,
+    run: compiledCopy(sumOf)(new TypedArray(1000).fill(1))
+}));
+
+await bench([{ name: 'sum 1,000 numbers', variants }]);
+```
+
+```sh
+node bench.ts --sample-ms 10
+```
+
+```text
+sum 1,000 numbers: 42 rounds, by the fastest round (every call under 1 µs and 1 KiB)
+                      fastest     median   spread    ratio   95% interval        heap     buffers
+  Int8Array            340 ns     348 ns     3.8%    1.00×                        0 B         0 B
+  Uint8Array           339 ns     349 ns     2.7%    1.00×      1.00–1.01         0 B         0 B
+  Int16Array           339 ns     350 ns     2.1%    1.00×      0.99–1.01         0 B         0 B
+  Uint16Array          339 ns     350 ns     3.1%    1.00×      0.99–1.01         0 B         0 B
+  Int32Array           339 ns     353 ns     4.7%    1.00×      1.00–1.01         0 B         0 B
+  Uint32Array          489 ns     506 ns     3.0%    1.44×      1.43–1.46         0 B         0 B
+  Int8Array A/A        341 ns     351 ns     3.0%    1.00×      1.00–1.01         0 B         0 B
+```
+
+With `run: sumOf(new TypedArray(1000).fill(1))`, the shared `values[i]`
+saw all six array types. Median rounds took 3.60 to 4.01 µs. For
+`Int8Array`, that was 11.2 to 11.5 times as long as with a copy.
+`Uint32Array`'s ratio to `Int8Array` fell from 1.43–1.45 with copies to
+1.00–1.01 with the shared function. These are from three runs of each
+version on an Apple M2 Pro with Node 26.13.0.
+[Known confounds](#known-confounds) has another measurement.
+
+A copy has only its text. What that means for the function to copy:
+
+- **It reads no variable of the scope that it was written in**: none of its
+  module, none of a function around it, and no import. It reads its
+  parameters, what it declares itself, and globals. So it takes what its
+  calls need as parameters, and returns the call, as `sumOf` does. A name
+  that it reads from its scope anyway is a `ReferenceError` when the copy's
+  code reaches it, not when it's copied. If a global has that name, the
+  copy reads the global.
+- **Its text is an expression**: an arrow function, a `function`, also an
+  async one or a generator, or a class. A method written as `name() {}`, a
+  getter, a bound function and a built-in aren't, and `compiledCopy()`
+  throws a `SyntaxError` for them.
+- **The copy is strict code**, as a module's code is.
+- **The text is what the host runs.** It has no types where Node or a hook
+  stripped them, and it has a bundler's or a minifier's names, which a copy
+  runs with as well. A build that rewrites the function to call a helper of
+  its own, as one for an older target can, makes it read that helper from
+  its scope, which a copy can't.
+- **V8's report can't tell copies apart.** V8 names the code of each as
+  `(anonymous) <anonymous>`, at the same line and column for copies of one
+  function. [By variant](#by-variant) then lists their compilations and
+  timer loops together, under each of the variants.
+
+`compiledFrom(source)` compiles the text of a function expression in the
+same way. It's for a call whose text differs between variants, such as by
+the name of the method that it calls:
+
+```ts
+import { bench, compiledFrom, type Variant } from 'benk';
+
+const view = new DataView(new ArrayBuffer(8));
+const METHODS = ['getInt8', 'getUint16', 'getInt32', 'getFloat64'];
+
+type Read = (view: DataView) => () => number;
+
+const variants: Variant[] = METHODS.map(method => ({
+    name: method,
+    run: compiledFrom<Read>(`view => () => view.${method}(0)`)(view)
+}));
+
+await bench([{ name: 'read a number', variants }]);
+```
+
+Two functions from the same text are sources of their own too. It throws a
+`SyntaxError` for text that isn't an expression, and a `TypeError` for an
+expression that isn't a function.
+
+Both compile a string, which Workers and some browsers' pages forbid. So
+`benk` and `benk/d8` export them, and `benk/core` doesn't.
+
+### Inputs in turn
+
+A call that passes the same input every time can be compiled for that
+input, as [Known confounds](#known-confounds) measures. `inTurn(inputs)`
+returns a function that returns the inputs one after another, and the
+first again after the last:
+
+```ts
+import { bench, inTurn } from 'benk';
+
+const arrays = Array.from({ length: 4 }, (_, turn) =>
+    Float64Array.from({ length: 1000 }, (_, i) => Math.sin(i + turn))
+);
+
+function sumLoop(values: Float64Array): number {
+    let sum = 0;
+    for (let i = 0; i < values.length; i++) {
+        sum += values[i];
+    }
+    return sum;
+}
+
+const next = inTurn(arrays);
+
+await bench([
+    {
+        name: 'sum 1,000 numbers',
+        variants: [{ name: 'for loop', run: () => sumLoop(next()) }]
+    }
+]);
+```
+
+Give each variant a function of its own, of inputs of one kind: objects of
+one class, or arrays of one type of element. One function that two
+variants call gives each of them only some of the inputs. Inputs of several
+kinds time the call as a caller of them all runs it, which is another
+benchmark.
+
+The inputs are in turn over a variant's calls, in whatever round. A call
+that changes its input needs fresh input for each call, which `setup`
+prepares, as [Variants](#variants) describes.
+
+`inTurn()` keeps a copy of the array and throws a `RangeError` for an empty
+one. Each call compiles its function from a source of its own, so
+`benk/core` doesn't export it. In
+[`benchmarks/inputs-in-turn.ts`](benchmarks/inputs-in-turn.ts), reading one
+number took 2.98 to 3.22 ns with a counter by hand and 2.99 to 3.20 ns with
+`inTurn()`. A generator step took 7.73 to 8.19 ns across all three variants.
+These are the fastest rounds from six runs on an Apple M2 Pro with Node
+26.13.0. [Known confounds](#known-confounds) compares the constant input
+with the rotating inputs.
+
+### Lines after the tables
+
+A script that prints lines of its own after the tables, such as the sizes
+of what its variants encode, prints them where the tables went: with
+`--json -`, that's stderr. `bench()` hands its `print` to the `after`
+option, which it calls last, with the results:
+
+```ts
+import { bench } from 'benk';
+
+const text = 'benk '.repeat(200);
+const encoder = new TextEncoder();
+
+await bench(
+    [
+        {
+            name: 'encode 1,000 characters',
+            variants: [{ name: 'TextEncoder', run: () => encoder.encode(text) }]
+        }
+    ],
+    {
+        after: (print, result) => {
+            for (const group of result.groups) {
+                print('');
+                print(`${group.name}: ${encoder.encode(text).length} bytes`);
+            }
+        }
+    }
+);
+```
+
+After the group's table, it prints:
+
+```text
+encode 1,000 characters: 1000 bytes
+```
+
+`bench()` awaits `after`, and rejects with what it throws. By then it has
+written the JSON. The traced run of `--v8-report` prints nothing, so it
+doesn't call `after`, although it runs the script's code after `bench()`.
+
 ## What the table reports
 
 This is the sorting group of `examples/numbers.ts`, on an Apple M2 Pro with
@@ -801,9 +1013,9 @@ with 10 ms.
 - The first run gets the script's options but `--v8-report` and
   `--v8-filter`, which benk-d8 carries out. The traced run gets none of
   those, nor `--json`, so it writes no results.
-- A script in d8 can't read the environment, so the traced run can't tell
-  that it's traced. It prints its tables among the traces, which the
-  report skips.
+- In the traced run, benk-d8 marks the process before the script loads.
+  `bench()` measures the groups and returns their results. Only the first
+  run prints tables, writes JSON and calls `after`.
 - A bundle's source map places its positions, as in Node. A TypeScript
   `bench.ts` that imported `bench` from `benk/d8` and `sumLoop` from
   `./sum.ts`, bundled by rolldown 1.3.2 with
@@ -814,8 +1026,7 @@ with 10 ms.
 - The report has no lines by variant, and `--v8-check` and
   `--v8-max-bytecode` are errors, before benk-d8 runs d8. Both need
   Node's traced run: d8 has no inspector to read where a variant's `run`
-  starts, and its `bench()` can't tell that it's traced, to mark the timed
-  rounds.
+  starts.
 - The report tells benk's functions by their files: those of benk's
   bundle, which a script imports from `node_modules/benk/dist`, or which a
   bundle's source map names. A bundle that has benk in it, without a
@@ -982,6 +1193,9 @@ none of V8's compilations, or its log none of its functions,
 | `chooseLead(lead, variants)`          | Chooses the statistic that a group leads with, and says why.                                                                                                              |
 | `timerSource(id)`                     | Returns the body of benk's timer loop, for a runtime that can't compile one, as [Runtimes](#runtimes) describes.                                                          |
 | `asyncTimerSource(id)`                | Returns the body of the timer loop that awaits each call.                                                                                                                 |
+| `compiledCopy(fn)`                    | Returns a copy of a function, compiled from a source of its own, as [Variants from one function](#variants-from-one-function) describes.                                  |
+| `compiledFrom(source)`                | Returns a function compiled from the text of a function expression, as a source of its own.                                                                               |
+| `inTurn(inputs)`                      | Returns a function that returns the inputs one after another, as [Inputs in turn](#inputs-in-turn) describes.                                                             |
 | `NodeRuntime`                         | Times variants in Node. The `runtime` option takes another runtime in its place.                                                                                          |
 
 `measureGroups()` and `measureGroup()` are for scripts that print or store
@@ -1027,8 +1241,9 @@ console.log(result.groups[0].variants[0].summary.median);
 ```
 
 `bench()` takes other options: `args` in place of the command line's
-arguments, `runtime`, and `print` and `write` in place of the console and
-stdout.
+arguments, `runtime`, `print` and `write` in place of the console and
+stdout, and `after`, which [Lines after the tables](#lines-after-the-tables)
+describes.
 
 All three throw:
 
@@ -1053,12 +1268,16 @@ for another runtime passes its own, and imports `benk/core` rather than
 `benk`. Importing `benk` loads Node's modules, whichever runtime times the
 variants. Importing `benk/core` loads none.
 
-`benk/core` exports what `benk` does, except these, which need Node:
+`benk/core` exports what `benk` does, except these, which need Node, or
+compile a string:
 
-| Export        | What to do without it                                                                                             |
-| ------------- | ----------------------------------------------------------------------------------------------------------------- |
-| `bench()`     | Call `measureGroups()`, and print with `describeRun()` and `formatGroup()`. In d8, import `bench()` of `benk/d8`. |
-| `NodeRuntime` | Pass a `Runtime` as the `runtime` option, which `benk/core` requires.                                             |
+| Export           | What to do without it                                                                                                                         |
+| ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `bench()`        | Call `measureGroups()`, and print with `describeRun()` and `formatGroup()`. In d8, import `bench()` of `benk/d8`.                             |
+| `NodeRuntime`    | Pass a `Runtime` as the `runtime` option, which `benk/core` requires.                                                                         |
+| `compiledCopy()` | Write a function for each variant, or generate them at build time. In d8, import it of `benk/d8`.                                             |
+| `compiledFrom()` | As `compiledCopy()`.                                                                                                                          |
+| `inTurn()`       | Keep a counter in the variant, as [`benchmarks/inputs-in-turn.ts`](benchmarks/inputs-in-turn.ts) does by hand. In d8, import it of `benk/d8`. |
 
 A runtime that can't compile a string needs its loops written before it
 runs. Each variant needs a loop from a source of its own: V8 shares the
@@ -1165,13 +1384,16 @@ d8 15.8.62.9, from `brew install v8`, has small integers of 31 bits, as
 V8's builds with [pointer compression](https://v8.dev/blog/pointer-compression)
 do, and Node 26.13.0 has small integers of 32 bits.
 
-`benk/d8` exports d8's `bench()` and runtime, and loads none of Node's
-modules:
+`benk/d8` exports d8's `bench()` and runtime, and what compiles a string,
+and loads none of Node's modules:
 
 | Export                    | What it does                                                                                                                                   |
 | ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
 | `bench(groups, options?)` | Runs a benchmark script in d8, as `benk`'s `bench()` does in Node, with the options that d8 can carry out.                                     |
 | `D8Runtime`               | Times variants in d8, each in a timer loop that `new Function` compiles, as in Node, and with three of d8's flags counts array buffers' bytes. |
+| `compiledCopy(fn)`        | Returns a copy of a function, compiled from a source of its own, as `benk`'s does.                                                             |
+| `compiledFrom(source)`    | Returns a function compiled from the text of a function expression, as `benk`'s does.                                                          |
+| `inTurn(inputs)`          | Returns a function that returns the inputs one after another, as `benk`'s does.                                                                |
 
 d8 reads an import as a path, not as a package's name. So a script imports
 benk's bundle from `node_modules`, as this one, `bench.mjs`, does:
@@ -1638,7 +1860,44 @@ benk keeps these in view rather than out of the results:
   no buffer detached, in Node 26.13.0. In Node 27.0.0-alpha, 2 arrays in
   turn took 0.99 µs in one run and 1.41 µs in others. A variant that passes
   one of a few inputs in turn times the call more as a caller with varying
-  data runs it.
+  data runs it, which [`inTurn()`](#inputs-in-turn) is for.
+
+  [`benchmarks/inputs-in-turn.ts`](benchmarks/inputs-in-turn.ts) times
+  calls with one `Float64Array` of 1,000 numbers and with 4 in turn.
+  Each entry spans the fastest rounds from 3 runs at each sample time on
+  an Apple M2 Pro with Node 26.13.0 and the packed benk bundle. The ratio
+  compares the fastest rounds within each run.
+
+  | Call                 | One input    | 4 with `inTurn()` | Ratio       |
+  | -------------------- | ------------ | ----------------- | ----------- |
+  | Sum, rounds of 1 ms  | 1.45–1.51 µs | 1.45–1.52 µs      | 1.001–1.004 |
+  | Sum, rounds of 10 ms | 823–846 ns   | 871–900 ns        | 1.059–1.065 |
+  | Read of one number   | 0.42–0.46 ns | 2.99–3.20 ns      | 6.6–7.1     |
+
+  The read returns a fractional number for every input. With one array,
+  benk measured 0 heap bytes per call. Rotating the arrays with either
+  counter cost 16 heap bytes per call across both sample times.
+
+- **Feedback that variants share.** V8 keeps the type feedback of a call
+  site with its function's code, which every closure of that function
+  shares. Variants that a script makes from one function, one for each
+  class, are each timed through call sites that have seen every class.
+  [`benchmarks/own-source.ts`](benchmarks/own-source.ts) reads 1,000 fields
+  through readers of 6 classes: with calls from one function, and with a
+  [`compiledCopy()`](#variants-from-one-function) of it for each class.
+  Each range covers all six classes in three runs of the packed bundle on
+  an Apple M2 Pro with Node 26.13.0. The ratio compares the shared
+  function's fastest round with the copy's for the same class in that run.
+
+  | Rounds of | A copy for each class | One function | Ratio     |
+  | --------- | --------------------- | ------------ | --------- |
+  | 1 ms      | 369–401 ns            | 775–927 ns   | 2.04–2.37 |
+  | 10 ms     | 371–393 ns            | 368–394 ns   | 0.98–1.01 |
+
+  At 10 ms, the fastest rounds were close. The last two classes still
+  showed two modes with the shared function in all three runs. For each
+  class, 44 of 52 rounds had a median below 400 ns and the other 8 had a
+  median above 830 ns. The fastest round alone hides that difference.
 
 - **Buffers from a pool.** `Buffer.from()` of a short string, and
   `Buffer.allocUnsafe()` of a few bytes, take their bytes from a pool of

@@ -66,9 +66,11 @@ let benchCalls = 0;
  * the report too. With `--v8-check`, it checks the report's functions, and
  * sets `process.exitCode` to `V8_CHECK_FAILED` if one fails, unless the
  * script has set another. It doesn't exit: the script's code after it runs.
+ * Last, it calls the `after` option, with the `print` that printed the
+ * tables, and the results.
  *
  * In that traced run, it measures as in any other, but prints nothing,
- * writes no JSON, and doesn't run the script again. It writes markers among
+ * writes no JSON, doesn't call `after`, and doesn't run the script again. It writes markers among
  * V8's traces, of its calls and groups' timed rounds, and of where each
  * variant's `run` starts, which it reads after measuring. It then reads the
  * source maps of the scripts that V8 compiled, before it returns.
@@ -80,8 +82,8 @@ let benchCalls = 0;
  * @throws {Error} If the JSON's directory can't be written to, or
  * `--v8-report` has no script to run again, which it checks before it
  * measures, if the runtime's clock reads no time, if a variant throws, with
- * its error as the cause, if the traced run fails, or writes no traces, or
- * if `--v8-check` has no limits from V8. If the traced run fails, it writes
+ * its error as the cause, if the traced run fails, or writes no traces, if
+ * `--v8-check` has no limits from V8, or if `after` throws, with its error. If the traced run fails, it writes
  * the JSON without the report first.
  */
 export async function bench(
@@ -137,6 +139,8 @@ export async function bench(
     if (result.v8Report?.check?.passed === false && Number(exitCode) === 0) {
         process.exitCode = V8_CHECK_FAILED;
     }
+
+    await options.after?.(print, result);
 
     return result;
 }

@@ -9,6 +9,7 @@ import { spawn } from 'node:child_process';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { D8_TRACED_RUN } from '#source/d8/traced-run';
 import {
     readSourceMapFile,
     readSourceMaps,
@@ -215,8 +216,8 @@ export interface D8Run {
 /**
  * Runs a script in d8 with V8's trace flags, after the run's own flags, so
  * that the trace flags override them, as `runTraced()` runs one in Node.
- * d8 has no environment to mark the run with, so the script runs as it does
- * otherwise, and its output comes among the traces, whose parsers skip it.
+ * d8 can't read the environment, so a short script sets a global symbol
+ * before the benchmark loads. Its bench() then only measures the groups.
  * d8 has no inspector, so the run records no source maps: they're read
  * after it.
  *
@@ -239,6 +240,9 @@ export function runTracedInD8({
         const log = join(directory, 'code.log');
         const traceFlags = [...TRACE_FLAGS, `${LOGFILE}${log}`];
         const run = await collect(d8, [
+            // A user flag such as --module applies to the next script.
+            '-e',
+            `globalThis[Symbol.for('${D8_TRACED_RUN}')] = true`,
             ...flags,
             ...traceFlags,
             script,
