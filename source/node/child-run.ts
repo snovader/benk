@@ -3,10 +3,22 @@
 // that this process was started with, the script's arguments, and an
 // environment variable that tells the child's `bench()` what the run is for.
 // The child's stderr is this process's, so that its errors show.
+//
+// A process that the script starts inherits its environment, with the run's
+// variable, as when a script runs itself again with `spawnSync()`. So the
+// child takes the variable as its own only if the process that set it is its
+// parent, which `BENK_PARENT_PID` names: a process that the child starts is
+// an ordinary run, which prints, and writes to no file of this process's.
 import { spawn } from 'node:child_process';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+
+/**
+ * The environment variable of a child run that names the process that
+ * started it, by its pid
+ */
+const PARENT = 'BENK_PARENT_PID';
 
 /** A run of a script in a child Node process */
 export interface ChildRun {
@@ -22,8 +34,8 @@ export interface ChildRun {
 
 /**
  * Runs Node with the arguments, in this process's environment with the
- * run's variable, and returns what it wrote to stdout, or '' where it's
- * dropped
+ * run's variable and this process's pid, and returns what it wrote to
+ * stdout, or '' where it's dropped
  *
  * @throws {Error} If the child exits with another code than 0.
  */
@@ -35,7 +47,11 @@ export function runChild({
 }: ChildRun): Promise<string> {
     return new Promise((resolve, reject) => {
         const child = spawn(process.execPath, args, {
-            env: { ...process.env, [variable]: value },
+            env: {
+                ...process.env,
+                [variable]: value,
+                [PARENT]: String(process.pid)
+            },
             stdio: [
                 'ignore',
                 stdout === 'collect' ? 'pipe' : 'ignore',
@@ -61,6 +77,19 @@ export function runChild({
             }
         });
     });
+}
+
+/**
+ * The value of a child run's variable, if this process is that run, or else
+ * undefined: if the process that `runChild()` started was this one's parent
+ */
+export function childRunValue(variable: string): string | undefined {
+    const parent = process.env[PARENT];
+    if (!parent || Number(parent) !== process.ppid) {
+        return undefined;
+    }
+
+    return process.env[variable];
 }
 
 /**

@@ -360,15 +360,19 @@ What the other processes do:
    the tables, but prints nothing and writes no JSON. It runs no process of
    its own, for `--processes` or `--v8-report`. It writes its results to a
    temporary file, which the first process reads.
-2. They run one after another, after the first has measured, so that they
+2. benk sets `BENK_PARENT_PID` too, to the first process's pid. A process
+   that the script starts in turn, as with `spawnSync()`, inherits both
+   variables, but its parent isn't the first process. So it runs as any
+   other: it prints, and writes no results for the first process.
+3. They run one after another, after the first has measured, so that they
    don't load each other.
-3. A script that does more than call `bench()`, such as writing files, does
+4. A script that does more than call `bench()`, such as writing files, does
    it in each process. What it writes to stdout in another process doesn't
    show. What it writes to stderr does, as an error does.
-4. A script that calls `bench()` more than once makes each call in each
+5. A script that calls `bench()` more than once makes each call in each
    process. Each call of the first process takes the other processes'
    results from the same runs, so the script runs n times in all.
-5. If a run in another process fails, or measures other groups or variants
+6. If a run in another process fails, or measures other groups or variants
    than the first, `bench()` writes the JSON without the other processes,
    and then throws.
 
@@ -1041,7 +1045,10 @@ What the report can't show in d8:
 1. It runs the script with the same arguments. benk sets `BENK_TRACED_RUN`
    in its environment, where `bench()` measures as it does otherwise, so
    that V8 sees the same calls, but prints nothing and writes no JSON. A
-   script that does more, such as writing files, does it twice.
+   script that does more, such as writing files, does it twice. benk sets
+   `BENK_PARENT_PID` too, so that a process that the traced run starts,
+   which inherits both, runs as any other, as in
+   [Across processes](#across-processes).
 2. Its `bench()` writes a line to stdout, among V8's traces, as each call
    of it starts and ends measuring, and as each group's timed rounds start
    and end. The report cuts the lines out of the traces, wherever they

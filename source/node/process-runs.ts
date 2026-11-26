@@ -13,7 +13,12 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { ProcessRun, RunResult } from '#source/core/types';
-import { inTemporaryDirectory, isMissing, runChild } from './child-run.ts';
+import {
+    childRunValue,
+    inTemporaryDirectory,
+    isMissing,
+    runChild
+} from './child-run.ts';
 
 /**
  * The environment variable that marks a run of `--processes`, whose value
@@ -24,10 +29,11 @@ import { inTemporaryDirectory, isMissing, runChild } from './child-run.ts';
 export const PROCESS_RUN = 'BENK_PROCESS_RUN';
 
 /**
- * The file of this run of `--processes`, or none or '' if it's no such run
+ * The file of this run of `--processes`, or none or '' if it's no such run,
+ * as a process that the run starts isn't
  */
 export function processRunFile(): string | undefined {
-    return process.env[PROCESS_RUN];
+    return childRunValue(PROCESS_RUN);
 }
 
 /** The results that this run recorded, by the number of their call */

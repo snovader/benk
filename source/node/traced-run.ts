@@ -8,7 +8,12 @@
 import { spawn } from 'node:child_process';
 import { readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import { inTemporaryDirectory, isMissing, runChild } from './child-run.ts';
+import {
+    childRunValue,
+    inTemporaryDirectory,
+    isMissing,
+    runChild
+} from './child-run.ts';
 import {
     readSourceMapFile,
     readSourceMaps,
@@ -92,9 +97,12 @@ export interface TracedOutput {
     readonly sourceMapFiles: ReadonlyMap<string, SourceMapFile>;
 }
 
-/** Whether this process is the traced run of another */
+/**
+ * Whether this process is the traced run of another, which a process that
+ * the traced run starts isn't
+ */
 export function isTracedRun(): boolean {
-    return Boolean(process.env[TRACED_RUN]);
+    return Boolean(childRunValue(TRACED_RUN));
 }
 
 /**

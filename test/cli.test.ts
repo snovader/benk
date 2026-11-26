@@ -202,7 +202,9 @@ describe('bench', () => {
         const runtime = new FakeRuntime();
         const directory = await mkdtemp(join(tmpdir(), 'benk-'));
         const lines: string[] = [];
+        // As the traced run's parent sets them
         vi.stubEnv('BENK_TRACED_RUN', '1');
+        vi.stubEnv('BENK_PARENT_PID', String(process.ppid));
         try {
             const path = join(directory, 'results.json');
             const result = await bench(groups(runtime), {
@@ -313,6 +315,19 @@ describe('--v8-report', () => {
             `sum ${join(BUNDLED, 'sum.ts')}:6:20`
         ]);
     });
+
+    it('runs a process that the traced run starts as any other, which writes its JSON', async () => {
+        const { code, stderr, runs, spawned } = await runProcesses(['--v8-report'], {
+            PROCESSES_FAULT: 'spawns'
+        });
+
+        expect(code, stderr).toBe(0);
+        // A traced run for each call of bench(), and the run that the first starts
+        expect(runs).toBe(4);
+        expect((JSON.parse(spawned) as RunResult).groups.map(group => group.name)).toStrictEqual([
+            'crossing'
+        ]);
+    });
 });
 
 describe('--v8-check', () => {
@@ -385,12 +400,20 @@ const PROCESSES = join('test', 'fixtures', 'processes.ts');
 /**
  * Runs `PROCESSES` with the arguments, and a quick sample time, in a
  * directory of its own, where it counts its runs and writes its JSON to
- * `results.json`, and returns what it wrote, its runs, and its results
+ * `results.json`, and returns what it wrote, its runs, and its results, and
+ * those of a run that a run started, as `spawns` does
  */
 async function runProcesses(
     args: readonly string[],
     env: NodeJS.ProcessEnv = {}
-): Promise<{ code: number; lines: string[]; stderr: string; runs: number; json: string }> {
+): Promise<{
+    code: number;
+    lines: string[];
+    stderr: string;
+    runs: number;
+    json: string;
+    spawned: string;
+}> {
     const directory = await mkdtemp(join(tmpdir(), 'benk-'));
     try {
         const counter = join(directory, 'runs');
@@ -405,7 +428,8 @@ async function runProcesses(
         return {
             ...run,
             runs: (await readFile(counter, 'utf8')).split('\n').length - 1,
-            json: await readFile(path, 'utf8').catch(() => '')
+            json: await readFile(path, 'utf8').catch(() => ''),
+            spawned: await readFile(join(directory, 'spawned.json'), 'utf8').catch(() => '')
         };
     } finally {
         await rm(directory, { recursive: true });
@@ -518,6 +542,26 @@ describe('--processes', () => {
         expect(stderr).toContain(
             'Error: Expected process 2 to measure the groups of the first, with the same variants, got "renamed" of "base", "slower", "faster", "base A/A" where the first has "pairs" of "base", "slower", "faster", "base A/A"'
         );
+    });
+
+    it('takes no results from a process that a run starts, which runs as any other', async () => {
+        const { code, lines, stderr, runs, spawned } = await runProcesses(['--processes', '2'], {
+            PROCESSES_FAULT: 'spawns'
+        });
+
+        expect(code, stderr).toBe(0);
+        expect(runs).toBe(3);
+        // The second run's, of 110 ns, rather than the third's, of 120 ns
+        expect(rowOf(lines, 'pairs: 2 processes, by the fastest round', 'slower')).toStrictEqual([
+            'slower',
+            '2.00×',
+            '2.20×',
+            '2.20×',
+            '2.00–2.20'
+        ]);
+        expect((JSON.parse(spawned) as RunResult).groups.map(group => group.name)).toStrictEqual([
+            'crossing'
+        ]);
     });
 
     it('reports on V8 after the ratios across processes, and records both', async () => {

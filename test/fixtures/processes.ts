@@ -11,8 +11,13 @@
 //   more in each run after it, against `base`'s 50 ns.
 //
 // With `PROCESSES_FAULT`, the second run goes wrong: `fails` throws before
-// it measures, and `renames` measures `pairs` under another name.
+// it measures, and `renames` measures `pairs` under another name. With
+// `spawns`, the second run starts the script again after it measures, as
+// the third run, which inherits its environment, and writes its JSON to
+// `spawned.json` beside the counter.
+import { spawnSync } from 'node:child_process';
 import { appendFileSync, readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { bench } from 'benk';
 import { FakeRuntime } from '#test/fake-runtime';
 
@@ -54,6 +59,28 @@ await bench(
     ],
     { runtime }
 );
+
+if (fault === 'spawns') {
+    spawnSync(
+        process.execPath,
+        [
+            // The tests' flags, without the traced run's
+            '--no-strip-types',
+            '--import',
+            '@snovader/node-hooks/register',
+            process.argv[1],
+            '--json',
+            join(dirname(counter), 'spawned.json'),
+            '--sample-ms',
+            '0.01',
+            '--rounds',
+            '6',
+            '--warmup-rounds',
+            '1'
+        ],
+        { env: { ...process.env, PROCESSES_FAULT: '' } }
+    );
+}
 
 /** The runs that the counter has counted, before this one */
 function runsBefore(file: string): number {
