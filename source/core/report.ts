@@ -9,6 +9,7 @@ import type {
     Processes,
     RecordedOptions,
     RuntimeDescription,
+    SharedChange,
     VariantAcrossProcesses,
     VariantResult
 } from './types.ts';
@@ -98,6 +99,7 @@ export function formatGroup({
     leadReason,
     rounds,
     timerResolution,
+    change,
     variants
 }: GroupResult): string[] {
     const nameWidth = Math.max(
@@ -112,7 +114,8 @@ export function formatGroup({
         header,
         ...variants.map(variant => formatRow(variant, nameWidth)),
         ...formatResolution(timerResolution, variants),
-        ...variants.flatMap(formatRounds),
+        ...formatSharedChange(change, variants),
+        ...variants.flatMap((variant, i) => formatRounds(variant, i, change)),
         ...variants.flatMap(variant => formatPositionEffect(variant, variants)),
         ...(lead === 'fastest' ? variants.flatMap(formatOutside) : [])
     ];
@@ -192,13 +195,36 @@ function formatResolution(
  * Results that a version before `schema` 7 wrote have no change, and get the
  * modes' note.
  */
-function formatRounds(variant: VariantResult): string[] {
+function formatRounds(
+    variant: VariantResult,
+    index: number,
+    shared: SharedChange | null | undefined
+): string[] {
     if (variant.change != null) {
         return formatChange(variant.name, variant.change);
     }
 
-    // The position's note says it, once
-    return modesByPosition(variant) ? [] : formatModes(variant);
+    // The group's note, or the position's, says it, once
+    return modesByShared(variant, index, shared) || modesByPosition(variant)
+        ? []
+        : formatModes(variant);
+}
+
+/**
+ * Whether a variant's two modes are its rounds before and after a step that
+ * it shares with others, which the group's note then explains
+ */
+function modesByShared(
+    { samples, summary: { modes } }: VariantResult,
+    index: number,
+    shared: SharedChange | null | undefined
+): boolean {
+    return (
+        modes != null &&
+        shared?.shape === 'step' &&
+        shared.variants.includes(index) &&
+        modesAreOf(samples, modes, round => round < shared.before.rounds)
+    );
 }
 
 /**
@@ -223,21 +249,98 @@ function modesByPosition({
 }
 
 /**
- * A note for a variant whose rounds changed partway, which names the shorter
- * part first. A longer warm-up can help distinguish tiering from other
- * changes during the run, such as load from another process.
+ * A note for a variant whose rounds changed partway, against the others',
+ * and what to do about it, which follows from how they changed:
+ *
+ * - A step to faster rounds, as when V8's optimized code takes over: as
+ *   many more warm-up rounds as ran before it would leave the slower ones
+ *   out.
+ * - A step to slower rounds, as when its code deoptimized: V8's report
+ *   shows whether it did, and another run whether it repeats.
+ * - A drift, which no count of warm-up rounds leaves out: its median is of
+ *   the middle rounds, and another run shows whether it repeats.
+ *
+ * A step names its shorter part first. Results that a version before
+ * `schema` 7 wrote have no shape, and read as a step.
  */
-function formatChange(name: string, { before, after }: Change): string[] {
+function formatChange(
+    name: string,
+    { shape, before, after }: Change
+): string[] {
+    if (shape === 'drift') {
+        const how = after.median > before.median ? 'slowed' : 'sped up';
+        return [
+            `  ${name}: its rounds ${how} steadily, from near ${formatTime(before.median)} in the first ${before.rounds} to near ${formatTime(after.median)} in the last ${after.rounds}: its median is of the middle rounds, and another run shows whether that repeats`
+        ];
+    }
+
     const parts =
         before.rounds <= after.rounds
             ? `the first ${before.rounds} rounds ran near ${formatTime(before.median)}, and the other ${after.rounds} near ${formatTime(after.median)}`
             : `the last ${after.rounds} rounds ran near ${formatTime(after.median)}, and the other ${before.rounds} near ${formatTime(before.median)}`;
     const advice =
         after.median < before.median
-            ? 'try a longer warm-up and check whether the early slowdown repeats'
+            ? `${before.rounds} more warm-up rounds would leave the slower ones out`
             : "another run shows whether that repeats, and V8's report whether its code deoptimized";
 
     return [`  ${name}: ${parts}: ${advice}`];
+}
+
+/**
+ * A note for a change that several variants' rounds share, in the same
+ * rounds, which names them, unless every variant does. Each round runs
+ * every variant, so the ratios of a round compare variants that it changed
+ * alike, and hold between those that share it. Load from other processes
+ * changes every variant, so it's a cause only where all of them changed.
+ * Otherwise, and as well, it's code that all of them run, as a variant and
+ * its A/A copy do, which V8 tiers up or that slows down. A step to faster
+ * rounds leaves the times of the slower ones, which more warm-up rounds
+ * would leave out.
+ */
+function formatSharedChange(
+    change: SharedChange | null | undefined,
+    variants: readonly VariantResult[]
+): string[] {
+    if (change == null) {
+        return [];
+    }
+
+    const { shape, before, after } = change;
+    const every = change.variants.length === variants.length;
+    const names = change.variants.map(index => variants[index].name);
+    const subject = every ? 'every variant' : formatNames(names);
+    const hold = every
+        ? "the ratios hold, as each round's variants ran alike"
+        : 'the ratios between them hold';
+    const slower = after.factor > before.factor;
+
+    if (shape === 'drift') {
+        const how = slower ? 'slowed' : 'sped up';
+        const cause = every
+            ? `as when load from other processes ${slower ? 'rises' : 'falls'}, or code that all of them run changes`
+            : 'as when code that all of them run changes';
+        return [
+            `  the rounds of ${subject} ${how} alike, by ${formatRatio(after.factor / before.factor)}× from the first ${before.rounds} to the last ${after.rounds}, ${cause}: ${hold}`
+        ];
+    }
+
+    const [shorter, longer, which] =
+        before.rounds <= after.rounds
+            ? [before, after, 'first']
+            : [after, before, 'last'];
+    const parts = `the ${which} ${shorter.rounds} rounds of ${subject} took ${formatRatio(shorter.factor / longer.factor)}× as long as the other ${longer.rounds}`;
+    const ending = slower
+        ? `${every ? 'as when load from other processes starts, or' : 'as when'} code that all of them run slows down: ${hold}, and another run shows whether that repeats`
+        : `${every ? 'as when load from other processes stops, or' : 'as when'} V8's code takes over in all of them: ${hold}, and ${before.rounds} more warm-up rounds would leave the slower ones out of the times`;
+
+    return [`  ${parts}, ${ending}`];
+}
+
+/** Names as a sentence lists them: `a`, `a and b`, or `a, b and c` */
+function formatNames(names: readonly string[]): string {
+    return names.length === 1
+        ? names[0]
+        : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
 }
 
 /**

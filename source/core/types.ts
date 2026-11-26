@@ -189,17 +189,58 @@ export interface Segment {
 }
 
 /**
+ * How rounds changed partway: at one round, a step, as when V8's optimized
+ * code takes over, or steadily across them, a drift, as when a heap grows
+ */
+export type ChangeShape = 'step' | 'drift';
+
+/**
  * A change in a variant's time partway through its rounds: the rounds before
- * it and those after are apart by much more than their own spread, as when
- * V8's optimized code takes over after the first rounds, or load from other
- * processes starts or stops. The median and the fastest then describe a mix
- * of the two, or one of them.
+ * it and those after are apart by much more than their own spread, and its
+ * time against the other variants' in the same rounds moved too. The median
+ * and the fastest then describe a mix of the two, or one of them. A change
+ * that the others' rounds share, as load from other processes makes, is the
+ * group's, as `SharedChange`.
  */
 export interface Change {
-    /** The rounds from the first to the change */
+    readonly shape: ChangeShape;
+    /**
+     * A step's rounds from the first to the change, or a drift's first
+     * rounds, as many as each of two modes needs at least
+     */
     readonly before: Segment;
-    /** The rounds from the change to the last */
+    /** A step's rounds from the change to the last, or a drift's last rounds */
     readonly after: Segment;
+}
+
+/** Rounds of a group one after another, before or after a shared change */
+export interface SharedSegment {
+    /**
+     * The median round of the segment, as a factor of each variant's median
+     * round, which all of them share
+     */
+    readonly factor: number;
+    readonly rounds: number;
+}
+
+/**
+ * A change partway through the rounds that several variants of a group
+ * share, in the same rounds, as when load from other processes starts or
+ * stops, or V8 tiers up code that all of them run, as a variant and its A/A
+ * copy do. Each round runs every variant, so the ratios of a round compare
+ * variants that it changed alike.
+ */
+export interface SharedChange {
+    readonly shape: ChangeShape;
+    /** A step's rounds before the change, or a drift's first rounds */
+    readonly before: SharedSegment;
+    /** A step's rounds after the change, or a drift's last rounds */
+    readonly after: SharedSegment;
+    /**
+     * The variants whose rounds changed alike, by their indexes in the
+     * group's `variants`: two or more, and every one where all did
+     */
+    readonly variants: readonly number[];
 }
 
 /**
@@ -249,8 +290,9 @@ export interface VariantResult {
     readonly positions: readonly number[];
     readonly summary: Summary;
     /**
-     * The change in its time partway through its rounds, or null where they
-     * didn't change
+     * The change in its time partway through its rounds, where its time
+     * against the other variants' moved too, or null where none did. A
+     * change that the others share is the group's.
      */
     readonly change: Change | null;
     /**
@@ -323,6 +365,11 @@ export interface GroupResult {
      * time, as with a virtual clock that only a variant's calls move.
      */
     readonly timerResolution: number | null;
+    /**
+     * The change partway through the rounds that several variants share, or
+     * null where none did
+     */
+    readonly change: SharedChange | null;
     readonly variants: readonly VariantResult[];
 }
 

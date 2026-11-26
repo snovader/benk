@@ -1,7 +1,13 @@
 import { describe, expect } from 'hypotes';
 import { fc, it } from 'hypotes/fast-check';
 import { medianInterval, summarize } from 'benk';
-import { changeOf, modesOf, positionEffectOf, sortedCopy } from '#source/core/statistics';
+import {
+    changeOf,
+    changesOf,
+    modesOf,
+    positionEffectOf,
+    sortedCopy
+} from '#source/core/statistics';
 import { expectPresent } from './expectations.ts';
 
 const sample = fc.double({ min: 1e-3, max: 1e9, noNaN: true });
@@ -174,10 +180,31 @@ describe('changes', () => {
             const rest = steady(count - before, afterTime);
             const change = expectPresent(changeOf(Float64Array.from([...first, ...rest])));
 
+            expect(change.shape).toBe('step');
             expect(change.before.rounds).toBe(before);
             expect(change.after.rounds).toBe(count - before);
             expect(change.before.median).toBe(summarize(first).median);
             expect(change.after.median).toBe(summarize(rest).median);
+        }
+    );
+
+    it.prop([
+        fc.integer({ min: 31, max: 120 }),
+        // From which the medians of the halves are 5% apart, or more
+        fc.double({ min: 1.2, max: 3, noNaN: true }),
+        fc.boolean()
+    ])(
+        'tells a steady drift from a step, with the medians of its first and last rounds',
+        (count, factor, faster) => {
+            const total = faster ? 1 / factor : factor;
+            const rounds = steady(count, 100).map((time, i) => time * total ** (i / (count - 1)));
+            const ends = least(count);
+            const change = expectPresent(changeOf(Float64Array.from(rounds)));
+
+            expect(change.shape).toBe('drift');
+            expect([change.before.rounds, change.after.rounds]).toStrictEqual([ends, ends]);
+            expect(change.before.median).toBe(summarize(rounds.slice(0, ends)).median);
+            expect(change.after.median).toBe(summarize(rounds.slice(-ends)).median);
         }
     );
 
@@ -242,6 +269,53 @@ describe('changes', () => {
 
         expect(changeOf(rounds(9))).toBeNull();
         expect(changeOf(rounds(10))?.before.rounds).toBe(10);
+    });
+
+    it.prop([
+        fc.integer({ min: 8, max: 14 }),
+        fc.double({ min: 1.2, max: 3, noNaN: true }),
+        fc.uniqueArray(fc.integer({ min: 14, max: 35 }), { minLength: 2, maxLength: 2 }),
+        // Beyond the steady rounds' jitter of 0.5%
+        fc.double({ min: 1.02, max: 1.2, noNaN: true })
+    ])(
+        "finds a change in the reference and its A/A copy, as their run's own, past load spikes that every variant shares",
+        (before, factor, spikes, above) => {
+            // Two rounds after the change that load slowed in every variant, more
+            // than the step, which breaks the order of the step's rounds in each
+            // variant's own samples
+            const timesOf = (base: number, stepped: boolean): Float64Array =>
+                Float64Array.from(steady(36, base), (time, round) => {
+                    const step = stepped && round < before ? factor : 1;
+                    const load = spikes.includes(round) ? factor * above : 1;
+                    return time * step * load;
+                });
+            const samples = [timesOf(100, true), timesOf(500, false), timesOf(100, true)];
+            const { variants, shared } = changesOf(samples);
+
+            // Its own samples alone miss the step, or misplace it
+            expect(changeOf(samples[0])?.before.rounds).not.toBe(before);
+            expect(variants.map(change => change?.before.rounds ?? null)).toStrictEqual([
+                before,
+                null,
+                before
+            ]);
+            expect(shared).toBeNull();
+        }
+    );
+
+    it('finds a change of every variant as theirs together, with the factor of each part', () => {
+        const timesOf = (base: number): Float64Array =>
+            Float64Array.from(steady(36, base), (time, round) => time * (round < 5 ? 1.5 : 1));
+
+        const { variants, shared } = changesOf([timesOf(100), timesOf(500), timesOf(100)]);
+
+        const change = expectPresent(shared);
+        expect(variants).toStrictEqual([null, null, null]);
+        expect(change.variants).toStrictEqual([0, 1, 2]);
+        expect(change.shape).toBe('step');
+        expect([change.before.rounds, change.after.rounds]).toStrictEqual([5, 31]);
+        // Within the steady rounds' jitter of 0.5%
+        expect(Math.abs(change.before.factor / change.after.factor / 1.5 - 1)).toBeLessThan(0.006);
     });
 
     it('finds none in 12 rounds or fewer, whose every order is too likely by chance', () => {

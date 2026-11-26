@@ -576,6 +576,8 @@ describe('measureGroups', () => {
 
             expect(group.rounds).toBe(32);
             expect(variantNamed(group, 'steady').change).toBeNull();
+            expect(group.change).toBeNull();
+            expect(change.shape).toBe('step');
             expect([change.before.rounds, change.after.rounds]).toStrictEqual([
                 changedAfter,
                 32 - changedAfter
@@ -584,6 +586,76 @@ describe('measureGroups', () => {
             expect(change.before.median / first).toBeLessThanOrEqual(1.005);
             expect(change.after.median / rest).toBeGreaterThanOrEqual(1 - 1e-9);
             expect(change.after.median / rest).toBeLessThanOrEqual(1.005);
+        }
+    );
+
+    it.prop(
+        [
+            fc.integer({ min: 4, max: 28 }),
+            fc.double({ min: 1.2, max: 2, noNaN: true }),
+            fc.option(fc.integer({ min: 4, max: 28 }), { nil: undefined })
+        ],
+        { numRuns: 30 }
+    )(
+        "records load that every variant's rounds share as the group's change, apart from a variant's own",
+        async (loadedRounds, load, ownAfter) => {
+            // The first rounds of every variant ran under load, and one variant
+            // may change on its own too, at another round
+            fc.pre(ownAfter == null || Math.abs(ownAfter - loadedRounds) >= 4);
+            const runtime = new FakeRuntime({ heap: false });
+            const bases = { first: 100, second: 200, changing: 150 };
+            let timed = false;
+            let timedLoops = 0;
+            let time = 0;
+            const loaded = (name: keyof typeof bases): SyncVariant => ({
+                name,
+                setup: () => {
+                    timedLoops += timed ? 1 : 0;
+                    // Each round runs the 3 variants, one loop each
+                    const round = Math.floor((timedLoops - 1) / 3);
+                    const own = name === 'changing' && ownAfter != null && round < ownAfter ? 2 : 1;
+                    // Up to 0.5% longer, in an order that neither rises nor falls
+                    const jitter = 1 + (0.005 * ((7 * timedLoops) % 11)) / 10;
+                    time = bases[name] * (timed && round < loadedRounds ? load : 1) * own * jitter;
+                },
+                run: () => runtime.clock.spend(time)
+            });
+
+            const result = await measureGroups(
+                [
+                    {
+                        name: 'load',
+                        variants: [loaded('first'), loaded('second'), loaded('changing')],
+                        aa: false
+                    }
+                ],
+                {
+                    ...QUICK,
+                    rounds: 33,
+                    runtime,
+                    onRounds: (_, rounds) => {
+                        timed = rounds === 'timed';
+                    }
+                }
+            );
+            const [group] = result.groups;
+
+            expect(variantNamed(group, 'first').change).toBeNull();
+            expect(variantNamed(group, 'second').change).toBeNull();
+            if (ownAfter == null) {
+                const shared = expectPresent(group.change);
+                expect(shared.variants).toStrictEqual([0, 1, 2]);
+                expect(shared.shape).toBe('step');
+                expect(shared.before.rounds).toBe(loadedRounds);
+                expect(
+                    Math.abs(shared.before.factor / shared.after.factor / load - 1)
+                ).toBeLessThan(0.01);
+                expect(variantNamed(group, 'changing').change).toBeNull();
+            } else {
+                const own = expectPresent(variantNamed(group, 'changing').change);
+                expect(own.shape).toBe('step');
+                expect(own.before.rounds).toBe(ownAfter);
+            }
         }
     );
 
