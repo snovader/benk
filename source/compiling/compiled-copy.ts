@@ -2,8 +2,10 @@
 // the hosts that compile strings, as Node and d8 do. The core compiles
 // none, so this is apart from it, and `benk/core` doesn't export it.
 
-/** Any function, of whatever parameters */
-type AnyFunction = (...args: never[]) => unknown;
+type Callable = (...args: never[]) => unknown;
+
+/** A function expression may also be a class, which only supports construction */
+type AnyFunction = Callable | (abstract new (...args: never[]) => unknown);
 
 /**
  * The functions compiled in the process, which numbers each one's source:
@@ -34,7 +36,7 @@ let copies = 0;
  * method's, a getter's, a bound function's or a built-in's isn't.
  */
 export function compiledCopy<F extends AnyFunction>(fn: F): F {
-    return compiledFrom<F>(fn.toString());
+    return compiledFrom<F>(Function.prototype.toString.call(fn));
 }
 
 /**
@@ -51,7 +53,9 @@ export function compiledCopy<F extends AnyFunction>(fn: F): F {
  * @throws {TypeError} If the expression isn't a function.
  */
 // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- The caller says what the text is a function of, which a cast at each call would say worse
-export function compiledFrom<F extends AnyFunction>(source: string): F {
+export function compiledFrom<F extends AnyFunction = Callable>(
+    source: string
+): F {
     // The text is on lines of its own: it may start with a line break,
     // after which `return` would return nothing, or end with a comment
     const body = `'use strict';

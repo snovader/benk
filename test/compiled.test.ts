@@ -45,14 +45,21 @@ describe('compiledCopy', () => {
         const Point = compiledCopy(
             class {
                 readonly x = 3;
-            } as unknown as () => unknown
-        ) as unknown as new () => { x: number };
+            }
+        );
 
         expect(named(4)).toBe(8);
         expect(named.name).toBe('double');
         expect(await later(4)).toBe(5);
         expect(Array.from(numbers(3))).toStrictEqual([0, 1, 2]);
         expect(new Point().x).toBe(3);
+    });
+
+    it('copies the function body even when the function overrides toString', () => {
+        const one = (): number => 1;
+        one.toString = () => '() => 2';
+
+        expect(compiledCopy(one)()).toBe(1);
     });
 
     it('reads nothing of the scope that the function was written in, which is an error at its call', () => {
@@ -87,6 +94,10 @@ describe('compiledCopy', () => {
 });
 
 describe('compiledFrom', () => {
+    it('returns a callable function when no signature is given', () => {
+        expect(compiledFrom('() => 1')()).toBe(1);
+    });
+
     it('compiles the text of a function, also between line breaks and before a comment', () => {
         const add = compiledFrom<(a: number, b: number) => number>(`
             (a, b) => a + b // The sum

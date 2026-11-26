@@ -237,20 +237,21 @@ node bench.ts --sample-ms 10
 ```text
 sum 1,000 numbers: 42 rounds, by the fastest round (every call under 1 µs and 1 KiB)
                       fastest     median   spread    ratio   95% interval        heap     buffers
-  Int8Array            335 ns     338 ns     1.6%    1.00×                        0 B         0 B
-  Uint8Array           333 ns     339 ns     1.4%    0.99×      1.00–1.00         0 B         0 B
-  Int16Array           334 ns     340 ns     1.5%    0.99×      1.00–1.01         0 B         0 B
-  Uint16Array          336 ns     340 ns     1.7%    1.00×      1.00–1.00         0 B         0 B
-  Int32Array           336 ns     340 ns     1.6%    1.00×      1.00–1.01         0 B         0 B
-  Uint32Array          479 ns     489 ns     1.7%    1.43×      1.44–1.45         0 B         0 B
-  Int8Array A/A        336 ns     339 ns     1.5%    1.00×      1.00–1.00         0 B         0 B
+  Int8Array            340 ns     348 ns     3.8%    1.00×                        0 B         0 B
+  Uint8Array           339 ns     349 ns     2.7%    1.00×      1.00–1.01         0 B         0 B
+  Int16Array           339 ns     350 ns     2.1%    1.00×      0.99–1.01         0 B         0 B
+  Uint16Array          339 ns     350 ns     3.1%    1.00×      0.99–1.01         0 B         0 B
+  Int32Array           339 ns     353 ns     4.7%    1.00×      1.00–1.01         0 B         0 B
+  Uint32Array          489 ns     506 ns     3.0%    1.44×      1.43–1.46         0 B         0 B
+  Int8Array A/A        341 ns     351 ns     3.0%    1.00×      1.00–1.01         0 B         0 B
 ```
 
-With `run: sumOf(new TypedArray(1000).fill(1))` instead, every type's median
-round took 3.57 to 4.01 µs, and `Uint32Array`'s ratio was 1.00, in 3 runs
-of each on an Apple M2 Pro with Node 26.13.0, with a load average near 5.
-The shared `values[i]` had seen 6 types of array. It took about 11 times
-as long, and hid the one difference between the types.
+With `run: sumOf(new TypedArray(1000).fill(1))`, the shared `values[i]`
+saw all six array types. Median rounds took 3.60 to 4.01 µs. For
+`Int8Array`, that was 11.2 to 11.5 times as long as with a copy.
+`Uint32Array`'s ratio to `Int8Array` fell from 1.43–1.45 with copies to
+1.00–1.01 with the shared function. These are from three runs of each
+version on an Apple M2 Pro with Node 26.13.0.
 [Known confounds](#known-confounds) has another measurement.
 
 A copy has only its text. What that means for the function to copy:
@@ -346,15 +347,15 @@ The inputs are in turn over a variant's calls, in whatever round. A call
 that changes its input needs fresh input for each call, which `setup`
 prepares, as [Variants](#variants) describes.
 
-`inTurn()` keeps a copy of the array, and throws a `RangeError` for an
-empty one. Each call of it compiles its function from a source of its own,
-so `benk/core` doesn't export it. Taking a turn adds to the timed call what
-a counter written by hand does. In
-[`benchmarks/inputs-in-turn.ts`](benchmarks/inputs-in-turn.ts), a read of
-one number took 2.88 to 2.93 ns with a counter by hand, and 2.89 to 3.06 ns
-with `inTurn()`, by the fastest round. A step of a generator, of 7.8 ns,
-took the same with either as with one input, within 0.2 ns. These are of 6
-runs on an Apple M2 Pro with Node 26.13.0, with a load average near 5.
+`inTurn()` keeps a copy of the array and throws a `RangeError` for an empty
+one. Each call compiles its function from a source of its own, so
+`benk/core` doesn't export it. In
+[`benchmarks/inputs-in-turn.ts`](benchmarks/inputs-in-turn.ts), reading one
+number took 2.98 to 3.22 ns with a counter by hand and 2.99 to 3.20 ns with
+`inTurn()`. A generator step took 7.73 to 8.19 ns across all three variants.
+These are the fastest rounds from six runs on an Apple M2 Pro with Node
+26.13.0. [Known confounds](#known-confounds) compares the constant input
+with the rotating inputs.
 
 ### Lines after the tables
 
@@ -378,9 +379,10 @@ await bench(
     ],
     {
         after: (print, result) => {
-            const [group] = result.groups;
-            print('');
-            print(`${group.name}: ${encoder.encode(text).length} bytes`);
+            for (const group of result.groups) {
+                print('');
+                print(`${group.name}: ${encoder.encode(text).length} bytes`);
+            }
         }
     }
 );
@@ -1011,9 +1013,9 @@ with 10 ms.
 - The first run gets the script's options but `--v8-report` and
   `--v8-filter`, which benk-d8 carries out. The traced run gets none of
   those, nor `--json`, so it writes no results.
-- A script in d8 can't read the environment, so the traced run can't tell
-  that it's traced. It prints its tables among the traces, which the
-  report skips.
+- In the traced run, benk-d8 marks the process before the script loads.
+  `bench()` measures the groups and returns their results. Only the first
+  run prints tables, writes JSON and calls `after`.
 - A bundle's source map places its positions, as in Node. A TypeScript
   `bench.ts` that imported `bench` from `benk/d8` and `sumLoop` from
   `./sum.ts`, bundled by rolldown 1.3.2 with
@@ -1024,8 +1026,7 @@ with 10 ms.
 - The report has no lines by variant, and `--v8-check` and
   `--v8-max-bytecode` are errors, before benk-d8 runs d8. Both need
   Node's traced run: d8 has no inspector to read where a variant's `run`
-  starts, and its `bench()` can't tell that it's traced, to mark the timed
-  rounds.
+  starts.
 - The report tells benk's functions by their files: those of benk's
   bundle, which a script imports from `node_modules/benk/dist`, or which a
   bundle's source map names. A bundle that has benk in it, without a
@@ -1862,24 +1863,20 @@ benk keeps these in view rather than out of the results:
   data runs it, which [`inTurn()`](#inputs-in-turn) is for.
 
   [`benchmarks/inputs-in-turn.ts`](benchmarks/inputs-in-turn.ts) times
-  calls with one `Float64Array` of 1,000 numbers, and with 4 in turn. These
-  are the fastest rounds of 3 runs of each sample time, on an Apple M2 Pro
-  with Node 26.13.0, run from benk's source with the hook that
-  [Typed arrays and detached buffers](#typed-arrays-and-detached-buffers)
-  describes, with a load average near 5:
+  calls with one `Float64Array` of 1,000 numbers and with 4 in turn.
+  Each entry spans the fastest rounds from 3 runs at each sample time on
+  an Apple M2 Pro with Node 26.13.0 and the packed benk bundle. The ratio
+  compares the fastest rounds within each run.
 
-  | Call                 | One input       | 4 in turn       | Ratio     |
-  | -------------------- | --------------- | --------------- | --------- |
-  | Sum, rounds of 1 ms  | 1.45–1.46 µs    | 1.45 µs         | 1.00–1.01 |
-  | Sum, rounds of 10 ms | 815–824 ns      | 869–888 ns      | 1.06–1.08 |
-  | Read of one number   | 0.41–0.45 ns    | 2.89–3.06 ns    | 6.5–7.4   |
+  | Call                 | One input    | 4 with `inTurn()` | Ratio       |
+  | -------------------- | ------------ | ----------------- | ----------- |
+  | Sum, rounds of 1 ms  | 1.45–1.51 µs | 1.45–1.52 µs      | 1.001–1.004 |
+  | Sum, rounds of 10 ms | 823–846 ns   | 871–900 ns        | 1.059–1.065 |
+  | Read of one number   | 0.42–0.46 ns | 2.99–3.20 ns      | 6.6–7.1     |
 
-  The read took as long with either sample time. With one input, a call
-  took 0.4 ns and allocated nothing. In turn, it took 2.9 ns and allocated
-  12 bytes, for the number that it returns. So with one input, V8's code
-  didn't make a number at each call. The sum's times differed only with
-  rounds of 10 ms, which is the difference of tiers that
-  **The tier of the timed code** describes below.
+  The read returns a fractional number for every input. With one array,
+  benk measured 0 heap bytes per call. Rotating the arrays with either
+  counter cost 16 heap bytes per call across both sample times.
 
 - **Feedback that variants share.** V8 keeps the type feedback of a call
   site with its function's code, which every closure of that function
@@ -1888,27 +1885,19 @@ benk keeps these in view rather than out of the results:
   [`benchmarks/own-source.ts`](benchmarks/own-source.ts) reads 1,000 fields
   through readers of 6 classes: with calls from one function, and with a
   [`compiledCopy()`](#variants-from-one-function) of it for each class.
-  These are of 3 runs of each sample time, on an Apple M2 Pro with Node
-  26.13.0, with a load average near 5:
+  Each range covers all six classes in three runs of the packed bundle on
+  an Apple M2 Pro with Node 26.13.0. The ratio compares the shared
+  function's fastest round with the copy's for the same class in that run.
 
-  | Rounds of | A copy for each class | One function   | Ratio     |
-  | --------- | --------------------- | -------------- | --------- |
-  | 1 ms      | 369–384 ns            | 811–887 ns     | 2.13–2.34 |
-  | 10 ms     | 369–394 ns            | 356–395 ns     | 0.93–1.01 |
+  | Rounds of | A copy for each class | One function | Ratio     |
+  | --------- | --------------------- | ------------ | --------- |
+  | 1 ms      | 369–401 ns            | 775–927 ns   | 2.04–2.37 |
+  | 10 ms     | 371–393 ns            | 368–394 ns   | 0.98–1.01 |
 
-  The times are the fastest rounds, and the ratios are by them. With
-  rounds of 1 ms, the first class's calls from the one function had two
-  modes in 2 of the 3 runs, of about 20 rounds near 400 ns and 32 near
-  830 ns, and are left out of the table's range.
-
-  With 10 ms, the calls from the one function took as long as the copies,
-  apart from 7 or 8 of the 52 rounds of the last two classes, which took
-  over 800 ns. Turbofan can inline a variant's `run` into its timer loop,
-  with the reader as a constant, whose class it then knows whatever the
-  call site has seen. That fits these times, but these runs weren't
-  traced. It doesn't help where the object isn't a constant of the loop:
-  the sum of [Variants from one function](#variants-from-one-function)
-  took 11 times as long from one function with rounds of 10 ms.
+  At 10 ms, the fastest rounds were close. The last two classes still
+  showed two modes with the shared function in all three runs. For each
+  class, 44 of 52 rounds had a median below 400 ns and the other 8 had a
+  median above 830 ns. The fastest round alone hides that difference.
 
 - **Buffers from a pool.** `Buffer.from()` of a short string, and
   `Buffer.allocUnsafe()` of a few bytes, take their bytes from a pool of

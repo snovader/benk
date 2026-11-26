@@ -8,9 +8,11 @@ import {
     parseOptions,
     type BenchOptions
 } from '#source/core/command-line';
+import { measureGroups } from '#source/core/measure';
 import { formatJson } from '#source/core/report';
 import type { Group, RunResult, Runtime } from '#source/core/types';
 import { D8Runtime } from './runtime.ts';
+import { D8_TRACED_RUN } from './traced-run.ts';
 
 // The globals of d8 that `bench()` reads, which aren't in any of
 // TypeScript's libraries
@@ -93,18 +95,18 @@ export async function bench(
         );
     }
     const runtime = options.runtime ?? new D8Runtime();
+    const run = { ...command, heap: command.heap && countsBytes(runtime) };
+    if (Object.hasOwn(globalThis, Symbol.for(D8_TRACED_RUN))) {
+        return measureGroups(groups, run, runtime);
+    }
+
     const toStdout = json === '-';
     const printLine = options.print ?? (toStdout ? printErr : print);
     if (json != null && !toStdout) {
         checkFile(json);
     }
 
-    const result = await measureAndPrint(
-        groups,
-        { ...command, heap: command.heap && countsBytes(runtime) },
-        runtime,
-        printLine
-    );
+    const result = await measureAndPrint(groups, run, runtime, printLine);
 
     if (toStdout) {
         (options.write ?? write)(formatJson(result));

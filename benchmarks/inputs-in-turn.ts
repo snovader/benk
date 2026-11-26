@@ -12,8 +12,12 @@ const SIZE = 1000;
 const TURNS = 4;
 
 function floats(size: number): Float64Array[] {
+    // first() must return a fraction for every array, including the constant
+    // input: V8 can keep sin(0) as a small integer without boxing it.
     return Array.from({ length: TURNS }, (_unused, turn) =>
-        Float64Array.from({ length: size }, (_value, i) => Math.sin(i + turn))
+        Float64Array.from({ length: size }, (_value, i) =>
+            Math.sin(i + turn + 1)
+        )
     );
 }
 
