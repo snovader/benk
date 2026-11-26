@@ -278,6 +278,52 @@ calls cause, which the median includes, and the spread shows how much it
 varies. A call that allocates a typed array allocates in its buffer, as
 [Array buffers outside the heap](#array-buffers-outside-the-heap) measures.
 
+### The collection after the counts
+
+benk counts a group's bytes after its timed rounds, and before the next
+group's first call. Each sample has a `GCProfiler` of its own. Node's
+`GCProfiler.stop()` returns the statistics, but leaves the profiler's
+callbacks registered until V8 collects the profiler. Until then, each of
+them reads V8's statistics in every collection. A profiler whose sample saw
+two scavenges is in V8's old generation, which only a full collection
+collects.
+
+So the counts would slow the next groups' allocating calls, until a full
+collection came, in some processes and not in others. After a group's
+counts, if a sample saw a collection, benk runs a full collection itself.
+That removes the profilers, and takes a few milliseconds.
+`--no-heap` leaves out both the counts and the collection.
+
+On an Apple M2 Pro, with a load average of 4 to 5, 20 processes of each kind
+timed four groups of allocating calls, in turn: without the collection,
+with it, and with `--no-heap`. The first variant of each
+group built 100 small objects, in groups 1, 2 and 4, or a string of 200
+characters, in group 3. These are the medians of the 20 processes' median
+rounds of each first variant:
+
+| Node         | Run         | Group 1 | Group 2 | Group 3  | Group 4 |
+| ------------ | ----------- | ------- | ------- | -------- | ------- |
+| 24.22.3      | without it  | 341 ns  | 726 ns  | 1,438 ns | 344 ns  |
+|              | with it     | 340 ns  | 271 ns  | 782 ns   | 277 ns  |
+|              | `--no-heap` | 341 ns  | 275 ns  | 775 ns   | 278 ns  |
+| 26.13.0      | without it  | 334 ns  | 725 ns  | 1,295 ns | 349 ns  |
+|              | with it     | 332 ns  | 296 ns  | 676 ns   | 293 ns  |
+|              | `--no-heap` | 334 ns  | 296 ns  | 676 ns   | 293 ns  |
+| 27.0.0-alpha | without it  | 319 ns  | 777 ns  | 1,322 ns | 818 ns  |
+|              | with it     | 319 ns  | 292 ns  | 671 ns   | 281 ns  |
+|              | `--no-heap` | 315 ns  | 287 ns  | 667 ns   | 283 ns  |
+
+Without it, groups 2 and 3 took more than 1.3 times as long as with
+`--no-heap` in 119 of the 120 processes of the three versions, and group 4
+in all of Node 27's and 3 of Node 24's. With it, none did. The heap bytes didn't change,
+beyond the few bytes that they vary by between processes.
+
+A run took 0.80–0.82 s with the collection, 1.09–1.37 s without it, and
+0.56–0.57 s with `--no-heap`: the profilers slowed the counts too. The
+collection itself paused for 1.2–1.9 ms in these runs, with about 5 MB
+alive. It takes longer as more is alive: 17 ms with 73 MB, and 52 ms with
+210 MB, in Node 26.13.0.
+
 ## JSON results
 
 `--json` writes a `RunResult`, whose types `benk` exports:
@@ -1047,6 +1093,12 @@ heap bytes with `node:v8`, which Workers and browsers don't allow. It counts
 array buffers' bytes with `process.memoryUsage()`. A runtime without
 `arrayBuffers` counts none, as the runtime below. The `runtime` option takes
 another `Runtime`, such as one with a fake clock for a test.
+
+A meter can have a `release()` method. benk calls it after a group's
+counts, before anything else runs, to undo what the counts left in the
+process. Node's meters run a full collection there, as
+[The collection after the counts](#the-collection-after-the-counts)
+describes.
 
 benk has runtimes for Node, and for d8, as [d8](#d8) describes. A script
 for another runtime passes its own, and imports `benk/core` rather than

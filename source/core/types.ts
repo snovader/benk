@@ -84,6 +84,13 @@ export interface HeapMeter {
      * bytes allocated since, whether or not they were collected meanwhile
      */
     start(): () => number;
+    /**
+     * Undoes what the counts left in the process that would change the time
+     * of later calls, as Node's stopped GC profilers do. The core calls it
+     * after a group's counts, before anything else runs. A meter whose counts
+     * leave nothing behind has none.
+     */
+    release?(): void;
 }
 
 /**
@@ -104,6 +111,8 @@ export interface ArrayBufferMeter {
      * garbage collection frees them
      */
     start(): () => number | null;
+    /** Undoes what the counts left in the process, as `HeapMeter`'s does */
+    release?(): void;
 }
 
 /**

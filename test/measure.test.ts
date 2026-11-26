@@ -547,4 +547,86 @@ describe('measureGroups', () => {
 
         expect(JSON.parse(formatJson(result))).toStrictEqual(result);
     });
+
+    describe('releasing the meters', () => {
+        /** The meters' releases before each call of the variant, as `heap/buffers` */
+        function recording(runtime: FakeRuntime, seen: Set<string>): SyncVariant {
+            return {
+                name: 'a',
+                run: () => {
+                    runtime.clock.spend(50);
+                    runtime.fakeHeap.allocate(48);
+                    seen.add(
+                        `${runtime.fakeHeap.releases()}/${runtime.fakeArrayBuffers.releases()}`
+                    );
+                }
+            };
+        }
+
+        it('releases them after the counts of each group, before the first call of the next', async () => {
+            const runtime = new FakeRuntime();
+            const first = new Set<string>();
+            const second = new Set<string>();
+
+            const result = await measureGroups(
+                [
+                    { name: 'first', variants: [recording(runtime, first)] },
+                    { name: 'second', variants: [recording(runtime, second)] }
+                ],
+                { ...QUICK, runtime }
+            );
+
+            // The first group's calls, its counts' too, run before any release
+            expect([...first]).toStrictEqual(['0/0']);
+            expect([...second]).toStrictEqual(['1/1']);
+            expect([
+                runtime.fakeHeap.releases(),
+                runtime.fakeArrayBuffers.releases()
+            ]).toStrictEqual([2, 2]);
+            expect(
+                result.groups.flatMap(group => group.variants.map(v => v.heapBytes))
+            ).toStrictEqual([48, 48, 48, 48]);
+        });
+
+        it('releases them when a call throws during the counts', async () => {
+            const runtime = new FakeRuntime();
+            let counting = false;
+            const throws: SyncVariant = {
+                name: 'throws',
+                run: () => {
+                    runtime.clock.spend(50);
+                    if (counting) {
+                        throw new Error('during the counts');
+                    }
+                }
+            };
+
+            const measurement = measureGroups([{ name: 'group', variants: [throws] }], {
+                ...QUICK,
+                runtime,
+                onRounds: (_group, rounds) => (counting = rounds === 'done')
+            });
+
+            await expect(measurement).rejects.toThrow(/"throws" of group "group" threw/);
+            expect([
+                runtime.fakeHeap.releases(),
+                runtime.fakeArrayBuffers.releases()
+            ]).toStrictEqual([1, 1]);
+        });
+
+        it('leaves them alone when the run counts no bytes', async () => {
+            const runtime = new FakeRuntime();
+
+            await measureGroups([{ name: 'group', variants: [runtime.variant('a', 50, 48)] }], {
+                ...QUICK,
+                heap: false,
+                runtime
+            });
+
+            expect([
+                runtime.fakeHeap.releases(),
+                runtime.fakeArrayBuffers.releases()
+            ]).toStrictEqual([0, 0]);
+        });
+    });
 });

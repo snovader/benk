@@ -154,7 +154,9 @@ export async function measureGroups(
  * Then it counts the bytes that each variant's calls allocate on the heap,
  * and in array buffers outside it, with the same timer loops, in samples
  * apart from the timed rounds, and compares each variant with the first, as
- * `VariantResult` describes.
+ * `VariantResult` describes. After the counts, the meters release what they
+ * left in the process, as `HeapMeter.release()` describes, so that the time
+ * of what runs next doesn't depend on them.
  *
  * It calls `onRounds` before the first timed round and after the last, as
  * `RunOptions` describes.
@@ -195,17 +197,23 @@ export async function measureGroup(
     const arrayBuffers = options.heap ? runtime.arrayBuffers : undefined;
 
     const measured: Measured[] = [];
-    for (const [i, variant] of variants.entries()) {
-        measured.push({
-            variant,
-            samples: samples[i],
-            positions: positions[i],
-            summary: summarize(samples[i]),
-            heapBytes: (await heap?.bytesPerCall(variant)) ?? null,
-            arrayBufferBytes: arrayBuffers
-                ? await arrayBufferBytesPerCall(arrayBuffers, variant)
-                : null
-        });
+    try {
+        for (const [i, variant] of variants.entries()) {
+            measured.push({
+                variant,
+                samples: samples[i],
+                positions: positions[i],
+                summary: summarize(samples[i]),
+                heapBytes: (await heap?.bytesPerCall(variant)) ?? null,
+                arrayBufferBytes: arrayBuffers
+                    ? await arrayBufferBytesPerCall(arrayBuffers, variant)
+                    : null
+            });
+        }
+    } finally {
+        if (options.heap) {
+            releaseMeters(runtime);
+        }
     }
 
     const { lead, reason } = chooseLead(group.lead ?? 'auto', measured);
@@ -220,6 +228,18 @@ export async function measureGroup(
             variantResult(variant, measured[0], lead)
         )
     };
+}
+
+/**
+ * Lets the runtime's meters undo what a group's counts left in the process,
+ * before anything else runs, also when a variant threw during them. In Node,
+ * the counts' stopped GC profilers keep reading V8's statistics in each
+ * collection until a full one, after which the next group's allocating
+ * calls took up to 2.9 times as long, as the README measures.
+ */
+function releaseMeters(runtime: Runtime): void {
+    runtime.heap?.release?.();
+    runtime.arrayBuffers?.release?.();
 }
 
 /**

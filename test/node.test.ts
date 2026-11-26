@@ -1,10 +1,22 @@
 // Node's own runtime, with its compiled timer loops and V8's heap statistics.
 // Times vary, so these check only what doesn't.
+import { GCProfiler } from 'node:v8';
+import { runInNewContext } from 'node:vm';
 import { describe, expect, it } from 'hypotes';
 import { bench, measureGroup, NodeRuntime } from 'benk';
 import { expectPresent } from './expectations.ts';
 
 const QUICK = { sampleTime: 0.2, warmupRounds: 2, rounds: 6 };
+
+/** The full collections that V8 ran during a call, as a `GCProfiler` sees them */
+function fullCollectionsDuring(call: () => void): number {
+    const profiler = new GCProfiler();
+    profiler.start();
+    call();
+    const { statistics } = profiler.stop();
+
+    return statistics.filter(({ gcType }) => gcType === 'MarkSweepCompact').length;
+}
 
 /** What the runtime records of benk's own loading: its source, or its bundle */
 const LOADED = [
@@ -99,6 +111,25 @@ describe('NodeRuntime', () => {
         ]);
         // By their bytes, if not by their time
         expect(result.lead).toBe('median');
+    });
+
+    it('runs a full collection after counts that saw a collection, without exposing gc', () => {
+        const { heap } = new NodeRuntime();
+        const exposed = runInNewContext('typeof gc');
+
+        // Arrays of about 80 MB, over which V8 scavenges several times
+        const stop = heap.start();
+        let kept: number[] = [];
+        for (let i = 0; i < 10_000; i++) {
+            kept = new Array<number>(1000).fill(i);
+        }
+        stop();
+
+        expect(fullCollectionsDuring(() => heap.release?.())).toBe(1);
+        // The profilers are collected, and no count has run since
+        expect(fullCollectionsDuring(() => heap.release?.())).toBe(0);
+        expect(runInNewContext('typeof gc')).toBe(exposed);
+        expect(kept[999]).toBe(9999);
     });
 
     it('prints what it knows of the process in the description of a run', async () => {

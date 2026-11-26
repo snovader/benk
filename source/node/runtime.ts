@@ -4,7 +4,13 @@
 // need a runtime of their own.
 import { cpus } from 'node:os';
 import { setTimeout as wait } from 'node:timers/promises';
-import { getHeapStatistics, GCProfiler, type GCProfilerResult } from 'node:v8';
+import {
+    getHeapStatistics,
+    setFlagsFromString,
+    GCProfiler,
+    type GCProfilerResult
+} from 'node:v8';
+import { runInNewContext } from 'node:vm';
 import { asyncTimerSource, timerSource } from '#source/core/timer-source';
 import type {
     ArrayBufferMeter,
@@ -68,10 +74,14 @@ let timers = 0;
  * bytes of array buffers with Node's
  */
 export class NodeRuntime implements Runtime {
-    readonly heap: HeapMeter = { start: startCounting };
+    readonly heap: HeapMeter = {
+        start: startCounting,
+        release: collectProfilers
+    };
     readonly arrayBuffers: ArrayBufferMeter = {
         settle,
-        start: startCountingBuffers
+        start: startCountingBuffers,
+        release: collectProfilers
     };
 
     /** Node's version and flags, and what benk set in the process */
@@ -104,13 +114,12 @@ export class NodeRuntime implements Runtime {
  * than 64 bytes outside its heap, so they're left out.
  */
 function startCounting(): () => number {
-    const profiler = new GCProfiler();
-    profiler.start();
+    const stopProfiler = startProfiler();
     const before = getHeapStatistics().used_heap_size;
 
     return () => {
         const after = getHeapStatistics().used_heap_size;
-        return after - before + freedBytes(profiler.stop());
+        return after - before + freedBytes(stopProfiler());
     };
 }
 
@@ -140,19 +149,106 @@ function settle(): Promise<void> {
  * one meanwhile.
  */
 function startCountingBuffers(): () => number | null {
-    const profiler = new GCProfiler();
-    profiler.start();
+    const stopProfiler = startProfiler();
     const before = process.memoryUsage().arrayBuffers;
 
     return () => {
         const after = process.memoryUsage().arrayBuffers;
-        const { statistics } = profiler.stop();
+        const statistics = stopProfiler();
 
         return statistics.length > 0 || after < before ? null : after - before;
     };
 }
 
-function freedBytes({ statistics }: GCProfilerResult): number {
+type GCStatistics = GCProfilerResult['statistics'];
+
+/**
+ * Whether a GC profiler that a count started saw a collection, since
+ * `collectProfilers()` last ran a full one.
+ *
+ * `GCProfiler.stop()` returns a profiler's statistics, but leaves its
+ * callbacks registered with V8 until the profiler itself is collected, in
+ * Node 24, 26 and 27. In each collection until then, each of them reads V8's
+ * statistics and appends them to its JSON. A profiler that saw no collection
+ * is in V8's young generation, and the next scavenge collects it. One whose
+ * sample saw two scavenges is in the old generation, which only a full
+ * collection collects, and a sample of a call that allocates sees several.
+ * So without a full collection, the next group's allocating calls collect
+ * more slowly. On an Apple M2 Pro, after 100 such profilers, a call that
+ * allocated 100 small objects took 2,600 to 3,000 ns rather than 330, in
+ * Node 24.22.3, 26.13.0 and 27.0.0-alpha, and 250 after a full collection.
+ * One profiler slowed it by 3 to 6%, 2 by 8 to 17%, and 5 by 24 to 32%, in 3
+ * runs each in Node 26.13.0.
+ *
+ * Neither a profiler for all of a group's samples, nor V8's count of the
+ * bytes allocated, can replace one for each sample. The first leaves one
+ * profiler, and can't tell which sample a collection fell in. Node 26's
+ * `total_allocated_bytes` counts each of V8's allocation areas whole when it
+ * starts it, which made a call of 16 bytes count 18 to 2,875, and Node 24
+ * hasn't got it.
+ */
+let profilersToCollect = false;
+
+/**
+ * Starts a GC profiler, and returns the function that stops it and returns
+ * the statistics of each collection that it saw
+ */
+function startProfiler(): () => GCStatistics {
+    const profiler = new GCProfiler();
+    profiler.start();
+
+    return () => {
+        const { statistics } = profiler.stop();
+        if (statistics.length > 0) {
+            profilersToCollect = true;
+        }
+
+        return statistics;
+    };
+}
+
+/** V8's `gc()`, once `collectProfilers()` needs it */
+let gc: (() => void) | undefined;
+
+/**
+ * Runs a full collection, if a count's GC profiler saw a collection, which
+ * collects the profilers and removes their callbacks. A group whose samples
+ * saw none leaves the heap as it is for the next. With it, the groups after
+ * the first took as long as with `--no-heap`, in Node 24, 26 and 27, as the
+ * README measures. On an Apple M2 Pro, it paused for 1.2 to 1.9 ms with
+ * about 5 MB alive, and 52 ms with 210 MB, and left the size of V8's young
+ * generation as it was.
+ */
+function collectProfilers(): void {
+    if (profilersToCollect) {
+        profilersToCollect = false;
+        gc ??= exposedGc();
+        gc();
+    }
+}
+
+/**
+ * V8's `gc()`, which runs a full collection: the process's own, where Node
+ * started with `--expose-gc`, or else one of a context of its own, which
+ * benk creates with the flag, and then turns it off again, so that the
+ * contexts that the process creates later don't get one
+ */
+function exposedGc(): () => void {
+    const processGc = globalThis.gc;
+    if (processGc != null) {
+        return () => {
+            processGc();
+        };
+    }
+
+    setFlagsFromString('--expose-gc');
+    const contextGc = runInNewContext('gc') as () => void;
+    setFlagsFromString('--no-expose-gc');
+
+    return contextGc;
+}
+
+function freedBytes(statistics: GCStatistics): number {
     let freed = 0;
     for (const { beforeGC, afterGC } of statistics) {
         freed +=
