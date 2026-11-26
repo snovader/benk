@@ -247,7 +247,7 @@ export function formatProcesses({ runs, groups }: Processes): string[] {
  * A group's table of ratios in each process: its name and lead, a row for
  * each variant, and notes for a variant whose intervals of two processes
  * are apart, whose ratios lie on both sides of 1, or whose median is no
- * further from 1 than the A/A copy's ratios
+ * further from 1 than the A/A copy's median
  */
 function formatGroupAcrossProcesses({
     name,
@@ -359,27 +359,29 @@ function formatBothSides(
 
 /**
  * A note for a variant whose median ratio is no further from 1, as a
- * factor either way, than the A/A copy's ratio in some process: it differs
- * from the reference by no more than the reference differed from itself. A
- * median that prints as 1.00 shows no difference to explain, and gets none.
+ * factor either way, than the A/A copy's median: it differs from the
+ * reference by no more than the reference's copy does in the median
+ * process, which is what the measurement gives code that doesn't differ. It
+ * compares the medians, like with like, rather than the variant's median
+ * with the A/A copy's furthest ratio: one process whose A/A ratio lay far
+ * from 1 would then dismiss a variant that differed alike in every process,
+ * and more often the more processes there are. A median that prints as 1.00
+ * shows no difference to explain, and gets none.
  */
 function formatWithinAA(
     { name, role, median }: VariantAcrossProcesses,
     aa: VariantAcrossProcesses
 ): string[] {
-    const reach = Math.max(
-        ...aa.ratios.map(ratio => Math.abs(Math.log(ratio)))
-    );
     if (
         role !== 'variant' ||
         printedRatio(median) === 1 ||
-        !(Math.abs(Math.log(median)) <= reach)
+        !(Math.abs(Math.log(median)) <= Math.abs(Math.log(aa.median)))
     ) {
         return [];
     }
 
     return [
-        `  ${name}: median ${formatRatio(median)}×, no further from 1 than the A/A copy's ratios, ${formatInterval(aa.range)}`
+        `  ${name}: median ${formatRatio(median)}×, no further from 1 than the A/A copy's median, ${formatRatio(aa.median)}×`
     ];
 }
 

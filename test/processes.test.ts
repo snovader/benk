@@ -264,18 +264,18 @@ describe('formatProcesses', () => {
         ).toStrictEqual([]);
     });
 
-    it("notes a variant whose median is no further from 1 than the A/A copy's ratios", () => {
+    it("notes a variant whose median is no further from 1 than the A/A copy's median", () => {
         const reference = across('base', 'reference', [1, 1, 1]);
-        const aa = across('base A/A', 'aa', [0.97, 1, 1.03], 0.05);
+        const aa = across('base A/A', 'aa', [1.02, 1.03, 1.04], 0.05);
         const variant = (ratios: number[]): VariantAcrossProcesses =>
             across('reduce', 'variant', ratios, 0.05);
 
         expect(notesOf(processesOf([reference, variant([1.02, 1.03, 1.01]), aa]))).toStrictEqual([
-            "  reduce: median 1.02×, no further from 1 than the A/A copy's ratios, 0.97–1.03"
+            "  reduce: median 1.02×, no further from 1 than the A/A copy's median, 1.03×"
         ]);
-        // Below 1 by a factor within the A/A copy's reach above it
+        // Below 1 by a factor within the A/A copy's median above it
         expect(notesOf(processesOf([reference, variant([0.975, 0.98, 0.985]), aa]))).toStrictEqual([
-            "  reduce: median 0.98×, no further from 1 than the A/A copy's ratios, 0.97–1.03"
+            "  reduce: median 0.98×, no further from 1 than the A/A copy's median, 1.03×"
         ]);
         // Further from 1
         expect(notesOf(processesOf([reference, variant([1.05, 1.06, 1.04]), aa]))).toStrictEqual(
@@ -287,5 +287,20 @@ describe('formatProcesses', () => {
         );
         // Without an A/A copy
         expect(notesOf(processesOf([reference, variant([1.02, 1.03, 1.01])]))).toStrictEqual([]);
+    });
+
+    it("doesn't note a variant that differs alike in every process, for one A/A ratio far from 1", () => {
+        const notes = notesOf(
+            processesOf([
+                across('base', 'reference', [1, 1, 1, 1, 1]),
+                across('reduce', 'variant', [1.03, 1.03, 1.03, 1.03, 1.03], 0.005),
+                across('base A/A', 'aa', [1, 1, 1, 1.04, 1], 0.005)
+            ])
+        );
+
+        // The A/A copy's own process effect, but nothing of reduce
+        expect(notes).toStrictEqual([
+            "  base A/A: the intervals of processes 1 and 4 don't overlap, 0.99–1.00 and 1.03–1.05"
+        ]);
     });
 });
