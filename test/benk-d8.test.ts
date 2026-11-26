@@ -507,7 +507,21 @@ describe.runIf(version)('benk-d8 in d8', () => {
         expect(reportOf(stderr)[0]).toMatch(/^V8 report of /);
     });
 
-    it("runs the script in d8 in each process, and prints each variant's ratio in each", async () => {
+    it('accepts --processes 1 with a bundle made before the option existed', async () => {
+        const { status, stdout, stderr } = await runCommand([
+            D8_BUNDLE,
+            '--',
+            ...QUICK,
+            '--processes=1',
+            '--json',
+            '-'
+        ]);
+
+        expect(status, stderr).toBe(0);
+        expect((JSON.parse(stdout) as { schema: number }).schema).toBe(3);
+    });
+
+    it('asks for a rebuilt bundle before aggregating a different result schema', async () => {
         const { status, stdout, stderr } = await runCommand([
             D8_BUNDLE,
             '--',
@@ -517,13 +531,35 @@ describe.runIf(version)('benk-d8 in d8', () => {
             '--json',
             '-'
         ]);
-        const result = JSON.parse(stdout) as RunResult;
 
-        expect(status, stderr).toBe(0);
-        expect(result.runtime.name).toBe('d8');
-        expect(result.processes?.runs).toHaveLength(1);
-        expect(result.processes?.groups.map(group => group.name)).toStrictEqual(['sums']);
-        expect(stderr).toMatch(/\nsums: 2 processes, by the (fastest|median) round\n/);
+        expect(status).toBe(1);
+        expect(stderr).toContain('write result schema 6, got 3: rebuild the script');
+        expect(stdout).toBe('');
+    });
+
+    it('summarizes the current d8 bundle with a trailing option terminator', async () => {
+        await inDirectory(async directory => {
+            const script = await writeBuffersScript(directory);
+            const { status, stdout, stderr } = await runCommand([
+                script,
+                '--',
+                ...QUICK,
+                '--processes',
+                '2',
+                '--json',
+                '-',
+                '--'
+            ]);
+
+            expect(status, stderr).toBe(0);
+            const result = JSON.parse(stdout) as RunResult;
+            expect(result.schema).toBe(6);
+            expect(result.v8Report).toBeNull();
+            expect(result.runtime.name).toBe('d8');
+            expect(result.processes?.runs).toHaveLength(1);
+            expect(result.processes?.groups.map(group => group.name)).toStrictEqual(['buffers']);
+            expect(stderr).toMatch(/\nbuffers: 2 processes, by the (fastest|median) round\n/);
+        });
     });
 
     it('counts array buffers with the flags of d8 that the count needs, and reports with them', async () => {

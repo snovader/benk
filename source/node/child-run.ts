@@ -20,6 +20,11 @@ import { join } from 'node:path';
  */
 const PARENT = 'BENK_PARENT_PID';
 
+/** Markers for a traced run and for a run that records each call's results */
+export const TRACED_RUN = 'BENK_TRACED_RUN';
+export const PROCESS_RUN = 'BENK_PROCESS_RUN';
+type RunMarker = typeof TRACED_RUN | typeof PROCESS_RUN;
+
 /** A run of a script in a child Node process */
 export interface ChildRun {
     /** What the run is, as an error names it: `the traced run of bench.ts` */
@@ -27,7 +32,7 @@ export interface ChildRun {
     /** Node's arguments: its flags, then the script and its arguments */
     readonly args: readonly string[];
     /** The environment variable that marks the run, and its value */
-    readonly mark: readonly [variable: string, value: string];
+    readonly mark: readonly [variable: RunMarker, value: string];
     /** Whether to collect what the child writes to stdout, or to drop it */
     readonly stdout: 'collect' | 'drop';
 }
@@ -49,6 +54,10 @@ export function runChild({
         const child = spawn(process.execPath, args, {
             env: {
                 ...process.env,
+                // A grandchild can start its own run with a new parent pid.
+                // Only the marker for that run belongs to the new child.
+                [TRACED_RUN]: undefined,
+                [PROCESS_RUN]: undefined,
                 [variable]: value,
                 [PARENT]: String(process.pid)
             },
@@ -83,7 +92,7 @@ export function runChild({
  * The value of a child run's variable, if this process is that run, or else
  * undefined: if the process that `runChild()` started was this one's parent
  */
-export function childRunValue(variable: string): string | undefined {
+export function childRunValue(variable: RunMarker): string | undefined {
     const parent = process.env[PARENT];
     if (!parent || Number(parent) !== process.ppid) {
         return undefined;

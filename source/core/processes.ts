@@ -78,15 +78,20 @@ function variantAcrossProcesses(
 ): VariantAcrossProcesses {
     const { name, role } = groups[0].variants[index];
     const ratios = groups.map(group => ratioIn(group, index, lead));
-    const sorted = sortedCopy(ratios);
+    const sorted = ratios.every(ratio => ratio != null)
+        ? sortedCopy(ratios)
+        : null;
 
     return {
         name,
         role,
         ratios,
         intervals: groups.map(group => group.variants[index].interval),
-        median: sorted.length < MEDIAN_PROCESSES ? null : quantile(sorted, 0.5),
-        range: [sorted[0], sorted[sorted.length - 1]]
+        median:
+            sorted != null && sorted.length >= MEDIAN_PROCESSES
+                ? quantile(sorted, 0.5)
+                : null,
+        range: sorted == null ? null : [sorted[0], sorted[sorted.length - 1]]
     };
 }
 
@@ -94,7 +99,7 @@ function variantAcrossProcesses(
  * A variant's ratio in a process by a lead: its own ratio, where the
  * process's group leads with it, or else from the process's rounds
  */
-function ratioIn(group: GroupResult, index: number, lead: Lead): number {
+function ratioIn(group: GroupResult, index: number, lead: Lead): number | null {
     const variant = group.variants[index];
     if (group.lead === lead || variant.role === 'reference') {
         return variant.ratio;

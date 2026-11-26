@@ -12,7 +12,8 @@ import {
     childRunValue,
     inTemporaryDirectory,
     isMissing,
-    runChild
+    runChild,
+    TRACED_RUN
 } from './child-run.ts';
 import {
     readSourceMapFile,
@@ -33,14 +34,6 @@ import {
     type FunctionAddress,
     type LoggedFunction
 } from './v8-trace.ts';
-
-/**
- * The environment variable that marks the traced run in Node. `bench()`
- * measures in it as in any other run, so that V8 sees the same calls, but prints
- * nothing, writes no JSON, and doesn't run the script again for
- * `--v8-report`. It then records the source maps of the run's scripts.
- */
-export const TRACED_RUN = 'BENK_TRACED_RUN';
 
 /**
  * V8's flags of the traced run, in Node and in d8. The traces go to stdout,

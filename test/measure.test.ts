@@ -35,13 +35,28 @@ describe('measureGroup', () => {
             expect(samples).toHaveLength(result.rounds);
             expectClose(summary.fastest, time);
             expectClose(summary.median, time);
-            expectClose(variantNamed(result, name).ratio, ratio);
+            expectClose(expectPresent(variantNamed(result, name).ratio), ratio);
         }
 
         const interval = expectPresent(variantNamed(result, 'b').interval);
         expectClose(interval[0], 2);
         expectClose(interval[1], 2);
         expect(variantNamed(result, 'a').interval).toBeNull();
+    });
+
+    it('leaves the ratio and interval missing when the reference reads zero', async () => {
+        const runtime = new FakeRuntime({ clockTick: 100 });
+        const {
+            variants: [reference, other]
+        } = await measureGroup(
+            { name: 'calls', variants: [runtime.variant('a', 20), runtime.variant('b', 100)] },
+            { ...QUICK, sampleTime: 0.00001, aa: false, heap: false, runtime }
+        );
+
+        expect(reference.summary.fastest).toBe(0);
+        expect(reference.ratio).toBe(1);
+        expect(other.ratio).toBeNull();
+        expect(other.interval).toBeNull();
     });
 
     it.prop([fc.integer({ min: 1, max: 6 }), fc.integer({ min: 1, max: 40 }), fc.boolean()], {
@@ -154,7 +169,7 @@ describe('measureGroup', () => {
         expect(async.async).toBe(true);
         expect(variantNamed(result, 'sync').async).toBe(false);
         expectClose(async.summary.median, 120);
-        expectClose(async.ratio, 3);
+        expectClose(expectPresent(async.ratio), 3);
         expect(pending).toBe(0);
     });
 
@@ -486,9 +501,9 @@ describe('measureGroup', () => {
             );
 
             expect([fastest.lead, fastest.leadReason]).toStrictEqual(['fastest', 'set']);
-            expectClose(variantNamed(fastest, 'alternating').ratio, 1);
+            expectClose(expectPresent(variantNamed(fastest, 'alternating').ratio), 1);
             // The slower of the two middle ratios of 1 and 3, half each
-            expectClose(variantNamed(median, 'alternating').ratio, 3);
+            expectClose(expectPresent(variantNamed(median, 'alternating').ratio), 3);
 
             const alternated = variantNamed(median, 'alternating');
             const modes = expectPresent(alternated.summary.modes);
@@ -525,7 +540,7 @@ describe('measureGroups', () => {
 
         expect(reported).toStrictEqual(['banana', 'blueberry']);
         expect(result.groups.map(group => group.name)).toStrictEqual(['banana', 'blueberry']);
-        expect(result.schema).toBe(5);
+        expect(result.schema).toBe(6);
         expect(result.v8Report).toBeNull();
         expect(result.runtime).toBe(runtime.description);
         expect(result.options).toStrictEqual({

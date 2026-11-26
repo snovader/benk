@@ -220,13 +220,15 @@ Per call of each variant:
 - **ratio**: the ratio to the reference, by the statistic that the group
   leads with: the fastest round's to the reference's fastest, or the median
   of the ratios of each round's time to the reference's in the same round.
+  If the clock reads zero for the reference and the ratio is undefined or
+  infinite, the table shows a dash and the JSON records `null`.
 - **95% interval**: a confidence interval of the median of the per-round
   ratios, from their order statistics, which assumes nothing about the
   rounds' distribution. An interval that leaves out 1 says that the variant
   differed from the reference round by round. The A/A row's shows how wide
   an interval is when nothing differs. It's left out with fewer than 6
-  rounds. In a group that leads with the fastest round, the ratio compares
-  the fastest rounds instead, so the two are different statistics.
+  rounds or when either endpoint is unmeasurable. In a group that leads
+  with the fastest round, the ratio compares the fastest rounds instead.
 - **heap**: the bytes that a call allocated on V8's heap, from V8's heap
   statistics and a `GCProfiler`, less what a sample allocates itself. The
   median of 5 samples counts: compiling and deoptimizing allocate in some
@@ -341,9 +343,13 @@ would have printed:
 | `1` to `5`                                                                  | The ratio in each process. The first is the run whose tables are above.                                                                                                                                                                                                                                                                                                                                |
 | **median**                                                                  | The median of the ratios. Of an even count, it's the greater of the middle two, so that it's a process's ratio. With 2 processes, there's none.                                                                                                                                                                                                                                                        |
 | **range**                                                                   | The least and the greatest of the ratios.                                                                                                                                                                                                                                                                                                                                                              |
-| `the intervals of processes 1 and 3 don't overlap, 0.61–0.63 and 0.90–0.93` | Two processes' 95% intervals are apart. The ratio differed between them by more than its rounds varied within either, so one process's interval understates how much it varies. In a group that leads with the fastest round, the note starts `round by round`: the intervals are of the median of the per-round ratios, as in each process's table, and the ratios beside them of the fastest rounds. |
+| `the intervals of processes 1 and 3 don't overlap, 0.61–0.63 and 0.90–0.93` | The processes have disjoint 95% confidence intervals for their median per-round ratios. Individual rounds in the two processes can still overlap. In a group that leads with the fastest round, the note starts `round by round`: the intervals are of the median of the per-round ratios, as in each process's table, and the ratios beside them of the fastest rounds.                               |
 | `faster than for loop in 2 processes, and slower in 3`                      | The variant's ratios, as printed, lie on both sides of 1: which of the two is faster depends on the process. A ratio that prints as 1.00 is neither. An A/A copy gets no such note.                                                                                                                                                                                                                    |
 | `median 1.02×, no further from 1 than the A/A copy's median, 1.03×`         | The variant's median ratio is no further from 1 than the A/A copy's: it differs from the reference by no more than identical code does in the median process. The medians compare like with like: the A/A copy's furthest ratio, of one process, would dismiss a variant that differed alike in every process. A median that prints as 1.00 shows no difference, and gets no such note.                |
+
+If a process has no measurable ratio, its cell shows a dash. The median and
+range also show dashes because both summarize the full set of processes.
+The JSON records each missing value as `null`.
 
 The processes are few, as each runs the whole script, so benk gives their
 range rather than an interval. Like the rounds' 95% interval, the range is
@@ -425,7 +431,7 @@ them, not of every script: the option is how to check another.
 
 ```jsonc
 {
-  "schema": 5,
+  "schema": 6,
   "date": "2026-11-22T12:33:03.133Z",
   "runtime": { "name": "Node", "version": "v26.13.0", "engine": "V8 14.6.202.34-node.40",
                "platform": "darwin", "arch": "arm64", "cpu": "Apple M2 Pro", "flags": [],
@@ -983,6 +989,9 @@ npx benk-d8 bench.mjs -- --processes 5
 - d8's runs can't tell that they're repeated, so each prints its tables,
   and writes its results to a temporary file of benk-d8's, by `--json`, in
   place of the script's. Only the first run's output shows.
+- For multiple processes the bundle and benk-d8 must use the same result
+  schema. If they differ, rebuild the script with the version of benk that
+  supplies benk-d8.
 - benk-d8 then prints the tables across processes, and writes the results
   where the script's `--json` says, with the other processes'.
 - d8 writes the file at each call of `bench()`, so the results and the

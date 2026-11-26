@@ -205,12 +205,14 @@ export interface VariantResult {
     /**
      * The ratio to the reference's time by the group's lead: the fastest
      * round's to the reference's fastest, or the median of the ratios of
-     * each round's time to the reference's in the same round
+     * each round's time to the reference's in the same round. Null if the
+     * clock read zero for the reference and the ratio isn't finite.
      */
-    readonly ratio: number;
+    readonly ratio: number | null;
     /**
      * A 95% confidence interval of the median of the per-round ratios, or
-     * null for the reference itself, and with fewer than 6 rounds
+     * null for the reference, with fewer than 6 rounds, or if either end
+     * is unmeasurable
      */
     readonly interval: readonly [low: number, high: number] | null;
     /**
@@ -279,10 +281,13 @@ export interface RecordedOptions {
     readonly filter: string;
 }
 
+/** The JSON schema produced by this version of benk */
+export const RESULT_SCHEMA = 6;
+
 /** A run's results, which `JSON.stringify` writes as they are */
 export interface RunResult {
     /** The version of this format, which changes when a field does */
-    readonly schema: 5;
+    readonly schema: typeof RESULT_SCHEMA;
     /** When the run started, as an ISO 8601 string */
     readonly date: string;
     readonly runtime: RuntimeDescription;
@@ -329,9 +334,9 @@ export interface VariantAcrossProcesses {
     readonly role: Role;
     /**
      * Its ratio to the reference in each process, from the first, by the
-     * statistic that its group leads with in the first
+     * statistic that its group leads with in the first, or null if unmeasurable
      */
-    readonly ratios: readonly number[];
+    readonly ratios: ReadonlyArray<number | null>;
     /**
      * Its 95% interval in each process, as each process's `VariantResult`
      * has it, or null where one has none
@@ -341,12 +346,12 @@ export interface VariantAcrossProcesses {
     >;
     /**
      * The median of the ratios: of an even count, the greater of the middle
-     * two, so that it's a process's ratio. It's null for 2 processes, whose
-     * median would be the greater of their ratios.
+     * two, so that it's a process's ratio. Null for two processes or if
+     * any ratio is missing.
      */
     readonly median: number | null;
-    /** The least and the greatest of the ratios */
-    readonly range: readonly [low: number, high: number];
+    /** The least and the greatest of the ratios, or null if any is missing */
+    readonly range: readonly [low: number, high: number] | null;
 }
 
 /** A group's ratios in each of a run's processes */

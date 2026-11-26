@@ -75,8 +75,12 @@ export function ratioByLead(
     summary: Summary,
     reference: Summary,
     sortedRatios: ArrayLike<number>
-): number {
-    return lead === 'fastest'
-        ? summary.fastest / reference.fastest
-        : quantile(sortedRatios, 0.5);
+): number | null {
+    const ratio =
+        lead === 'fastest'
+            ? summary.fastest / reference.fastest
+            : quantile(sortedRatios, 0.5);
+
+    // A reference round shorter than one clock tick can read zero.
+    return Number.isFinite(ratio) ? ratio : null;
 }

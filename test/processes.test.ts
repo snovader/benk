@@ -18,7 +18,7 @@ import {
 } from 'benk';
 import { withProcesses } from '#source/core/processes';
 import { formatProcesses } from '#source/core/report';
-import { expectClose } from './expectations.ts';
+import { expectClose, expectPresent } from './expectations.ts';
 import { FakeRuntime } from './fake-runtime.ts';
 
 const QUICK = { rounds: 6, warmupRounds: 1, sampleTime: 0.01 };
@@ -71,7 +71,7 @@ describe('withProcesses', () => {
             const { processes } = withProcesses(first, others.map(asRun));
             const [group] = processes.groups;
             const [, other, aa] = group.variants;
-            const sorted = other.ratios.toSorted((a, b) => a - b);
+            const sorted = other.ratios.map(ratio => expectPresent(ratio)).sort((a, b) => a - b);
 
             expect(processes.runs).toStrictEqual(others.map(asRun));
             expect(group.lead).toBe(first.groups[0].lead);
@@ -82,8 +82,8 @@ describe('withProcesses', () => {
                 ['base A/A', 'aa']
             ]);
             for (const [i, nanoseconds] of times.entries()) {
-                expectClose(other.ratios[i], nanoseconds / 50);
-                expectClose(aa.ratios[i], 1);
+                expectClose(expectPresent(other.ratios[i]), nanoseconds / 50);
+                expectClose(expectPresent(aa.ratios[i]), 1);
             }
             expect(other.intervals).toStrictEqual(
                 results.map(result => result.groups[0].variants[1].interval)

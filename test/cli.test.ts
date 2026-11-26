@@ -322,11 +322,11 @@ describe('--v8-report', () => {
         });
 
         expect(code, stderr).toBe(0);
-        // A traced run for each call of bench(), and the run that the first starts
-        expect(runs).toBe(4);
-        expect((JSON.parse(spawned) as RunResult).groups.map(group => group.name)).toStrictEqual([
-            'crossing'
-        ]);
+        // Two traced runs. The first starts a benchmark that runs in two processes.
+        expect(runs).toBe(5);
+        const nested = JSON.parse(spawned) as RunResult;
+        expect(nested.processes?.runs).toHaveLength(1);
+        expect(nested.groups.map(group => group.name)).toStrictEqual(['crossing']);
     });
 });
 
@@ -378,7 +378,7 @@ describe('--v8-check', () => {
                 const position = v8?.run?.position;
                 return [name, position?.line, position?.column];
             });
-            expect(result.schema).toBe(5);
+            expect(result.schema).toBe(6);
             expect(result.v8Report?.check).toBeNull();
             expect(result.v8Report?.functions.map(fn => fn.name)).toContain('mix');
             expect(runs).toStrictEqual([
@@ -420,7 +420,7 @@ async function runProcesses(
         const path = join(directory, 'results.json');
         const run = await runScriptWithCode(
             PROCESSES,
-            [...args.map(arg => (arg === 'results.json' ? path : arg)), '--sample-ms', '0.01'],
+            ['--sample-ms', '0.01', ...args.map(arg => (arg === 'results.json' ? path : arg))],
             [],
             { ...env, PROCESSES_RUNS: counter }
         );
@@ -478,7 +478,7 @@ describe('--processes', () => {
         );
         expect(lines).toContain('  grows: faster than base in 1 process, and slower in 1');
         // The JSON is of the last call, as without the option
-        expect(result.schema).toBe(5);
+        expect(result.schema).toBe(6);
         expect(result.groups.map(group => group.name)).toStrictEqual(['crossing']);
         // Each run's own runtime, as the first's describes its own
         expect(processes.runs.map(run => run.runtime)).toStrictEqual([
@@ -490,8 +490,51 @@ describe('--processes', () => {
         expectClose(fastest[0], 50);
         expectClose(fastest[1], 75);
         for (const [i, ratio] of [0.5, 1, 1.5].entries()) {
-            expectClose(grows.ratios[i], ratio);
+            expectClose(expectPresent(grows.ratios[i]), ratio);
         }
+    });
+
+    it('shares child runs between overlapping calls and records both groups', async () => {
+        const { code, lines, stderr, runs } = await runProcesses(['--processes', '3'], {
+            PROCESSES_OVERLAP: '1'
+        });
+
+        expect(code, stderr).toBe(0);
+        expect(runs).toBe(3);
+        expect(lines).toContain('pairs: 3 processes, by the fastest round');
+        expect(lines).toContain('crossing: 3 processes, by the fastest round');
+    });
+
+    it('keeps an unresolved process ratio missing in the table and JSON', async () => {
+        const { code, lines, stderr, json } = await runProcesses(
+            [
+                '--processes',
+                '3',
+                '--sample-ms',
+                '0.00001',
+                '--no-aa',
+                '--no-heap',
+                '--json',
+                'results.json'
+            ],
+            { PROCESSES_FAULT: 'coarse' }
+        );
+
+        expect(code, stderr).toBe(0);
+        const { processes } = JSON.parse(json) as RunResult;
+        const { ratios, intervals, median, range } = expectPresent(processes).groups[0].variants[1];
+        expect(ratios[1]).toBeNull();
+        expect(intervals[1]).toBeNull();
+        expect(median).toBeNull();
+        expect(range).toBeNull();
+        expect(rowOf(lines, 'crossing: 3 processes, by the fastest round', 'grows')).toStrictEqual([
+            'grows',
+            '0.50×',
+            '–',
+            '1.50×',
+            '–',
+            '–'
+        ]);
     });
 
     it('measures in each process the groups that --filter selects', async () => {
@@ -555,7 +598,7 @@ describe('--processes', () => {
         });
 
         expect(code, stderr).toBe(0);
-        expect(runs).toBe(3);
+        expect(runs).toBe(4);
         // The second run's, of 110 ns, rather than the third's, of 120 ns
         expect(rowOf(lines, 'pairs: 2 processes, by the fastest round', 'slower')).toStrictEqual([
             'slower',

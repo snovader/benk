@@ -127,7 +127,7 @@ export async function bench(
         // Formats the tables, as the first process does between groups, and
         // drops them: the first process prints, and writes the results
         const result = await measureAndPrint(groups, command, runtime, drop);
-        await recordProcessRun(processFile, call, result);
+        recordProcessRun(processFile, call, result);
         return result;
     }
 

@@ -11,7 +11,7 @@ import { join } from 'node:path';
 import { parseOptions } from '#source/core/command-line';
 import { withProcesses } from '#source/core/processes';
 import { formatProcesses } from '#source/core/report';
-import type { RunResult } from '#source/core/types';
+import { RESULT_SCHEMA, type RunResult } from '#source/core/types';
 import { inTemporaryDirectory, isMissing } from './child-run.ts';
 import { checkDirectory, writeJson } from './json-results.ts';
 import { reportTracedRun, runTracedInD8, type D8Run } from './traced-run.ts';
@@ -32,9 +32,9 @@ interface OptionNames {
 }
 
 /** The options that benk-d8 carries out, which d8 gets none of */
-const REPORT_OPTIONS: OptionNames = {
+const WRAPPER_OPTIONS: OptionNames = {
     flags: new Set(['v8-report']),
-    values: new Set(['v8-filter'])
+    values: new Set(['v8-filter', 'processes'])
 };
 
 /**
@@ -43,8 +43,8 @@ const REPORT_OPTIONS: OptionNames = {
  * place benk-d8 names a file of its own
  */
 const PROCESS_RUN_OPTIONS: OptionNames = {
-    flags: REPORT_OPTIONS.flags,
-    values: new Set([...REPORT_OPTIONS.values, 'processes', 'json'])
+    flags: WRAPPER_OPTIONS.flags,
+    values: new Set([...WRAPPER_OPTIONS.values, 'json'])
 };
 
 /**
@@ -64,7 +64,7 @@ type D8Stdout = 'inherit' | 'stderr' | 'drop';
  *
  * 1. It reads the script's options, as `bench()` does, before d8 runs.
  * 2. It runs d8 on the script, with d8's flags, and the script's options
- *    after `--`, but for `--v8-report` and `--v8-filter`. d8 writes to this
+ *    after `--`, except for the options handled by benk-d8. d8 writes to this
  *    process's stdout and stderr. A run that fails ends benk-d8, with d8's
  *    code.
  * 3. With `--processes <n>` of more than 1, it runs d8 on the script n
@@ -106,7 +106,7 @@ export async function runD8Command(args: readonly string[]): Promise<number> {
         processes > 1
             ? await runInD8Processes(run, { processes, json, print })
             : await runD8(
-                  { ...run, args: withoutOptions(run.args, REPORT_OPTIONS) },
+                  { ...run, args: withoutOptions(run.args, WRAPPER_OPTIONS) },
                   'inherit'
               );
     if (exit !== 0 || !v8Report) {
@@ -252,9 +252,9 @@ async function runInD8Processes(
         for (let number = 1; number <= processes; number++) {
             const file = join(directory, `${number}.json`);
             const args = [
-                ...withoutOptions(run.args, PROCESS_RUN_OPTIONS),
                 '--json',
-                file
+                file,
+                ...withoutOptions(run.args, PROCESS_RUN_OPTIONS)
             ];
             const stdout =
                 number > 1 ? 'drop' : json === '-' ? 'stderr' : 'inherit';
@@ -309,7 +309,14 @@ async function readResults(file: string, name: string): Promise<RunResult> {
     }
 
     // Written by benk/d8's bench(), as `formatJson()` writes results
-    return JSON.parse(text) as RunResult;
+    const result = JSON.parse(text) as RunResult | null;
+    if (result?.schema !== RESULT_SCHEMA) {
+        throw new Error(
+            `Expected ${name} to write result schema ${RESULT_SCHEMA}, got ${result?.schema ?? 'none'}: rebuild the script with the same version of benk as benk-d8`
+        );
+    }
+
+    return result;
 }
 
 /**

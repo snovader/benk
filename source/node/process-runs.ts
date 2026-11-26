@@ -10,23 +10,17 @@
 // that each call measures in a process whose earlier calls measured as the
 // first process's did. A later call of `bench()` in the first process takes
 // its results from the same runs, rather than running the script again.
-import { readFile, writeFile } from 'node:fs/promises';
+import { appendFileSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { ProcessRun, RunResult } from '#source/core/types';
 import {
     childRunValue,
     inTemporaryDirectory,
     isMissing,
-    runChild
+    runChild,
+    PROCESS_RUN
 } from './child-run.ts';
-
-/**
- * The environment variable that marks a run of `--processes`, whose value
- * is the file to record its results in. `bench()` measures in it as in the
- * first run, but prints nothing, writes no JSON, and runs the script in no
- * other process, for `--processes` or `--v8-report`.
- */
-export const PROCESS_RUN = 'BENK_PROCESS_RUN';
 
 /**
  * The file of this run of `--processes`, or none or '' if it's no such run,
@@ -36,28 +30,29 @@ export function processRunFile(): string | undefined {
     return childRunValue(PROCESS_RUN);
 }
 
-/** The results that this run recorded, by the number of their call */
-const recorded: ProcessRun[] = [];
-
 /**
  * In a run of `--processes`, records the results of a call of `bench()` in
  * the run's file, with those of the calls before it, for the first process
  * to read once the run exits
  */
-export async function recordProcessRun(
+export function recordProcessRun(
     file: string,
     call: number,
     { date, runtime, groups }: RunResult
-): Promise<void> {
-    recorded[call] = { date, runtime, groups };
-    await writeFile(file, JSON.stringify(recorded));
+): void {
+    // One synchronous append per completed call, so overlapping calls
+    // can't interleave their records or overwrite an earlier result.
+    appendFileSync(
+        file,
+        JSON.stringify([call, { date, runtime, groups }]) + '\n'
+    );
 }
 
 /**
  * The runs in other processes so far, each with the results of its calls
- * of `bench()`, by their numbers, or null for a call that recorded none
+ * of `bench()`, by their numbers. Overlapping calls await the same child.
  */
-const runs: Array<ReadonlyArray<ProcessRun | null>> = [];
+const runs: Array<Promise<readonly ProcessRun[]>> = [];
 
 /** Which call of `bench()` `runInProcesses()` takes the results of */
 export interface ProcessesOptions {
@@ -81,23 +76,29 @@ export async function runInProcesses(
     args: readonly string[],
     { call, processes }: ProcessesOptions
 ): Promise<ProcessRun[]> {
-    while (runs.length < processes - 1) {
-        const name = processName(script, runs.length + 2, processes);
-        runs.push(await runInProcess(name, script, args));
-    }
-
-    return runs.slice(0, processes - 1).map((calls, i) => {
+    const results: ProcessRun[] = [];
+    for (let i = 0; i < processes - 1; i++) {
+        const name = processName(script, i + 2, processes);
+        // Reserve this process before awaiting it. Each caller waits for
+        // it to finish before it can reserve the next.
+        runs[i] ??= runInProcess(name, script, args).catch(error => {
+            // This child is still the last one. A later call can retry it.
+            runs.length = i;
+            throw error;
+        });
+        const calls = await runs[i];
         const result = calls.at(call);
         if (result == null) {
-            const name = processName(script, i + 2, processes);
             const made = calls.filter(run => run != null).length;
             throw new Error(
                 `Expected ${name} to call bench() ${call + 1} times or more, as this process has, got ${made}`
             );
         }
 
-        return result;
-    });
+        results.push(result);
+    }
+
+    return results;
 }
 
 /** A run of the script in another process, as an error names it */
@@ -120,9 +121,9 @@ function runInProcess(
     name: string,
     script: string,
     args: readonly string[]
-): Promise<ReadonlyArray<ProcessRun | null>> {
+): Promise<readonly ProcessRun[]> {
     return inTemporaryDirectory(async directory => {
-        const file = join(directory, 'results.json');
+        const file = join(directory, 'results.jsonl');
         await runChild({
             name,
             args: [...process.execArgv, script, ...args],
@@ -138,9 +139,7 @@ function runInProcess(
  * The results that a run recorded, by call, or none if it recorded none,
  * as when its script didn't call `bench()`
  */
-async function readRecorded(
-    file: string
-): Promise<ReadonlyArray<ProcessRun | null>> {
+async function readRecorded(file: string): Promise<readonly ProcessRun[]> {
     let text: string;
     try {
         text = await readFile(file, 'utf8');
@@ -151,6 +150,12 @@ async function readRecorded(
         throw error;
     }
 
-    // Written by `recordProcessRun()`, which writes a missing call as null
-    return JSON.parse(text) as Array<ProcessRun | null>;
+    // Calls can finish in a different order from the one they started in.
+    const calls: ProcessRun[] = [];
+    for (const line of text.trimEnd().split('\n')) {
+        const [call, result] = JSON.parse(line) as [number, ProcessRun];
+        calls[call] = result;
+    }
+
+    return calls;
 }

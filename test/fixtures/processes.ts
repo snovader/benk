@@ -11,7 +11,8 @@
 //   more in each run after it, against `base`'s 50 ns.
 //
 // With `PROCESSES_FAULT`, the second run goes wrong: `fails` throws before
-// it measures, and `renames` measures `pairs` under another name. With
+// it measures, `coarse` uses a clock with 100 ns ticks, and `renames`
+// measures `pairs` under another name. With
 // `spawns`, the second run starts the script again after it measures, as
 // the third run, which inherits its environment, and writes its JSON to
 // `spawned.json` beside the counter.
@@ -31,9 +32,9 @@ if (fault === 'fails') {
     throw new Error('The second run fails');
 }
 
-const runtime = new FakeRuntime();
+const runtime = new FakeRuntime({ clockTick: fault === 'coarse' ? 100 : 0 });
 
-await bench(
+const pairs = bench(
     [
         {
             name: fault === 'renames' ? 'renamed' : 'pairs',
@@ -47,7 +48,11 @@ await bench(
     { runtime }
 );
 
-await bench(
+if (!process.env.PROCESSES_OVERLAP) {
+    await pairs;
+}
+
+const crossing = bench(
     [
         {
             name: 'crossing',
@@ -60,6 +65,8 @@ await bench(
     { runtime }
 );
 
+await Promise.all([pairs, crossing]);
+
 if (fault === 'spawns') {
     spawnSync(
         process.execPath,
@@ -69,6 +76,8 @@ if (fault === 'spawns') {
             '--import',
             '@snovader/node-hooks/register',
             process.argv[1],
+            '--processes',
+            '2',
             '--json',
             join(dirname(counter), 'spawned.json'),
             '--sample-ms',

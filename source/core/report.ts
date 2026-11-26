@@ -125,7 +125,7 @@ function formatRow(variant: VariantResult, nameWidth: number): string {
         formatTime(summary.fastest),
         formatTime(summary.median),
         `${(summary.spread * 100).toFixed(1)}%`,
-        `${formatRatio(ratio)}×`,
+        formatRatioCell(ratio),
         interval == null
             ? ''
             : `${formatRatio(interval[0])}–${formatRatio(interval[1])}`,
@@ -203,7 +203,7 @@ function formatModes({ name, summary }: VariantResult): string[] {
  * The median may then suit the group better as its lead.
  */
 function formatOutside({ name, ratio, interval }: VariantResult): string[] {
-    if (interval == null) {
+    if (ratio == null || interval == null) {
         return [];
     }
 
@@ -267,9 +267,9 @@ function formatGroupAcrossProcesses({
     const processes = Array.from({ length: count }, (_, i) =>
         String(i + 1).padStart(PROCESS_WIDTH)
     );
-    const summaries = summaryColumns(reference).map(([title, width]) =>
-        title.padStart(width)
-    );
+    const columns =
+        count === 2 ? PROCESSES_COLUMNS.slice(1) : PROCESSES_COLUMNS;
+    const summaries = columns.map(([title, width]) => title.padStart(width));
 
     return [
         '',
@@ -288,16 +288,6 @@ function formatGroupAcrossProcesses({
 }
 
 /**
- * The columns of a group's ratios after those of the processes: the median
- * and the range, or the range alone, where the ratios have no median
- */
-function summaryColumns({
-    median
-}: VariantAcrossProcesses): typeof PROCESSES_COLUMNS {
-    return median == null ? PROCESSES_COLUMNS.slice(1) : PROCESSES_COLUMNS;
-}
-
-/**
  * A variant's row of ratios in each process, with their median, if they
  * have one, and their range
  */
@@ -307,13 +297,18 @@ function formatProcessesRow(
 ): string {
     const [[, medianWidth], [, rangeWidth]] = PROCESSES_COLUMNS;
     const cells = [
-        ...ratios.map(ratio =>
-            padCell(`${formatRatio(ratio)}×`, PROCESS_WIDTH)
-        ),
-        ...(median == null
+        ...ratios.map(ratio => padCell(formatRatioCell(ratio), PROCESS_WIDTH)),
+        ...(ratios.length === 2
             ? []
-            : [padCell(`${formatRatio(median)}×`, medianWidth)]),
-        padCell(role === 'reference' ? '' : formatInterval(range), rangeWidth)
+            : [padCell(formatRatioCell(median), medianWidth)]),
+        padCell(
+            role === 'reference'
+                ? ''
+                : range == null
+                  ? '–'
+                  : formatInterval(range),
+            rangeWidth
+        )
     ];
 
     // The reference's range is empty, and ends its row
@@ -352,9 +347,8 @@ function formatList(numbers: readonly number[]): string {
 
 /**
  * A note for a variant whose 95% intervals of two processes don't overlap:
- * its ratio differed between them by more than its rounds varied within
- * either, so that the interval of one process understates how much the
- * ratio varies between runs. It names the interval of the lowest end, and
+ * the two estimates of the median have disjoint confidence intervals.
+ * It names the interval of the lowest end, and
  * the interval of the highest start, which are apart if any two are.
  *
  * An interval is of the median of the per-round ratios. In a group that
@@ -403,7 +397,9 @@ function formatBothSides(
     { name, role, ratios }: VariantAcrossProcesses,
     reference: string
 ): string[] {
-    const printed = ratios.map(printedRatio);
+    const printed = ratios.flatMap(ratio =>
+        ratio == null ? [] : [printedRatio(ratio)]
+    );
     const faster = printed.filter(ratio => ratio < 1).length;
     const slower = printed.filter(ratio => ratio > 1).length;
     if (role !== 'variant' || faster === 0 || slower === 0) {
@@ -476,6 +472,11 @@ export function formatTime(nanoseconds: number): string {
  */
 export function formatBytes(bytes: number): string {
     return `${Math.max(0, Math.round(bytes)).toLocaleString('en-US')} B`;
+}
+
+/** A ratio as a table cell, or a dash when the clock couldn't resolve it */
+function formatRatioCell(ratio: number | null): string {
+    return ratio == null ? '–' : `${formatRatio(ratio)}×`;
 }
 
 function formatRatio(ratio: number): string {
