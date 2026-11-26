@@ -336,9 +336,10 @@ export interface VariantAcrossProcesses {
     >;
     /**
      * The median of the ratios: of an even count, the greater of the middle
-     * two, so that it's a process's ratio
+     * two, so that it's a process's ratio. It's null for 2 processes, whose
+     * median would be the greater of their ratios.
      */
-    readonly median: number;
+    readonly median: number | null;
     /** The least and the greatest of the ratios */
     readonly range: readonly [low: number, high: number];
 }

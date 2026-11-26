@@ -88,8 +88,10 @@ describe('withProcesses', () => {
             expect(other.intervals).toStrictEqual(
                 results.map(result => result.groups[0].variants[1].interval)
             );
-            // Of an even count, the greater of the middle two
-            expect(other.median).toBe(sorted[Math.floor(sorted.length / 2)]);
+            // Of an even count, the greater of the middle two, and none of 2
+            expect(other.median).toBe(
+                sorted.length < 3 ? null : sorted[Math.floor(sorted.length / 2)]
+            );
             expect(other.range).toStrictEqual([sorted[0], sorted.at(-1)]);
         }
     );
@@ -105,7 +107,7 @@ describe('withProcesses', () => {
             role: 'reference',
             ratios: [1, 1],
             intervals: [null, null],
-            median: 1,
+            median: null,
             range: [1, 1]
         });
     });
@@ -180,7 +182,7 @@ function across(
         intervals: ratios.map(ratio =>
             role === 'reference' ? null : [ratio * (1 - spread), ratio * (1 + spread)]
         ),
-        median: sorted[Math.floor(sorted.length / 2)],
+        median: sorted.length < 3 ? null : sorted[Math.floor(sorted.length / 2)],
         range: [sorted[0], sorted[sorted.length - 1]]
     };
 }
@@ -242,6 +244,27 @@ describe('formatProcesses', () => {
             '  for loop           1.00×   1.00×   1.00×    1.00×',
             '  reduce             5.09×   4.91×   5.01×    5.01×      4.91–5.09',
             '  for loop A/A       1.00×   1.00×   1.02×    1.00×      1.00–1.02'
+        ]);
+    });
+
+    it('leaves out the median of 2 processes, and says how seldom their range holds it', () => {
+        const lines = formatProcesses(
+            processesOf([
+                across('for loop', 'reference', [1, 1]),
+                across('reduce', 'variant', [5.09, 4.91], 0.05),
+                across('for loop A/A', 'aa', [1, 1.02], 0.05)
+            ])
+        );
+
+        expect(lines).toStrictEqual([
+            '',
+            "In 2 processes, the first of them the run above, and the other its repeat: each variant's ratio in each, by the statistic that its group leads with in the first, and their range. Two ratios have no median, and their range holds a process's median ratio with 50% confidence: 3 processes give 75%.",
+            '',
+            'sum: 2 processes, by the median round',
+            '                         1       2          range',
+            '  for loop           1.00×   1.00×',
+            '  reduce             5.09×   4.91×      4.91–5.09',
+            '  for loop A/A       1.00×   1.02×      1.00–1.02'
         ]);
     });
 

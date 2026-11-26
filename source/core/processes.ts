@@ -11,7 +11,8 @@
 // statistics: if the processes are alike and independent, it leaves out the
 // median of the ratio's distribution between processes with a chance of
 // 2 · 2⁻ⁿ, so it holds it with 75% confidence for 3 processes, 88% for 4,
-// and 94% for 5.
+// and 94% for 5. Two processes' range holds it with 50%, and their median
+// would be the greater ratio, so they get none.
 import { ratioByLead } from './lead.ts';
 import { pairedRatios, quantile, sortedCopy } from './statistics.ts';
 import type {
@@ -24,10 +25,13 @@ import type {
     VariantAcrossProcesses
 } from './types.ts';
 
+/** The fewest processes whose ratios have a median */
+const MEDIAN_PROCESSES = 3;
+
 /**
  * A run's results with those of the script's runs in other processes, after
- * it, and each variant's ratio in every process, with their median and
- * range. Each ratio is by the statistic that its group leads with in the
+ * it, and each variant's ratio in every process, with their median, of 3
+ * processes or more, and their range. Each ratio is by the statistic that its group leads with in the
  * first process, whose table names it. A process whose group leads with the
  * other statistic, as when its calls ran in another tier, gets the ratio
  * from its rounds, as `measureGroup()` compares them.
@@ -81,7 +85,8 @@ function variantAcrossProcesses(
         role,
         ratios,
         intervals: groups.map(group => group.variants[index].interval),
-        median: quantile(sorted, 0.5),
+        median:
+            sorted.length < MEDIAN_PROCESSES ? null : quantile(sorted, 0.5),
         range: [sorted[0], sorted[sorted.length - 1]]
     };
 }

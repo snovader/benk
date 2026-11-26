@@ -556,7 +556,6 @@ describe('--processes', () => {
             'slower',
             '2.00×',
             '2.20×',
-            '2.20×',
             '2.00–2.20'
         ]);
         expect((JSON.parse(spawned) as RunResult).groups.map(group => group.name)).toStrictEqual([

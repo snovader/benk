@@ -339,7 +339,7 @@ would have printed:
 | Column or note                                                              | What it says                                                                                                                                                                                                                                                                                                                                                                                           |
 | --------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `1` to `5`                                                                  | The ratio in each process. The first is the run whose tables are above.                                                                                                                                                                                                                                                                                                                                |
-| **median**                                                                  | The median of the ratios. Of an even count, it's the greater of the middle two, so that it's a process's ratio.                                                                                                                                                                                                                                                                                        |
+| **median**                                                                  | The median of the ratios. Of an even count, it's the greater of the middle two, so that it's a process's ratio. With 2 processes, there's none.                                                                                                                                                                                                                                                        |
 | **range**                                                                   | The least and the greatest of the ratios.                                                                                                                                                                                                                                                                                                                                                              |
 | `the intervals of processes 1 and 3 don't overlap, 0.61–0.63 and 0.90–0.93` | Two processes' 95% intervals are apart. The ratio differed between them by more than its rounds varied within either, so one process's interval understates how much it varies. In a group that leads with the fastest round, the note starts `round by round`: the intervals are of the median of the per-round ratios, as in each process's table, and the ratios beside them of the fastest rounds. |
 | `faster than for loop in 2 processes, and slower in 3`                      | The variant's ratios, as printed, lie on both sides of 1: which of the two is faster depends on the process. A ratio that prints as 1.00 is neither. An A/A copy gets no such note.                                                                                                                                                                                                                    |
@@ -353,10 +353,16 @@ median ratio of a process with a confidence of 1 − 2¹⁻ⁿ:
 
 | Processes | Confidence that the range holds the median |
 | --------- | ------------------------------------------ |
+| 2         | 50%                                        |
 | 3         | 75%                                        |
 | 4         | 88%                                        |
 | 5         | 94%                                        |
 | 6         | 97%                                        |
+
+With 2 processes, the table has no **median** column, and the JSON's
+`median` is `null`: the median of two would be the greater of them. Their
+range holds a process's median ratio only half the time, as the paragraph
+above the tables says. Use 3 or more for a range to go by.
 
 What the other processes do:
 
@@ -456,10 +462,10 @@ the results of `measureGroups()`. With more processes, `groups` are the
 first process's, and `processes` has the others', and each variant's
 ratios in all of them:
 
-| Field              | What it has                                                                                                                                                                                                                                         |
-| ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `processes.runs`   | The runs after the first, in the order that they ran: each one's `date` and `groups`, as the first's.                                                                                                                                               |
-| `processes.groups` | Each group's `name`, its `lead` in the first process, its `leads` in each process's own run, and its `variants`: each one's `name`, `role`, `ratios` in each process from the first, `intervals` in each, or `null` for none, `median` and `range`. |
+| Field              | What it has                                                                                                                                                                                                                                                                     |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `processes.runs`   | The runs after the first, in the order that they ran: each one's `date` and `groups`, as the first's.                                                                                                                                                                           |
+| `processes.groups` | Each group's `name`, its `lead` in the first process, its `leads` in each process's own run, and its `variants`: each one's `name`, `role`, `ratios` in each process from the first, `intervals` in each, or `null` for none, `median`, or `null` for 2 processes, and `range`. |
 
 A group's `timerResolution` is the shortest time that a timer loop of the
 runtime reads. benk estimates it once for each runtime, before a group's

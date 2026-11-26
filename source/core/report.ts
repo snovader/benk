@@ -236,12 +236,12 @@ const PROCESSES_COLUMNS: ReadonlyArray<
  */
 export function formatProcesses({ runs, groups }: Processes): string[] {
     const count = runs.length + 1;
+    const description =
+        count === 2
+            ? "In 2 processes, the first of them the run above, and the other its repeat: each variant's ratio in each, by the statistic that its group leads with in the first, and their range. Two ratios have no median, and their range holds a process's median ratio with 50% confidence: 3 processes give 75%."
+            : `In ${count} processes, the first of them the run above, and the others its repeats: each variant's ratio in each, by the statistic that its group leads with in the first, the median of the ${count} ratios, and their range.`;
 
-    return [
-        '',
-        `In ${count} processes, the first of them the run above, and the others its repeats: each variant's ratio in each, by the statistic that its group leads with in the first, the median of the ${count} ratios, and their range.`,
-        ...groups.flatMap(formatGroupAcrossProcesses)
-    ];
+    return ['', description, ...groups.flatMap(formatGroupAcrossProcesses)];
 }
 
 /**
@@ -267,7 +267,7 @@ function formatGroupAcrossProcesses({
     const processes = Array.from({ length: count }, (_, i) =>
         String(i + 1).padStart(PROCESS_WIDTH)
     );
-    const summaries = PROCESSES_COLUMNS.map(([title, width]) =>
+    const summaries = summaryColumns(reference).map(([title, width]) =>
         title.padStart(width)
     );
 
@@ -287,7 +287,20 @@ function formatGroupAcrossProcesses({
     ];
 }
 
-/** A variant's row of ratios in each process, with their median and range */
+/**
+ * The columns of a group's ratios after those of the processes: the median
+ * and the range, or the range alone, where the ratios have no median
+ */
+function summaryColumns({
+    median
+}: VariantAcrossProcesses): typeof PROCESSES_COLUMNS {
+    return median == null ? PROCESSES_COLUMNS.slice(1) : PROCESSES_COLUMNS;
+}
+
+/**
+ * A variant's row of ratios in each process, with their median, if they
+ * have one, and their range
+ */
 function formatProcessesRow(
     { role, name, ratios, median, range }: VariantAcrossProcesses,
     nameWidth: number
@@ -297,7 +310,9 @@ function formatProcessesRow(
         ...ratios.map(ratio =>
             padCell(`${formatRatio(ratio)}×`, PROCESS_WIDTH)
         ),
-        padCell(`${formatRatio(median)}×`, medianWidth),
+        ...(median == null
+            ? []
+            : [padCell(`${formatRatio(median)}×`, medianWidth)]),
         padCell(role === 'reference' ? '' : formatInterval(range), rangeWidth)
     ];
 
@@ -409,7 +424,8 @@ function formatBothSides(
  * with the A/A copy's furthest ratio: one process whose A/A ratio lay far
  * from 1 would then dismiss a variant that differed alike in every process,
  * and more often the more processes there are. A median that prints as 1.00
- * shows no difference to explain, and gets none.
+ * shows no difference to explain, and gets none, and so do the ratios of 2
+ * processes, which have no median.
  */
 function formatWithinAA(
     { name, role, median }: VariantAcrossProcesses,
@@ -417,6 +433,8 @@ function formatWithinAA(
 ): string[] {
     if (
         role !== 'variant' ||
+        median == null ||
+        aa.median == null ||
         printedRatio(median) === 1 ||
         !(Math.abs(Math.log(median)) <= Math.abs(Math.log(aa.median)))
     ) {
