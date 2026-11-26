@@ -59,6 +59,7 @@ function groupAcrossProcesses(
     return {
         name,
         lead,
+        leads: groups.map(group => group.lead),
         variants: variants.map((_, i) =>
             variantAcrossProcesses(groups, i, lead)
         )

@@ -2,6 +2,7 @@ import { ALLOCATING_CALL, LONG_CALL } from './lead.ts';
 import type {
     GroupAcrossProcesses,
     GroupResult,
+    Lead,
     LeadReason,
     Processes,
     RecordedOptions,
@@ -245,13 +246,15 @@ export function formatProcesses({ runs, groups }: Processes): string[] {
 
 /**
  * A group's table of ratios in each process: its name and lead, a row for
- * each variant, and notes for a variant whose intervals of two processes
- * are apart, whose ratios lie on both sides of 1, or whose median is no
- * further from 1 than the A/A copy's median
+ * each variant, a note for the processes that led with the other statistic,
+ * and notes for a variant whose intervals of two processes are apart, whose
+ * ratios lie on both sides of 1, or whose median is no further from 1 than
+ * the A/A copy's median
  */
 function formatGroupAcrossProcesses({
     name,
     lead,
+    leads,
     variants
 }: GroupAcrossProcesses): string[] {
     const [reference] = variants;
@@ -273,7 +276,8 @@ function formatGroupAcrossProcesses({
         `${name}: ${count} processes, by the ${lead} round`,
         `  ${''.padEnd(nameWidth)}${processes.join('')}${summaries.join('')}`,
         ...variants.map(variant => formatProcessesRow(variant, nameWidth)),
-        ...variants.flatMap(formatApart),
+        ...formatOtherLeads(lead, leads),
+        ...variants.flatMap(variant => formatApart(variant, lead)),
         ...variants.flatMap(variant =>
             formatBothSides(variant, reference.name)
         ),
@@ -302,13 +306,51 @@ function formatProcessesRow(
 }
 
 /**
+ * A note for the processes whose group led with the other statistic than in
+ * the first, in their own runs: their ratios in the table are by the
+ * first's, from their rounds, and differ from those that their own tables
+ * would have printed
+ */
+function formatOtherLeads(lead: Lead, leads: readonly Lead[]): string[] {
+    const other = leads.flatMap((own, i) => (own === lead ? [] : [i + 1]));
+    if (other.length === 0) {
+        return [];
+    }
+
+    // Of the two statistics, the one that isn't the first's
+    const own = leads[other[0] - 1];
+    const [processes, their] =
+        other.length === 1 ? ['process', 'its'] : ['processes', 'their'];
+    return [
+        `  ${processes} ${formatList(other)} led with the ${own} round: ${their} ratios here are by the ${lead} round, from ${their} rounds`
+    ];
+}
+
+/** Numbers as a sentence lists them: `2`, `2 and 4`, or `2, 3 and 4` */
+function formatList(numbers: readonly number[]): string {
+    const last = numbers[numbers.length - 1];
+
+    return numbers.length === 1
+        ? String(last)
+        : `${numbers.slice(0, -1).join(', ')} and ${last}`;
+}
+
+/**
  * A note for a variant whose 95% intervals of two processes don't overlap:
  * its ratio differed between them by more than its rounds varied within
  * either, so that the interval of one process understates how much the
  * ratio varies between runs. It names the interval of the lowest end, and
  * the interval of the highest start, which are apart if any two are.
+ *
+ * An interval is of the median of the per-round ratios. In a group that
+ * leads with the fastest round, whose ratios compare the fastest rounds,
+ * the note says that it's round by round, so as not to quote an interval
+ * as if it were of the ratios beside it.
  */
-function formatApart({ name, intervals }: VariantAcrossProcesses): string[] {
+function formatApart(
+    { name, intervals }: VariantAcrossProcesses,
+    lead: Lead
+): string[] {
     const present = intervals.flatMap((interval, i) =>
         interval == null ? [] : [{ process: i + 1, interval }]
     );
@@ -330,8 +372,9 @@ function formatApart({ name, intervals }: VariantAcrossProcesses): string[] {
         lowest.process < highest.process
             ? [lowest, highest]
             : [highest, lowest];
+    const byRound = lead === 'fastest' ? 'round by round, ' : '';
     return [
-        `  ${name}: the intervals of processes ${first.process} and ${second.process} don't overlap, ${formatInterval(first.interval)} and ${formatInterval(second.interval)}`
+        `  ${name}: ${byRound}the intervals of processes ${first.process} and ${second.process} don't overlap, ${formatInterval(first.interval)} and ${formatInterval(second.interval)}`
     ];
 }
 

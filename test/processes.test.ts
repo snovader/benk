@@ -75,6 +75,7 @@ describe('withProcesses', () => {
 
             expect(processes.runs).toStrictEqual(others.map(asRun));
             expect(group.lead).toBe(first.groups[0].lead);
+            expect(group.leads).toStrictEqual(results.map(result => result.groups[0].lead));
             expect(group.variants.map(({ name, role }) => [name, role])).toStrictEqual([
                 ['base', 'reference'],
                 ['other', 'variant'],
@@ -119,10 +120,12 @@ describe('withProcesses', () => {
         });
         const [base, other] = second.groups[0].variants;
 
-        const ratios = withProcesses(first, [asRun(second)]).processes.groups[0].variants[1].ratios;
+        const [group] = withProcesses(first, [asRun(second)]).processes.groups;
+        const { ratios } = group.variants[1];
 
         // Their own ratios differ: by the median, the second's is of the slow rounds
         expect(other.ratio).not.toBeCloseTo(other.summary.fastest / base.summary.fastest);
+        expect(group.leads).toStrictEqual(['fastest', 'median']);
         expect(ratios).toStrictEqual([
             first.groups[0].variants[1].ratio,
             other.summary.fastest / base.summary.fastest
@@ -182,16 +185,29 @@ function across(
     };
 }
 
-/** A run in as many processes as each variant has ratios, of one group */
+/**
+ * A run in as many processes as each variant has ratios, of one group,
+ * which leads with `lead` in each process but for those of `others`, by
+ * their numbers from 1
+ */
 function processesOf(
     variants: readonly VariantAcrossProcesses[],
-    lead: Lead = 'median'
+    lead: Lead = 'median',
+    others: readonly number[] = []
 ): Processes {
     const run: ProcessRun = { date: '2026-11-26T00:00:00.000Z', groups: [] };
+    const other: Lead = lead === 'median' ? 'fastest' : 'median';
 
     return {
         runs: variants[0].ratios.slice(1).map(() => run),
-        groups: [{ name: 'sum', lead, variants }]
+        groups: [
+            {
+                name: 'sum',
+                lead,
+                leads: variants[0].ratios.map((_, i) => (others.includes(i + 1) ? other : lead)),
+                variants
+            }
+        ]
     };
 }
 
@@ -245,6 +261,31 @@ describe('formatProcesses', () => {
         expect(notesOf(processesOf([across('base', 'reference', [1, 1, 1]), aa]))).toStrictEqual([
             "  base A/A: the intervals of processes 2 and 3 don't overlap, 1.04–1.06 and 0.96–0.98"
         ]);
+    });
+
+    it('says that intervals are round by round in a group that leads with the fastest round', () => {
+        const apart = across('typed', 'variant', [0.62, 0.91, 0.63]);
+
+        expect(
+            notesOf(processesOf([across('base', 'reference', [1, 1, 1]), apart], 'fastest'))
+        ).toStrictEqual([
+            "  typed: round by round, the intervals of processes 1 and 2 don't overlap, 0.61–0.63 and 0.90–0.92"
+        ]);
+    });
+
+    it('notes the processes whose group led with the other statistic', () => {
+        const variants = [
+            across('base', 'reference', [1, 1, 1, 1]),
+            across('reduce', 'variant', [5, 5, 5, 5])
+        ];
+
+        expect(notesOf(processesOf(variants, 'fastest', [3]))).toStrictEqual([
+            '  process 3 led with the median round: its ratios here are by the fastest round, from its rounds'
+        ]);
+        expect(notesOf(processesOf(variants, 'median', [2, 3, 4]))).toStrictEqual([
+            '  processes 2, 3 and 4 led with the fastest round: their ratios here are by the median round, from their rounds'
+        ]);
+        expect(notesOf(processesOf(variants, 'median'))).toStrictEqual([]);
     });
 
     it('notes a variant whose ratios lie on both sides of 1, as printed, but not an A/A copy', () => {

@@ -474,7 +474,7 @@ describe('--processes', () => {
             '2.00–2.40'
         ]);
         expect(lines).toContain(
-            "  slower: the intervals of processes 1 and 3 don't overlap, 2.00–2.00 and 2.40–2.40"
+            "  slower: round by round, the intervals of processes 1 and 3 don't overlap, 2.00–2.00 and 2.40–2.40"
         );
         expect(lines).toContain('  grows: faster than base in 1 process, and slower in 1');
         // The JSON is of the last call, as without the option

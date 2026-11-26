@@ -346,8 +346,17 @@ export interface VariantAcrossProcesses {
 /** A group's ratios in each of a run's processes */
 export interface GroupAcrossProcesses {
     readonly name: string;
-    /** The statistic that the group leads with in the first process */
+    /**
+     * The statistic that the group leads with in the first process, which
+     * each process's ratio is by
+     */
     readonly lead: Lead;
+    /**
+     * The statistic that the group led with in each process's own run, from
+     * the first. Where it isn't `lead`, the ratio is from the process's
+     * rounds, rather than its own.
+     */
+    readonly leads: readonly Lead[];
     readonly variants: readonly VariantAcrossProcesses[];
 }
 
