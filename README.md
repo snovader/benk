@@ -11,7 +11,7 @@ out of a comparison, or at least in view:
   variant, whose ratio to the first is the run's noise floor.
 - **Intervals and modes, not just a number.** Each ratio has a 95% interval,
   and a variant whose rounds fall into two clusters, as V8's tiering can make
-  them, is flagged rather than averaged.
+  them, or change partway, is flagged rather than averaged.
 - **A timer loop per variant.** Each variant is timed by a loop compiled from
   a source of its own, so that variants don't share a call site or type
   feedback.
@@ -252,6 +252,12 @@ Per call of each variant:
 - **two modes**: a note for a variant whose rounds form two clusters, far
   apart for their own spread, of at least 3 rounds and 10% each. Its median
   and fastest then describe one of the clusters: compare the modes instead.
+  A variant whose rounds changed partway gets the next note in its place.
+- **the first … rounds ran near …, and the other … near …**: a note for a
+  variant whose rounds changed partway, as
+  [Rounds that changed](#rounds-that-changed) describes. Its median then
+  mixes the rounds before and after the change, or describes one of them.
+  A change in the second half names the last rounds instead.
 - **by the fastest rounds, but … round by round**: a note in a group that
   leads with the fastest round, for a variant whose ratio lies more than 5%
   outside its interval, such as
@@ -278,13 +284,76 @@ calls cause, which the median includes, and the spread shows how much it
 varies. A call that allocates a typed array allocates in its buffer, as
 [Array buffers outside the heap](#array-buffers-outside-the-heap) measures.
 
+### Rounds that changed
+
+A variant's rounds can change partway through the run. Its first rounds can
+run in code that V8 hasn't optimized yet, and load from other processes can
+start or stop at any round. The median then mixes the rounds before and
+after the change, or describes one of them. A note says when each ran:
+
+```text
+  for loop: the first 4 rounds ran near 1.47 µs, and the other 32 near 830 ns: more warm-up rounds, or a longer sample time, would time only the faster rounds
+```
+
+This is the quick start's for loop with `--sample-ms 10`, in the run that
+[V8's report](#v8s-report) shows. Its first 4 rounds ran before Turbofan's
+code took over, and its median is of the other 32.
+
+The note's suggestion depends on whether the rounds got faster or slower:
+
+| Rounds after the change | More often                                     | The note suggests                                 |
+| ----------------------- | ---------------------------------------------- | ------------------------------------------------- |
+| Faster                  | Code that V8 optimized after the first rounds  | More warm-up rounds, or a longer sample time      |
+| Slower                  | A deoptimization, or load from other processes | Another run, and V8's report for a deoptimization |
+
+Load from other processes changes every variant of a group in the same
+rounds, the A/A copy too. V8 optimizes each variant's timer loop on its
+own, but a reference and its A/A copy call the same `run`, which can tier
+up in both loops at about the same round.
+
+benk splits the rounds where the ranks of those before the split are the
+furthest from what rounds in an order that doesn't matter give, as Mann and
+Whitney's test measures it. Ranks assume nothing about the distribution of
+the rounds' times, and an outlier counts as any slow round. The rounds
+changed when:
+
+- each part has at least 3 rounds and 10% of them, as each of two modes;
+- the rank sum of the rounds before the split is 3 or more standard
+  deviations from its mean;
+- 95% or more of the pairs of a round before and a round after are ordered
+  as the two parts' medians are;
+- the medians are 5% or more apart.
+
+In shuffled rounds, whose order doesn't matter, benk found a change in
+0.08% to 0.15% of 31 to 40 rounds, and in none of 12 rounds or fewer, where
+a split that clean is too likely by chance. It looks for one change: a
+steady drift reads as a change near its middle.
+
+On an Apple M2 Pro with Node 26.13.0, benk timed 426 variants in 48 runs:
+6 each of the quick start with `--sample-ms 10` and with the default 1 ms,
+of `examples/numbers.ts`, of `benchmarks/`' loops, array buffers and
+allocations, and of its small integers with 1 ms and with 10 ms. With a
+load average near 5, 78 variants got the note:
+
+| Variants                                                     | Notes    | What changed                                                                  |
+| ------------------------------------------------------------ | -------- | ----------------------------------------------------------------------------- |
+| The quick start's for loop and its A/A copy, with 10 ms      | 12 of 12 | The first 4 or 5 rounds took 1.7 to 1.8 times as long, before Turbofan's code |
+| The small integers' `Int32Array` and `number[]`, with 10 ms  | 35 of 36 | The first 8 to 11 rounds took 1.4 to 2.7 times as long                        |
+| The allocations' and array buffers' `Float64Array` of 1 MiB  | 22 of 24 | The first 7 to 13 rounds took a third to a sixth as long                      |
+| The other 354                                                | 9        | Such as the last 7 to 10 rounds of a group, which load slowed alike           |
+
+With 1 ms, the quick start's for loop got no note, as no Turbofan
+compilation considered its `run`. With a load average of 30 to 47, 60
+variants got it: the quick start's in 9 of 12, as load slowed some later
+rounds as much as the first, and more variants whose rounds load changed.
+
 ## JSON results
 
 `--json` writes a `RunResult`, whose types `benk` exports:
 
 ```jsonc
 {
-  "schema": 4,
+  "schema": 5,
   "date": "2026-11-22T12:33:03.133Z",
   "runtime": { "name": "Node", "version": "v26.13.0", "engine": "V8 14.6.202.34-node.40",
                "platform": "darwin", "arch": "arm64", "cpu": "Apple M2 Pro", "flags": [],
@@ -298,6 +367,7 @@ varies. A call that allocates a typed array allocates in its buffer, as
       "samples": [1409.88, 1405.72, …],   // nanoseconds per call, in the rounds' order
       "positions": [0, 2, 3, 1, …],       // the variant's position in each round
       "summary": { "fastest": …, "q1": …, "median": …, "q3": …, "slowest": …, "spread": …, "modes": null },
+      "change": null,                     // the change in its rounds partway, or null
       "ratio": 1, "interval": null, "heapBytes": 16, "arrayBufferBytes": 0,
       "v8": null                          // what V8 did with its code, with --v8-report
     }]
@@ -306,8 +376,10 @@ varies. A call that allocates a typed array allocates in its buffer, as
 }
 ```
 
-`schema` changes when a field does. `v8Report`, and each variant's `v8`,
-are V8's report, which `--v8-report` adds, as
+`schema` changes when a field does. A variant's `change` has the median
+and the count of the rounds `before` the change and `after` it, as
+[Rounds that changed](#rounds-that-changed) describes. `v8Report`, and
+each variant's `v8`, are V8's report, which `--v8-report` adds, as
 [In the results](#in-the-results) describes. They're `null` without it, in
 the results of `measureGroups()`, and in d8. The runtime's flags include
 `NODE_OPTIONS`, as V8's flags change what's measured. Its process state is
@@ -373,11 +445,11 @@ the fastest and median round, the interquartile range as a share of the median, 
 
 sum 1,000 numbers: 36 rounds, by the median round (a call of 1 µs or more)
                       fastest     median   spread    ratio   95% interval        heap     buffers
-  for loop             794 ns     806 ns     2.9%    1.00×                       16 B         0 B
-  reduce              6.99 µs    7.11 µs     1.0%    8.80×      8.75–8.87    32,040 B         0 B
-  for loop A/A         793 ns     806 ns     1.5%    1.00×      0.99–1.01        16 B         0 B
-  for loop: two modes, 32 rounds near 805 ns and 4 near 1.45 µs
-  for loop A/A: two modes, 32 rounds near 805 ns and 4 near 1.46 µs
+  for loop             819 ns     832 ns     0.9%    1.00×                       16 B         0 B
+  reduce              7.21 µs    7.37 µs     1.4%    8.86×      8.78–8.88    32,040 B         0 B
+  for loop A/A         821 ns     830 ns     0.5%    1.00×      1.00–1.00        16 B         0 B
+  for loop: the first 4 rounds ran near 1.47 µs, and the other 32 near 830 ns: more warm-up rounds, or a longer sample time, would time only the faster rounds
+  for loop A/A: the first 4 rounds ran near 1.48 µs, and the other 32 near 829 ns: more warm-up rounds, or a longer sample time, would time only the faster rounds
 
 V8 report of bench.ts, from a run of it with V8's traces, whose times aren't reported.
 Per function of the script, and per function that deoptimized in the script's code: the tiers that V8 compiled it to, what Turbofan inlined into it and where it inlined it, with sizes of bytecode, and its deoptimizations.
@@ -394,24 +466,18 @@ run bench.ts:20:22, 24 B of bytecode
 (anonymous) bench.ts:20:43, 6 B of bytecode
   compiled to Maglev ×2, Turbofan
 
-By variant, of the tables: where V8 placed its run, the tiers that V8 compiled the run to on its own, and its timer loops that the traces tie to the run, with their tiers, what Turbofan inlined into them, and the deoptimizations of both.
+By variant, of the tables: where V8 placed its run, the tiers that V8 compiled the run to on its own, and its timer loops that the traces tie to the run, with their tiers, what Turbofan inlined into them of the script's functions, and the deoptimizations of both.
 sum 1,000 numbers
   for loop: run bench.ts:17:38, 13 B of bytecode, compiled to Maglev
     2 timer loops, also of for loop A/A, compiled to Maglev ×2, Turbofan ×2
-    inlines now node:internal/perf/performance:137:6 (30 B) ×2
-    inlines wrappedFn node:internal/errors:542:21 (75 B) ×2
     inlines run bench.ts:17:38 (13 B) ×2
     inlines sumLoop bench.ts:5:17 (38 B) ×2
-    inlines (anonymous) node:internal/validators:547:51 (37 B) ×2
   reduce: run bench.ts:20:22, 24 B of bytecode, compiled to Maglev
     no timer loop that the traces tie to its run
   for loop A/A: run bench.ts:17:38, 13 B of bytecode, compiled to Maglev
     2 timer loops, also of for loop, compiled to Maglev ×2, Turbofan ×2
-    inlines now node:internal/perf/performance:137:6 (30 B) ×2
-    inlines wrappedFn node:internal/errors:542:21 (75 B) ×2
     inlines run bench.ts:17:38 (13 B) ×2
     inlines sumLoop bench.ts:5:17 (38 B) ×2
-    inlines (anonymous) node:internal/validators:547:51 (37 B) ×2
 
 Turbofan's limits, from V8's flags: 460 B of bytecode for a function that it inlines, 920 B for the functions that one compilation inlines, in all, and 30 B for a small function, which it inlines beyond that.
 ```
@@ -427,10 +493,12 @@ and its A/A copy's, which calls the same `run`. No Turbofan compilation of
 
 With the default rounds of 1 ms, the same script's report had no line of
 inlining, as no Turbofan compilation considered `run` or `sumLoop`, and the
-for loop took 1.41 µs rather than 794–799 ns. These are the fastest rounds
-of 3 runs of each, on an Apple M2 Pro with Node 26.13.0, with benk's bundle
-in another project, and each sample time's 3 reports were the same. The two
-modes with 10 ms are the rounds before Turbofan's code: 4 to 6 near 1.45 µs.
+for loop took 1.41 to 1.45 µs rather than 808 to 821 ns. These are the
+fastest rounds of 3 runs of each, on an Apple M2 Pro with Node 26.13.0 and a
+load average near 6, with benk's bundle in another project, and each sample
+time's 3 reports were the same. The notes with 10 ms are of the rounds
+before Turbofan's code: the first 4 to 7, near 1.47 to 1.52 µs, as
+[Rounds that changed](#rounds-that-changed) describes.
 
 A script in d8 gets the same report through the command `benk-d8`, as
 [In d8](#in-d8) describes.
@@ -766,11 +834,11 @@ command line:
 
    sum 1,000 numbers: 36 rounds, by the median round (a call of 1 µs or more)
                          fastest     median   spread    ratio   95% interval        heap     buffers
-     for loop             791 ns     809 ns     2.5%    1.00×                          –           –
-     reduce              6.35 µs    6.49 µs     1.5%    8.03×      7.89–8.07           –           –
-     for loop A/A         790 ns     811 ns     2.2%    1.01×      1.00–1.01           –           –
-     for loop: two modes, 31 rounds near 806 ns and 5 near 1.44 µs
-     for loop A/A: two modes, 31 rounds near 810 ns and 5 near 1.44 µs
+     for loop             819 ns     837 ns     2.3%    1.00×                          –           –
+     reduce              6.41 µs    6.56 µs     1.3%    7.88×      7.76–7.91           –           –
+     for loop A/A         818 ns     836 ns     1.9%    1.00×      1.00–1.01           –           –
+     for loop: the first 5 rounds ran near 1.50 µs, and the other 31 near 832 ns: more warm-up rounds, or a longer sample time, would time only the faster rounds
+     for loop A/A: the first 5 rounds ran near 1.48 µs, and the other 31 near 832 ns: more warm-up rounds, or a longer sample time, would time only the faster rounds
 
    V8 report of bench.mjs, from a run of it in d8 15.8.62.9 with V8's traces, whose times aren't reported.
    Per function of the script, and per function that deoptimized in the script's code: the tiers that V8 compiled it to, what Turbofan inlined into it and where it inlined it, with sizes of bytecode, and its deoptimizations.
@@ -793,10 +861,12 @@ would, and that run prints the tables. It then runs the script again in d8,
 with V8's trace flags, and prints the report, whose heading names d8's
 version. Here, as in Node, Turbofan inlined the for loop's `run` and
 `sumLoop` into two timer loops. These are of 3 runs on an Apple M2 Pro,
-with Homebrew's d8 15.8.62.9, whose reports were the same. With the
-default rounds of 1 ms, the report had no line of inlining in 3 runs, and
-the for loop's fastest round took 1.41 to 1.49 µs, against 790 or 791 ns
-with 10 ms.
+with Homebrew's d8 15.8.62.9 and a load average near 6, whose reports were
+the same. With the default rounds of 1 ms, the report had no line of
+inlining in 3 runs, and the for loop's fastest round took 1.45 to 1.47 µs,
+against 818 to 824 ns with 10 ms. In one of the runs with 10 ms, Turbofan's
+code took over only after the for loop's first 14 rounds, and its note said
+so.
 
 - The first run gets the script's options but `--v8-report` and
   `--v8-filter`, which benk-d8 carries out. The traced run gets none of
@@ -1655,7 +1725,8 @@ benk keeps these in view rather than out of the results:
   and 795 ns with `--sample-ms 10`, when Turbofan inlined `run` and
   `sumLoop` into its timer loop. These are the fastest rounds of 3 runs of
   each, on an Apple M2 Pro with Node 26.13.0. [V8's report](#v8s-report)
-  shows the tiers.
+  shows the tiers, and benk notes the rounds before Turbofan's code took
+  over, as [Rounds that changed](#rounds-that-changed) describes.
 
 - **The width of small integers.** V8 keeps an integer in place of a
   pointer, as a small integer, when it fits: in 32 bits in Node, and in 31

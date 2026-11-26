@@ -350,7 +350,7 @@ describe('--v8-check', () => {
                 const position = v8?.run?.position;
                 return [name, position?.line, position?.column];
             });
-            expect(result.schema).toBe(4);
+            expect(result.schema).toBe(5);
             expect(result.v8Report?.check).toBeNull();
             expect(result.v8Report?.functions.map(fn => fn.name)).toContain('mix');
             expect(runs).toStrictEqual([

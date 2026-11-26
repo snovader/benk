@@ -4,6 +4,7 @@ import { heapCounterOf } from './heap.ts';
 import { chooseLead } from './lead.ts';
 import { rotation } from './rotation.ts';
 import {
+    changeOf,
     medianInterval,
     pairedRatios,
     quantile,
@@ -123,7 +124,7 @@ export async function measureGroups(
     }
 
     return {
-        schema: 4,
+        schema: 5,
         date,
         runtime: runtime.description,
         options: { ...resolved, filter: options.filter?.source ?? '' },
@@ -328,6 +329,7 @@ function variantResult(
         samples: Array.from(samples),
         positions: Array.from(positions),
         summary,
+        change: changeOf(samples),
         ratio: role === 'reference' ? 1 : ratio,
         interval: role === 'reference' ? null : medianInterval(ratios),
         heapBytes,

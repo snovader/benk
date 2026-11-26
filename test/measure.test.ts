@@ -507,6 +507,62 @@ describe('measureGroup', () => {
 });
 
 describe('measureGroups', () => {
+    it.prop([fc.integer({ min: 4, max: 28 }), fc.boolean()], { numRuns: 30 })(
+        "records where a variant's calls changed, in the rounds' order",
+        async (changedAfter, faster) => {
+            const runtime = new FakeRuntime({ heap: false });
+            const [first, rest] = faster ? [300, 100] : [100, 300];
+            // Each timed loop's calls take up to 0.5% longer, in an order that
+            // neither rises nor falls, as the rounding of the fake clock's
+            // sums would otherwise order rounds of the same time by when
+            // they ran. A loop next to the change takes the middle time.
+            const changeAt = changedAfter + 1;
+            let timed = false;
+            let timedLoops = 0;
+            let time = first;
+            const changing: SyncVariant = {
+                name: 'changing',
+                setup: () => {
+                    timedLoops += timed ? 1 : 0;
+                    const edge = [1, changedAfter, changeAt, 32].includes(timedLoops);
+                    const jitter = edge ? 5 : (7 * timedLoops) % 11;
+                    time = (timedLoops < changeAt ? first : rest) * (1 + (0.005 * jitter) / 10);
+                },
+                run: () => runtime.clock.spend(time)
+            };
+
+            const result = await measureGroups(
+                [
+                    {
+                        name: 'change',
+                        variants: [runtime.variant('steady', 100), changing],
+                        aa: false
+                    }
+                ],
+                {
+                    ...QUICK,
+                    runtime,
+                    onRounds: (_, rounds) => {
+                        timed = rounds === 'timed';
+                    }
+                }
+            );
+            const [group] = result.groups;
+            const change = expectPresent(variantNamed(group, 'changing').change);
+
+            expect(group.rounds).toBe(32);
+            expect(variantNamed(group, 'steady').change).toBeNull();
+            expect([change.before.rounds, change.after.rounds]).toStrictEqual([
+                changedAfter,
+                32 - changedAfter
+            ]);
+            expect(change.before.median / first).toBeGreaterThanOrEqual(1 - 1e-9);
+            expect(change.before.median / first).toBeLessThanOrEqual(1.005);
+            expect(change.after.median / rest).toBeGreaterThanOrEqual(1 - 1e-9);
+            expect(change.after.median / rest).toBeLessThanOrEqual(1.005);
+        }
+    );
+
     it('measures the groups that the filter selects, and reports each as it goes', async () => {
         const runtime = new FakeRuntime();
         const groups = ['apple', 'banana', 'blueberry', 'cherry'].map(name => ({
@@ -525,7 +581,7 @@ describe('measureGroups', () => {
 
         expect(reported).toStrictEqual(['banana', 'blueberry']);
         expect(result.groups.map(group => group.name)).toStrictEqual(['banana', 'blueberry']);
-        expect(result.schema).toBe(4);
+        expect(result.schema).toBe(5);
         expect(result.v8Report).toBeNull();
         expect(result.runtime).toBe(runtime.description);
         expect(result.options).toStrictEqual({

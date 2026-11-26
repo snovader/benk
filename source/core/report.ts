@@ -1,5 +1,6 @@
 import { ALLOCATING_CALL, LONG_CALL } from './lead.ts';
 import type {
+    Change,
     GroupResult,
     LeadReason,
     RecordedOptions,
@@ -81,9 +82,9 @@ export function describeRun(
 
 /**
  * A group's table: its name and lead, a row for each variant, a note if its
- * rounds are few times the timer's resolution, a note for each variant whose rounds
- * form two modes, and one for each whose ratio by the fastest round lies
- * outside its interval
+ * rounds are few times the timer's resolution, a note for each variant whose
+ * rounds changed partway or else form two modes, and one for each whose ratio
+ * by the fastest round lies outside its interval
  */
 export function formatGroup({
     name,
@@ -105,7 +106,7 @@ export function formatGroup({
         header,
         ...variants.map(variant => formatRow(variant, nameWidth)),
         ...formatResolution(timerResolution, variants),
-        ...variants.flatMap(formatModes),
+        ...variants.flatMap(formatRounds),
         ...(lead === 'fastest' ? variants.flatMap(formatOutside) : [])
     ];
 }
@@ -175,6 +176,39 @@ function formatResolution(
     return [
         `  median rounds are as short as ${times} times the timer's resolution, of ${formatTime(resolution)}: a sample time of ${formatTime(ROUND_TICKS * resolution)} or more gives ${ROUND_TICKS}`
     ];
+}
+
+/**
+ * A note of how a variant's rounds differ: a change partway, or else two
+ * modes. A change takes the modes' place, as its rounds before and after it
+ * are apart by more than their spread too, and it says when each ran.
+ * Results that a version before `schema` 5 wrote have no change, and get the
+ * modes' note.
+ */
+function formatRounds(variant: VariantResult): string[] {
+    return variant.change == null
+        ? formatModes(variant)
+        : formatChange(variant.name, variant.change);
+}
+
+/**
+ * A note for a variant whose rounds changed partway, which names the shorter
+ * part first. Rounds that got faster are more often those before V8's
+ * optimized code took over, which more warm-up rounds would leave out.
+ * Rounds that got slower are more often a deoptimization, or load from other
+ * processes, which another run shows.
+ */
+function formatChange(name: string, { before, after }: Change): string[] {
+    const parts =
+        before.rounds <= after.rounds
+            ? `the first ${before.rounds} rounds ran near ${formatTime(before.median)}, and the other ${after.rounds} near ${formatTime(after.median)}`
+            : `the last ${after.rounds} rounds ran near ${formatTime(after.median)}, and the other ${before.rounds} near ${formatTime(before.median)}`;
+    const advice =
+        after.median < before.median
+            ? 'more warm-up rounds, or a longer sample time, would time only the faster rounds'
+            : "another run shows whether that repeats, and V8's report whether its code deoptimized";
+
+    return [`  ${name}: ${parts}: ${advice}`];
 }
 
 function formatModes({ name, summary }: VariantResult): string[] {

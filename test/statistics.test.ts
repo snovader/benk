@@ -1,7 +1,7 @@
 import { describe, expect } from 'hypotes';
 import { fc, it } from 'hypotes/fast-check';
 import { medianInterval, summarize } from 'benk';
-import { modesOf, sortedCopy } from '#source/core/statistics';
+import { changeOf, modesOf, sortedCopy } from '#source/core/statistics';
 import { expectPresent } from './expectations.ts';
 
 const sample = fc.double({ min: 1e-3, max: 1e9, noNaN: true });
@@ -133,6 +133,124 @@ describe('modes', () => {
 
         expect(modesOf(sortedCopy(normal))).toBeNull();
         expect(modesOf(sortedCopy(tail))).toBeNull();
+    });
+});
+
+/**
+ * `count` rounds of `time`, up to 0.5% slower in an order that neither rises
+ * nor falls, so that they change nowhere. The first and last take the middle
+ * time, as an extreme round next to a change ranks as if on its other side.
+ */
+function steady(count: number, time: number): number[] {
+    return Array.from({ length: count }, (_, i) => {
+        const jitter = i === 0 || i === count - 1 ? 5 : (7 * i) % 11;
+        return time * (1 + (0.005 * jitter) / 10);
+    });
+}
+
+/** The rounds that each part of a change needs at least, as of the modes */
+function least(count: number): number {
+    return Math.max(3, Math.ceil(count * 0.1));
+}
+
+describe('changes', () => {
+    it.prop([
+        fc
+            .integer({ min: 31, max: 120 })
+            .chain(count =>
+                fc.tuple(
+                    fc.constant(count),
+                    fc.integer({ min: least(count), max: count - least(count) })
+                )
+            ),
+        fc.double({ min: 1, max: 1e6, noNaN: true }),
+        fc.double({ min: 1.1, max: 10, noNaN: true }),
+        fc.boolean()
+    ])(
+        'finds where the rounds changed, and the median of each part',
+        ([count, before], time, factor, faster) => {
+            const afterTime = faster ? time / factor : time * factor;
+            const first = steady(before, time);
+            const rest = steady(count - before, afterTime);
+            const change = expectPresent(changeOf(Float64Array.from([...first, ...rest])));
+
+            expect(change.before.rounds).toBe(before);
+            expect(change.after.rounds).toBe(count - before);
+            expect(first).toContain(change.before.median);
+            expect(rest).toContain(change.after.median);
+        }
+    );
+
+    it.prop([
+        fc
+            .integer({ min: 31, max: 120 })
+            .chain(count =>
+                fc.tuple(
+                    fc.constant(count),
+                    fc.integer({ min: least(count), max: Math.floor(count / 2) })
+                )
+            ),
+        fc.double({ min: 1.2, max: 10, noNaN: true }),
+        fc.double({ min: 0.02, max: 0.045, noNaN: true })
+    ])(
+        'finds a change in the first rounds of rounds that then drift by a few percent',
+        ([count, before], factor, drift) => {
+            // The later rounds get faster by `drift` in all, with jitter of
+            // 0.5%, so that a split among them is far from its mean too
+            const rest = steady(count - before, 100).map(
+                (time, i) => time * (1 - (drift * i) / (count - before))
+            );
+            const rounds = [...steady(before, 100 * factor), ...rest];
+
+            expect(changeOf(Float64Array.from(rounds))?.before.rounds).toBe(before);
+        }
+    );
+
+    it.prop([
+        fc.double({ min: 1, max: 1e6, noNaN: true }),
+        fc.array(fc.double({ min: 1, max: 1.04, noNaN: true }), { minLength: 31, maxLength: 200 })
+    ])('finds none in rounds within 4% of each other, even in order', (time, factors) => {
+        factors.sort((a, b) => a - b);
+        expect(changeOf(Float64Array.from(factors, factor => time * factor))).toBeNull();
+    });
+
+    it.prop([
+        fc
+            .integer({ min: 31, max: 120 })
+            .chain(count =>
+                fc.tuple(
+                    fc.constant(count),
+                    fc.integer({ min: least(count), max: count - least(count) })
+                )
+            ),
+        fc.boolean()
+    ])(
+        'finds none where rounds like those before recur after it, as every 4th',
+        ([count, before], faster) => {
+            const [first, other] = faster ? [300, 100] : [100, 300];
+            const rounds = Array.from({ length: count }, (_, i) =>
+                i < before || (i - before) % 4 === 3 ? first : other
+            );
+
+            expect(changeOf(Float64Array.from(rounds))).toBeNull();
+        }
+    );
+
+    it('finds none of fewer than 3 rounds or 10% of them', () => {
+        const rounds = (before: number): Float64Array =>
+            Float64Array.from([...steady(before, 200), ...steady(100 - before, 100)]);
+
+        expect(changeOf(rounds(9))).toBeNull();
+        expect(changeOf(rounds(10))?.before.rounds).toBe(10);
+    });
+
+    it('finds none in 12 rounds or fewer, whose every order is too likely by chance', () => {
+        const rounds = (count: number): Float64Array =>
+            Float64Array.from([...steady(6, 1000), ...steady(count - 6, 100)]);
+
+        expect(changeOf(rounds(8))).toBeNull();
+        expect(changeOf(rounds(12))).toBeNull();
+        expect(changeOf(rounds(13))?.before.rounds).toBe(6);
     });
 });
 

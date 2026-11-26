@@ -171,6 +171,27 @@ export interface Modes {
     readonly slow: Mode;
 }
 
+/** Rounds of a variant one after another, before or after a change */
+export interface Segment {
+    /** The median round of the segment, in nanoseconds per call */
+    readonly median: number;
+    readonly rounds: number;
+}
+
+/**
+ * A change in a variant's time partway through its rounds: the rounds before
+ * it and those after are apart by much more than their own spread, as when
+ * V8's optimized code takes over after the first rounds, or load from other
+ * processes starts or stops. The median and the fastest then describe a mix
+ * of the two, or one of them.
+ */
+export interface Change {
+    /** The rounds from the first to the change */
+    readonly before: Segment;
+    /** The rounds from the change to the last */
+    readonly after: Segment;
+}
+
 /** A summary of a variant's rounds, in nanoseconds per call */
 export interface Summary {
     readonly fastest: number;
@@ -202,6 +223,11 @@ export interface VariantResult {
     /** The variant's position in each round, from 0 */
     readonly positions: readonly number[];
     readonly summary: Summary;
+    /**
+     * The change in its time partway through its rounds, or null where they
+     * didn't change
+     */
+    readonly change: Change | null;
     /**
      * The ratio to the reference's time by the group's lead: the fastest
      * round's to the reference's fastest, or the median of the ratios of
@@ -282,7 +308,7 @@ export interface RecordedOptions {
 /** A run's results, which `JSON.stringify` writes as they are */
 export interface RunResult {
     /** The version of this format, which changes when a field does */
-    readonly schema: 4;
+    readonly schema: 5;
     /** When the run started, as an ISO 8601 string */
     readonly date: string;
     readonly runtime: RuntimeDescription;

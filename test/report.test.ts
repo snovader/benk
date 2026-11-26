@@ -24,6 +24,7 @@ function variant(
         samples,
         positions: samples.map((_, i) => i % 3),
         summary: summarize(samples),
+        change: null,
         ratio: 1,
         interval: null,
         heapBytes: 0,
@@ -75,6 +76,51 @@ describe('formatGroup', () => {
             '  tafla-gen           85.0 ns    85.6 ns    41.0%    1.39×      1.37–1.95        24 B 1,048,576 B',
             '  tafla A/A           61.2 ns    63.0 ns     2.1%    1.00×      0.99–1.01         0 B         0 B',
             '  protobuf            1.22 µs    1.26 µs     2.1%    20.0×      19.5–20.5           –           –',
+            '  tafla-gen: two modes, 4 rounds near 85.4 ns and 3 near 121 ns'
+        ]);
+    });
+
+    it('notes where the rounds changed, in place of their two modes, with what to do', () => {
+        const [reference] = group.variants;
+        const changed = (
+            name: string,
+            before: [number, number],
+            after: [number, number]
+        ): VariantResult =>
+            variant(name, 'variant', bimodal, {
+                change: {
+                    before: { median: before[0], rounds: before[1] },
+                    after: { median: after[0], rounds: after[1] }
+                }
+            });
+        const variants = [
+            reference,
+            changed('early', [1450, 4], [805, 32]),
+            changed('late', [2070, 22], [757, 14]),
+            changed('slower', [2530, 6], [8220, 26]),
+            changed('slower late', [128, 28], [233, 4]),
+            variant('modes', 'variant', bimodal, {})
+        ];
+        const rows = 3 + variants.length;
+
+        expect(formatGroup({ ...group, lead: 'median', variants }).slice(rows)).toStrictEqual([
+            '  early: the first 4 rounds ran near 1.45 µs, and the other 32 near 805 ns: more warm-up rounds, or a longer sample time, would time only the faster rounds',
+            '  late: the last 14 rounds ran near 757 ns, and the other 22 near 2.07 µs: more warm-up rounds, or a longer sample time, would time only the faster rounds',
+            "  slower: the first 6 rounds ran near 2.53 µs, and the other 26 near 8.22 µs: another run shows whether that repeats, and V8's report whether its code deoptimized",
+            "  slower late: the last 4 rounds ran near 233 ns, and the other 28 near 128 ns: another run shows whether that repeats, and V8's report whether its code deoptimized",
+            '  modes: two modes, 4 rounds near 85.4 ns and 3 near 121 ns'
+        ]);
+    });
+
+    it('notes two modes in results of schema 4, which have no change', () => {
+        const { change: _, ...before } = group.variants[1];
+        const lines = formatGroup({
+            ...group,
+            lead: 'median',
+            variants: [before as VariantResult]
+        });
+
+        expect(lines.slice(4)).toStrictEqual([
             '  tafla-gen: two modes, 4 rounds near 85.4 ns and 3 near 121 ns'
         ]);
     });
