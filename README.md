@@ -464,7 +464,7 @@ ratios in all of them:
 
 | Field              | What it has                                                                                                                                                                                                                                                                     |
 | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `processes.runs`   | The runs after the first, in the order that they ran: each one's `date` and `groups`, as the first's.                                                                                                                                                                           |
+| `processes.runs`   | The runs after the first, in the order that they ran: each one's `date`, `runtime` and `groups`, as the first's. A run's flags and process state can differ from the first's.                                                                                                   |
 | `processes.groups` | Each group's `name`, its `lead` in the first process, its `leads` in each process's own run, and its `variants`: each one's `name`, `role`, `ratios` in each process from the first, `intervals` in each, or `null` for none, `median`, or `null` for 2 processes, and `range`. |
 
 A group's `timerResolution` is the shortest time that a timer loop of the

@@ -314,6 +314,11 @@ export interface RunResult {
 export interface ProcessRun {
     /** When it started measuring, as an ISO 8601 string */
     readonly date: string;
+    /**
+     * The runtime that it ran in, as `RunResult`'s `runtime` describes the
+     * first's. Its flags and process state can differ from the first's.
+     */
+    readonly runtime: RuntimeDescription;
     /** Its groups, as the first run measured them, and in the same order */
     readonly groups: readonly GroupResult[];
 }

@@ -480,6 +480,11 @@ describe('--processes', () => {
         // The JSON is of the last call, as without the option
         expect(result.schema).toBe(5);
         expect(result.groups.map(group => group.name)).toStrictEqual(['crossing']);
+        // Each run's own runtime, as the first's describes its own
+        expect(processes.runs.map(run => run.runtime)).toStrictEqual([
+            result.runtime,
+            result.runtime
+        ]);
         const fastest = processes.runs.map(run => run.groups[0].variants[1].summary.fastest);
         expect(fastest).toHaveLength(2);
         expectClose(fastest[0], 50);

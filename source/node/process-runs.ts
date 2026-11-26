@@ -47,9 +47,9 @@ const recorded: ProcessRun[] = [];
 export async function recordProcessRun(
     file: string,
     call: number,
-    { date, groups }: RunResult
+    { date, runtime, groups }: RunResult
 ): Promise<void> {
-    recorded[call] = { date, groups };
+    recorded[call] = { date, runtime, groups };
     await writeFile(file, JSON.stringify(recorded));
 }
 

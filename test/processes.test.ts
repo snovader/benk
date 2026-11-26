@@ -54,8 +54,8 @@ async function measurePair(
 }
 
 /** A process's results, as the first process reads them */
-function asRun({ date, groups }: RunResult): ProcessRun {
-    return { date, groups };
+function asRun({ date, runtime, groups }: RunResult): ProcessRun {
+    return { date, runtime, groups };
 }
 
 describe('withProcesses', () => {
@@ -148,7 +148,7 @@ describe('withProcesses', () => {
         expect(() => withProcesses(first, [asRun(otherVariant)])).toThrow(
             `got "pair" of "base", "another", "base A/A" where the first has ${groups}`
         );
-        expect(() => withProcesses(first, [{ date: first.date, groups: [] }])).toThrow(
+        expect(() => withProcesses(first, [{ ...asRun(first), groups: [] }])).toThrow(
             `got no group where the first has ${groups}`
         );
     });
@@ -197,7 +197,11 @@ function processesOf(
     lead: Lead = 'median',
     others: readonly number[] = []
 ): Processes {
-    const run: ProcessRun = { date: '2026-11-26T00:00:00.000Z', groups: [] };
+    const run: ProcessRun = {
+        date: '2026-11-26T00:00:00.000Z',
+        runtime: new FakeRuntime().description,
+        groups: []
+    };
     const other: Lead = lead === 'median' ? 'fastest' : 'median';
 
     return {

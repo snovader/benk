@@ -273,7 +273,11 @@ async function runInD8Processes(
         const [first, ...others] = results;
         const result = withProcesses(
             first,
-            others.map(({ date, groups }) => ({ date, groups }))
+            others.map(({ date, runtime, groups }) => ({
+                date,
+                runtime,
+                groups
+            }))
         );
         for (const line of formatProcesses(result.processes)) {
             print(line);

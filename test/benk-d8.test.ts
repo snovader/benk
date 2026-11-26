@@ -357,7 +357,10 @@ describe.skipIf(process.platform === 'win32')('benk-d8 with d8 faked', () => {
                 '2.20×',
                 '2.00–2.40'
             ]);
-            expect(result.processes?.runs).toHaveLength(2);
+            expect(result.processes?.runs.map(run => run.runtime)).toStrictEqual([
+                result.runtime,
+                result.runtime
+            ]);
             expect(result.processes?.groups[0].variants[1].median).toBeCloseTo(2.2);
         });
     });

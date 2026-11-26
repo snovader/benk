@@ -85,8 +85,7 @@ function variantAcrossProcesses(
         role,
         ratios,
         intervals: groups.map(group => group.variants[index].interval),
-        median:
-            sorted.length < MEDIAN_PROCESSES ? null : quantile(sorted, 0.5),
+        median: sorted.length < MEDIAN_PROCESSES ? null : quantile(sorted, 0.5),
         range: [sorted[0], sorted[sorted.length - 1]]
     };
 }
