@@ -1,3 +1,4 @@
+import { quantile } from './statistics.ts';
 import type { Lead, LeadReason, Summary } from './types.ts';
 
 /** The time per call from which a group leads with the median, in nanoseconds */
@@ -62,4 +63,24 @@ export function chooseLead(
 /** Whether a variant's call allocates `ALLOCATING_CALL` bytes or more */
 function allocates({ heapBytes, arrayBufferBytes }: LeadInput): boolean {
     return (heapBytes ?? 0) + (arrayBufferBytes ?? 0) >= ALLOCATING_CALL;
+}
+
+/**
+ * A variant's ratio to the reference by the lead: its fastest round's to
+ * the reference's fastest, or the median of its sorted per-round ratios to
+ * the reference
+ */
+export function ratioByLead(
+    lead: Lead,
+    summary: Summary,
+    reference: Summary,
+    sortedRatios: ArrayLike<number>
+): number | null {
+    const ratio =
+        lead === 'fastest'
+            ? summary.fastest / reference.fastest
+            : quantile(sortedRatios, 0.5);
+
+    // A reference round shorter than one clock tick can read zero.
+    return Number.isFinite(ratio) ? ratio : null;
 }

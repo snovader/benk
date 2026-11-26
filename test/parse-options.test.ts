@@ -16,6 +16,7 @@ const REFERENCE = {
         'sample-ms': { type: 'string' },
         filter: { type: 'string' },
         json: { type: 'string' },
+        processes: { type: 'string' },
         aa: { type: 'boolean' },
         heap: { type: 'boolean' },
         'v8-report': { type: 'boolean' },
@@ -37,6 +38,7 @@ const WITH_VALUES = [
     'sample-ms',
     'filter',
     'json',
+    'processes',
     'v8-filter',
     'v8-max-bytecode'
 ];
@@ -145,7 +147,7 @@ describe('parseOptions', () => {
         expect(parse).toThrow(TypeError);
         expect(parse).toThrow(/, got --round$/);
         expect(parse).toThrow(
-            /--rounds, --warmup-rounds, --sample-ms, --filter, --json, --v8-filter, --v8-max-bytecode, --\[no-\]aa/
+            /--rounds, --warmup-rounds, --sample-ms, --filter, --json, --processes, --v8-filter, --v8-max-bytecode, --\[no-\]aa/
         );
     });
 

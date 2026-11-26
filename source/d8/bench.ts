@@ -11,6 +11,7 @@ import {
 import { measureGroups } from '#source/core/measure';
 import { formatJson } from '#source/core/report';
 import type { Group, RunResult, Runtime } from '#source/core/types';
+import { D8_PROCESS_RUN } from './process-run.ts';
 import { D8Runtime } from './runtime.ts';
 import { D8_TRACED_RUN } from './traced-run.ts';
 
@@ -46,7 +47,9 @@ declare function writeFile(path: string, data: string | ArrayBuffer): void;
  * its options from the script's arguments, prints a description of the run,
  * measures each group whose name matches the filter and prints its table,
  * and then writes the results as JSON, if the options ask for it. Last, it
- * calls the `after` option, with the `print` that printed the tables.
+ * calls the `after` option, with the `print` that printed the tables, but
+ * not in a run of benk-d8's `--processes` after the first, whose output
+ * benk-d8 drops.
  *
  * What d8 can't do as Node does:
  *
@@ -54,9 +57,9 @@ declare function writeFile(path: string, data: string | ArrayBuffer): void;
  *   check of a directory, so `bench()` checks the path before it measures
  *   by writing the file: with the bytes that it has, or empty.
  * - `--v8-report` is an error, before it measures, as is `--v8-filter`,
- *   which implies it: d8 can't start the process that runs the script
- *   again. The command `benk-d8` runs a script in d8 from Node, and
- *   carries them out itself.
+ *   which implies it, and `--processes` of more than 1: d8 can't start the
+ *   process that runs the script again. The command `benk-d8` runs a script
+ *   in d8 from Node, and carries them out itself.
  * - `--v8-check` is an error too, as is `--v8-max-bytecode`, which implies
  *   it, in `benk-d8` as well: the check needs Node's traced run, which
  *   reads where each variant's `run` starts, and marks the timed rounds.
@@ -70,8 +73,8 @@ declare function writeFile(path: string, data: string | ArrayBuffer): void;
  * malformed, as `measureGroups()` describes.
  * @throws {RangeError} If a number is out of its range.
  * @throws {SyntaxError} If a filter isn't a regular expression.
- * @throws {Error} With `--v8-report`, `--v8-check` or an option that implies
- * either, or if the JSON's file can't be
+ * @throws {Error} With `--processes` of more than 1, `--v8-report`,
+ * `--v8-check` or an option that implies either, or if the JSON's file can't be
  * written, which it checks before it measures, if the runtime's clock reads
  * no time, if a variant throws, with its error as the cause, or if `after`
  * throws, with its error.
@@ -80,8 +83,20 @@ export async function bench(
     groups: Iterable<Group>,
     options: BenchOptions = {}
 ): Promise<RunResult> {
-    const { json, v8Report, v8Filter, v8Check, v8MaxBytecode, ...command } =
-        parseOptions(options.args ?? scriptArguments());
+    const {
+        json,
+        processes,
+        v8Report,
+        v8Filter,
+        v8Check,
+        v8MaxBytecode,
+        ...command
+    } = parseOptions(options.args ?? scriptArguments());
+    if (processes > 1) {
+        throw new Error(
+            `Expected no --processes ${processes} in d8, which can't start a process: run it with benk-d8, as benk-d8 bench.mjs -- --processes ${processes}`
+        );
+    }
     if (v8Check) {
         const option =
             v8MaxBytecode == null ? '--v8-check' : '--v8-max-bytecode';
@@ -114,7 +129,11 @@ export async function bench(
         writeResults(json, formatJson(result));
     }
 
-    await options.after?.(printLine, result);
+    // A run of benk-d8's --processes after the first, whose output benk-d8
+    // drops, doesn't call it, as a run of --processes in Node doesn't
+    if (!Object.hasOwn(globalThis, Symbol.for(D8_PROCESS_RUN))) {
+        await options.after?.(printLine, result);
+    }
 
     return result;
 }

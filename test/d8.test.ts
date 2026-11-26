@@ -266,13 +266,14 @@ describe('bench of benk/d8', () => {
                 ...(aa ? [] : ['--no-aa']),
                 ...(heap ? [] : ['--no-heap'])
             ];
-            const { json, v8Report, v8Filter, v8Check, v8MaxBytecode, ...parsed } =
+            const { json, processes, v8Report, v8Filter, v8Check, v8MaxBytecode, ...parsed } =
                 parseOptions(args);
 
             const result = await bench(groups(runtime), { args, runtime, print: () => undefined });
 
-            expect([json, v8Report, v8Filter, v8Check, v8MaxBytecode]).toStrictEqual([
+            expect([json, processes, v8Report, v8Filter, v8Check, v8MaxBytecode]).toStrictEqual([
                 undefined,
+                1,
                 false,
                 undefined,
                 false,
@@ -318,6 +319,19 @@ describe('bench of benk/d8', () => {
         expect(printed.some(line => line.startsWith('second: '))).toBe(true);
     });
 
+    it('measures in one process with --processes 1, as without it', async () => {
+        const runtime = new FakeRuntime();
+
+        const result = await bench(groups(runtime), {
+            args: [...FAKE_ARGS, '--processes', '1'],
+            runtime,
+            print: () => undefined
+        });
+
+        expect(result.groups).toHaveLength(2);
+        expect(result.processes).toBeNull();
+    });
+
     it('calls `after` last, with the print that printed the tables, and the results', async () => {
         const runtime = new FakeRuntime();
         const lines: string[] = [];
@@ -345,6 +359,10 @@ describe('bench of benk/d8', () => {
             [['--v8-filter', 'sum'], /no --v8-report or --v8-filter in d8/],
             [['--v8-check'], /no --v8-check in d8, nor in benk-d8/],
             [['--v8-max-bytecode', '400'], /no --v8-max-bytecode in d8, nor in benk-d8/],
+            [
+                ['--processes', '3'],
+                /^Expected no --processes 3 in d8, which can't start a process: run it with benk-d8, as benk-d8 bench\.mjs -- --processes 3$/
+            ],
             [['--round', '6'], TypeError],
             [['--rounds', '0'], RangeError]
         ] as const) {

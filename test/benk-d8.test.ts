@@ -110,6 +110,10 @@ describe('benk-d8', () => {
             [
                 [missing, D8_BUNDLE, '--', '--v8-max-bytecode', '400'],
                 'Error: Expected no --v8-max-bytecode in benk-d8'
+            ],
+            [
+                [missing, D8_BUNDLE, '--', '--processes', '2', '--json', '/nowhere/results.json'],
+                'Error: Expected the directory of --json to be writable, got '
             ]
         ] as const) {
             const { status, stdout, stderr } = await runCommand(args);
@@ -311,6 +315,119 @@ describe.skipIf(process.platform === 'win32')('benk-d8 with d8 faked', () => {
             `benk-d8: Error: Expected V8's compilations and functions in the traced run of ${D8_BUNDLE}, got 0 and 0: d8 15.8.62.9 may write other formats`
         );
     });
+
+    it("runs d8 in each process, and prints the ratios across them after the first run's output", async () => {
+        await inDirectory(async directory => {
+            const path = join(directory, 'results.json');
+            const { status, stdout, stderr, d8Runs } = await runFake('measures', [
+                D8_BUNDLE,
+                '--',
+                '--rounds',
+                '6',
+                '--processes',
+                '3',
+                '--json',
+                path
+            ]);
+            const result = JSON.parse(await readFile(path, 'utf8')) as RunResult;
+            const options = d8Runs.map(args =>
+                parseOptions(args.slice(args.indexOf(D8_BUNDLE) + 2))
+            );
+            const lines = stdout.split('\n');
+            const row = lines.find(line => line.startsWith('  other '));
+
+            expect(status, stderr).toBe(0);
+            // Each run gets the script's options, but --processes, and a file of its own
+            expect(options.map(({ rounds, processes }) => [rounds, processes])).toStrictEqual([
+                [6, 1],
+                [6, 1],
+                [6, 1]
+            ]);
+            expect(new Set(options.map(({ json }) => json)).size).toBe(3);
+            expect(options.map(({ json }) => json)).not.toContain(path);
+            // The runs after the first are marked before the script, which benk/d8's
+            // bench() reads, so that it doesn't call after there
+            const mark = ['-e', "globalThis[Symbol.for('benk.d8.processRun')] = true"];
+            expect(d8Runs.map(args => args.slice(0, args.indexOf(D8_BUNDLE)))).toStrictEqual([
+                [],
+                mark,
+                mark
+            ]);
+            // Only the first run's output shows
+            expect(lines.filter(line => line.startsWith('d8 measured'))).toStrictEqual([
+                'd8 measured other in 100 ns'
+            ]);
+            expect(lines).toContain('pair: 3 processes, by the fastest round');
+            expect(row?.trim().split(/\s+/)).toStrictEqual([
+                'other',
+                '2.00×',
+                '2.20×',
+                '2.40×',
+                '2.20×',
+                '2.00–2.40'
+            ]);
+            expect(result.processes?.runs.map(run => run.runtime)).toStrictEqual([
+                result.runtime,
+                result.runtime
+            ]);
+            expect(result.processes?.groups[0].variants[1].median).toBeCloseTo(2.2);
+        });
+    });
+
+    it('writes the results with the other processes to stdout for --json -, and the rest to stderr', async () => {
+        const { status, stdout, stderr } = await runFake('measures', [
+            D8_BUNDLE,
+            '--',
+            '--processes',
+            '2',
+            '--json',
+            '-'
+        ]);
+        const result = JSON.parse(stdout) as RunResult;
+
+        expect(status, stderr).toBe(0);
+        expect(result.processes?.runs).toHaveLength(1);
+        expect(stderr).toContain('d8 measured other in 100 ns\n');
+        expect(stderr).toContain('\npair: 2 processes, by the fastest round\n');
+    });
+
+    it('reports on V8 after the ratios across processes, from a traced run without --processes', async () => {
+        const { status, stdout, stderr, d8Runs } = await runFake('measures', [
+            D8_BUNDLE,
+            '--',
+            '--processes',
+            '2',
+            '--v8-report'
+        ]);
+        const traced = d8Runs.at(-1) ?? [];
+        const ratios = stdout.indexOf('\npair: 2 processes, by the fastest round\n');
+
+        expect(status, stderr).toBe(0);
+        expect(d8Runs).toHaveLength(3);
+        expect(traced).toContain('--log-code');
+        expect(parseOptions(traced.slice(traced.indexOf(D8_BUNDLE) + 2))).toMatchObject({
+            processes: 1,
+            json: undefined
+        });
+        expect(ratios).toBeGreaterThan(-1);
+        expect(ratios).toBeLessThan(stdout.indexOf('V8 report of '));
+    });
+
+    it("exits with d8's code if the first run fails, and throws if a later one does", async () => {
+        const first = await runFake('fails', [D8_BUNDLE, '--', '--processes', '3']);
+        const later = await runFake('measures-then-fails', [D8_BUNDLE, '--', '--processes', '3']);
+
+        expect(first.status).toBe(1);
+        expect(first.d8Runs).toHaveLength(1);
+        expect(first.stdout).toContain('Error: boom');
+        expect(later.status).toBe(1);
+        expect(later.d8Runs).toHaveLength(2);
+        // A later run's stdout doesn't show
+        expect(later.stdout).not.toContain('Error: boom');
+        expect(later.stderr.trimEnd()).toBe(
+            `benk-d8: Error: Expected run 2 of 3 of ${D8_BUNDLE} in d8 to exit with 0, got 1`
+        );
+    });
 });
 
 /** d8's version, or undefined where d8 isn't installed */
@@ -399,6 +516,61 @@ describe.runIf(version)('benk-d8 in d8', () => {
         expect(reportOf(stderr)[0]).toMatch(/^V8 report of /);
     });
 
+    it('accepts --processes 1 with a bundle made before the option existed', async () => {
+        const { status, stdout, stderr } = await runCommand([
+            D8_BUNDLE,
+            '--',
+            ...QUICK,
+            '--processes=1',
+            '--json',
+            '-'
+        ]);
+
+        expect(status, stderr).toBe(0);
+        expect((JSON.parse(stdout) as { schema: number }).schema).toBe(3);
+    });
+
+    it('asks for a rebuilt bundle before aggregating a different result schema', async () => {
+        const { status, stdout, stderr } = await runCommand([
+            D8_BUNDLE,
+            '--',
+            ...QUICK,
+            '--processes',
+            '2',
+            '--json',
+            '-'
+        ]);
+
+        expect(status).toBe(1);
+        expect(stderr).toContain('write result schema 6, got 3: rebuild the script');
+        expect(stdout).toBe('');
+    });
+
+    it('summarizes the current d8 bundle with a trailing option terminator', async () => {
+        await inDirectory(async directory => {
+            const script = await writeScript(directory, 'buffers', BUFFERS_SCRIPT);
+            const { status, stdout, stderr } = await runCommand([
+                script,
+                '--',
+                ...QUICK,
+                '--processes',
+                '2',
+                '--json',
+                '-',
+                '--'
+            ]);
+
+            expect(status, stderr).toBe(0);
+            const result = JSON.parse(stdout) as RunResult;
+            expect(result.schema).toBe(6);
+            expect(result.v8Report).toBeNull();
+            expect(result.runtime.name).toBe('d8');
+            expect(result.processes?.runs).toHaveLength(1);
+            expect(result.processes?.groups.map(group => group.name)).toStrictEqual(['buffers']);
+            expect(stderr).toMatch(/\nbuffers: 2 processes, by the (fastest|median) round\n/);
+        });
+    });
+
     it('counts array buffers with the flags of d8 that the count needs, and reports with them', async () => {
         await inDirectory(async directory => {
             const script = await writeScript(directory, 'buffers', BUFFERS_SCRIPT);
@@ -453,6 +625,47 @@ describe.runIf(version)('benk-d8 in d8', () => {
             expect(status, stderr).toBe(0);
             expect(reportOf(stdout)[0]).toContain('V8 report of');
             expect(await readFile(count, 'utf8')).toBe('1');
+        });
+    });
+
+    it('calls after only in the first run of --processes, whose output shows', async () => {
+        await inDirectory(async directory => {
+            const count = join(directory, 'calls');
+            await writeFile(count, '0');
+            const script = await writeScript(
+                directory,
+                'after',
+                `
+                import { bench } from 'benk/d8';
+                const count = ${JSON.stringify(count)};
+                await bench([{ name: 'calls', variants: [{ name: 'one', run: () => 1 }] }], {
+                    after(print, { processes }) {
+                        writeFile(count, String(Number(read(count)) + 1));
+                        print(\`after: \${processes === null ? 'no' : 'with'} processes\`);
+                    }
+                });
+            `
+            );
+
+            const { status, stdout, stderr } = await runCommand([
+                '--module',
+                script,
+                '--',
+                ...QUICK,
+                '--processes',
+                '3'
+            ]);
+            const lines = stdout.split('\n');
+
+            expect(status, stderr).toBe(0);
+            expect(await readFile(count, 'utf8')).toBe('1');
+            // d8's first run calls it, before benk-d8 prints the ratios across processes
+            expect(lines.filter(line => line.startsWith('after: '))).toStrictEqual([
+                'after: no processes'
+            ]);
+            expect(lines.indexOf('after: no processes')).toBeLessThan(
+                lines.indexOf('calls: 3 processes, by the fastest round')
+            );
         });
     });
 

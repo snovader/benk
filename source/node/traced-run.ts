@@ -6,10 +6,16 @@
 // returns, as `source-maps.ts` reads them, and marks its calls of `bench()`
 // among the traces, as `traced-markers.ts` describes.
 import { spawn } from 'node:child_process';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { D8_TRACED_RUN } from '#source/d8/traced-run';
+import {
+    childRunValue,
+    inTemporaryDirectory,
+    isMissing,
+    runChild,
+    TRACED_RUN
+} from './child-run.ts';
 import {
     readSourceMapFile,
     readSourceMaps,
@@ -29,14 +35,6 @@ import {
     type FunctionAddress,
     type LoggedFunction
 } from './v8-trace.ts';
-
-/**
- * The environment variable that marks the traced run in Node. `bench()`
- * measures in it as in any other run, so that V8 sees the same calls, but prints
- * nothing, writes no JSON, and doesn't run the script again for
- * `--v8-report`. It then records the source maps of the run's scripts.
- */
-export const TRACED_RUN = 'BENK_TRACED_RUN';
 
 /**
  * V8's flags of the traced run, in Node and in d8. The traces go to stdout,
@@ -93,9 +91,12 @@ export interface TracedOutput {
     readonly sourceMapFiles: ReadonlyMap<string, SourceMapFile>;
 }
 
-/** Whether this process is the traced run of another */
+/**
+ * Whether this process is the traced run of another, which a process that
+ * the traced run starts isn't
+ */
 export function isTracedRun(): boolean {
-    return Boolean(process.env[TRACED_RUN]);
+    return Boolean(childRunValue(TRACED_RUN));
 }
 
 /**
@@ -185,13 +186,18 @@ export function runTraced(
 ): Promise<TracedOutput> {
     return inTemporaryDirectory(async directory => {
         const log = join(directory, 'code.log');
-        const output = await runChild(script, [
-            ...process.execArgv,
-            ...TRACE_FLAGS,
-            `${LOGFILE}${log}`,
-            script,
-            ...args
-        ]);
+        const output = await runChild({
+            name: `the traced run of ${script}`,
+            args: [
+                ...process.execArgv,
+                ...TRACE_FLAGS,
+                `${LOGFILE}${log}`,
+                script,
+                ...args
+            ],
+            mark: [TRACED_RUN, '1'],
+            stdout: 'collect'
+        });
 
         return {
             output,
@@ -422,21 +428,6 @@ function benkDirectory(): string {
 }
 
 /**
- * Runs a function with a temporary directory, which it removes after, as
- * the traced run writes its log there
- */
-async function inTemporaryDirectory<T>(
-    use: (directory: string) => Promise<T>
-): Promise<T> {
-    const directory = await mkdtemp(join(tmpdir(), 'benk-'));
-    try {
-        return await use(directory);
-    } finally {
-        await rm(directory, { recursive: true, force: true });
-    }
-}
-
-/**
  * The code log of a traced run
  *
  * @throws {Error} If the run wrote none.
@@ -472,38 +463,6 @@ async function readRecorded(path: string): Promise<Map<string, SourceMapFile>> {
 
     // Written by `recordSourceMaps()`, in the traced run
     return new Map(JSON.parse(text) as Array<[string, SourceMapFile]>);
-}
-
-function isMissing(error: unknown): boolean {
-    return error instanceof Error && 'code' in error && error.code === 'ENOENT';
-}
-
-/** Runs Node with the arguments, and collects what it writes to stdout */
-function runChild(script: string, args: readonly string[]): Promise<string> {
-    return new Promise((resolve, reject) => {
-        const child = spawn(process.execPath, args, {
-            env: { ...process.env, [TRACED_RUN]: '1' },
-            stdio: ['ignore', 'pipe', 'inherit']
-        });
-        const chunks: string[] = [];
-
-        child.stdout.setEncoding('utf8');
-        child.stdout.on('data', (chunk: string) => {
-            chunks.push(chunk);
-        });
-        child.on('error', reject);
-        child.on('close', (code, signal) => {
-            if (code === 0) {
-                resolve(chunks.join(''));
-            } else {
-                reject(
-                    new Error(
-                        `Expected the traced run of ${script} to exit with 0, got ${code ?? signal}`
-                    )
-                );
-            }
-        });
-    });
 }
 
 /**

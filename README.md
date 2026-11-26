@@ -24,6 +24,10 @@ out of a comparison, or at least in view:
   command `benk-d8` reports on a script in d8, without the ties.
 - **A check for CI.** `--v8-check` fails the run on a hot function too
   large for Turbofan to inline, or on a deoptimization in the timed rounds.
+- **Ratios across processes.** `--processes 5` runs the script again in 4
+  more processes, and prints each variant's ratio in each, with their
+  median and range, as an interval of one process's rounds can't show how
+  a ratio varies between processes.
 
 It times one process's variants against each other. It isn't a general
 harness with every statistic: [mitata](https://github.com/evanwashere/mitata)
@@ -111,20 +115,21 @@ A benchmark script takes its options from the command line:
 node bench.ts --rounds 51 --json results.json
 ```
 
-| Option                      | Default | What it does                                                                                                                     |
-| --------------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| `--rounds <n>`              | 31      | Sets the timed rounds, at least. benk runs whole rotations, so a group of 3 variants and its A/A copy runs 32.                   |
-| `--warmup-rounds <n>`       | 10      | Sets the rounds before the timed ones, after which each variant's calls per round are counted again.                             |
-| `--sample-ms <ms>`          | 1       | Sets the time of one variant's round.                                                                                            |
-| `--filter <regex>`          |         | Measures only the groups whose name matches.                                                                                     |
-| `--json <path>`             |         | Writes the results as JSON to a file. benk checks that it can write to the file's directory before it measures.                  |
-| `--json -`                  |         | Writes the JSON to stdout, and the tables to stderr.                                                                             |
-| `--no-aa`                   |         | Leaves out the A/A copies. A group's `aa` overrides it.                                                                          |
-| `--no-heap`                 |         | Leaves out the counts of bytes allocated, on the heap and in array buffers.                                                      |
-| `--v8-report`               |         | Runs the script again with V8's traces, after measuring, and prints [V8's report](#v8s-report) of its hot functions.             |
-| `--v8-filter <regex>`       |         | Lists only the functions whose name matches in V8's report, and implies `--v8-report`.                                           |
-| `--v8-check`                |         | Checks the functions of V8's report, and exits with 2 if one fails, as [The check](#the-check) describes. Implies `--v8-report`. |
-| `--v8-max-bytecode <bytes>` |         | Fails the check for a hot function of more bytecode than this. Implies `--v8-check`.                                             |
+| Option                      | Default | What it does                                                                                                                                           |
+| --------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `--rounds <n>`              | 31      | Sets the timed rounds, at least. benk runs whole rotations, so a group of 3 variants and its A/A copy runs 32.                                         |
+| `--warmup-rounds <n>`       | 10      | Sets the rounds before the timed ones, after which each variant's calls per round are counted again.                                                   |
+| `--sample-ms <ms>`          | 1       | Sets the time of one variant's round.                                                                                                                  |
+| `--filter <regex>`          |         | Measures only the groups whose name matches.                                                                                                           |
+| `--json <path>`             |         | Writes the results as JSON to a file. benk checks that it can write to the file's directory before it measures.                                        |
+| `--json -`                  |         | Writes the JSON to stdout, and the tables to stderr.                                                                                                   |
+| `--processes <n>`           | 1       | Measures in n processes: this one, then the script again in n − 1 more. Prints each ratio in each, as [Across processes](#across-processes) describes. |
+| `--no-aa`                   |         | Leaves out the A/A copies. A group's `aa` overrides it.                                                                                                |
+| `--no-heap`                 |         | Leaves out the counts of bytes allocated, on the heap and in array buffers.                                                                            |
+| `--v8-report`               |         | Runs the script again with V8's traces, after measuring, and prints [V8's report](#v8s-report) of its hot functions.                                   |
+| `--v8-filter <regex>`       |         | Lists only the functions whose name matches in V8's report, and implies `--v8-report`.                                                                 |
+| `--v8-check`                |         | Checks the functions of V8's report, and exits with 2 if one fails, as [The check](#the-check) describes. Implies `--v8-report`.                       |
+| `--v8-max-bytecode <bytes>` |         | Fails the check for a hot function of more bytecode than this. Implies `--v8-check`.                                                                   |
 
 A script in d8 takes the same options after `--`, as [d8](#d8) describes.
 
@@ -395,8 +400,10 @@ encode 1,000 characters: 1000 bytes
 ```
 
 `bench()` awaits `after`, and rejects with what it throws. By then it has
-written the JSON. The traced run of `--v8-report` prints nothing, so it
-doesn't call `after`, although it runs the script's code after `bench()`.
+written the JSON. The traced run of `--v8-report`, and the other processes
+of `--processes`, show nothing, so they don't call `after`, although they
+run the script's code after `bench()`. In d8, `after` comes before the
+tables across processes, as [In d8](#in-d8) describes.
 
 ## What the table reports
 
@@ -427,13 +434,15 @@ Per call of each variant:
 - **ratio**: the ratio to the reference, by the statistic that the group
   leads with: the fastest round's to the reference's fastest, or the median
   of the ratios of each round's time to the reference's in the same round.
+  If the clock reads zero for the reference and the ratio is undefined or
+  infinite, the table shows a dash and the JSON records `null`.
 - **95% interval**: a confidence interval of the median of the per-round
   ratios, from their order statistics, which assumes nothing about the
   rounds' distribution. An interval that leaves out 1 says that the variant
   differed from the reference round by round. The A/A row's shows how wide
   an interval is when nothing differs. It's left out with fewer than 6
-  rounds. In a group that leads with the fastest round, the ratio compares
-  the fastest rounds instead, so the two are different statistics.
+  rounds or when either endpoint is unmeasurable. In a group that leads
+  with the fastest round, the ratio compares the fastest rounds instead.
 - **heap**: the bytes that a call allocated on V8's heap, from V8's heap
   statistics and a `GCProfiler`, less what a sample allocates itself. The
   median of 5 samples counts: compiling and deoptimizing allocate in some
@@ -548,13 +557,153 @@ V8's `gc()`, 191 ns with `--no-heap`, and 251 ns with an inspector
 collection. Releasing the meters took a median of 2.11 ms per group with
 eager measurement and 1.64 ms with `gc()`.
 
+## Across processes
+
+A process has one set of V8's decisions: which code it compiles to which
+tier, and when, where it places objects on the heap, and the order in which
+it loads modules. Each of its rounds shares them. So a ratio's 95% interval,
+which is of the rounds of one process, can't say how the ratio varies
+between processes. `--processes <n>` measures in n processes, and prints
+each variant's ratio in each:
+
+```sh
+node bench.ts --processes 5
+```
+
+```text
+Node v26.13.0, V8 14.6.202.34-node.40, darwin arm64, Apple M2 Pro. Process state: entry script from TypeScript source.
+Per call, of at least 31 interleaved rounds of 1 ms per variant after 10 warm-up rounds, in an order that rotates each variant through each position:
+the fastest and median round, the interquartile range as a share of the median, the ratio to the group's first variant by the statistic that the group leads with, a 95% interval of the median of the per-round ratios, and the bytes allocated on the heap and in array buffers outside it.
+
+sum 1,000 numbers: 36 rounds, by the median round (a call of 1 µs or more)
+                      fastest     median   spread    ratio   95% interval        heap     buffers
+  for loop            1.45 µs    1.49 µs     3.2%    1.00×                       16 B         0 B
+  reduce              7.12 µs    7.55 µs     7.1%    5.08×      4.99–5.20    32,040 B         0 B
+  for loop A/A        1.44 µs    1.47 µs     3.1%    1.00×      1.00–1.01        16 B         0 B
+
+In 5 processes, the first of them the run above, and the others its repeats: each variant's ratio in each, by the statistic that its group leads with in the first, the median of the 5 ratios, and their range.
+
+sum 1,000 numbers: 5 processes, by the median round
+                         1       2       3       4       5   median          range
+  for loop           1.00×   1.00×   1.00×   1.00×   1.00×    1.00×
+  reduce             5.08×   5.04×   5.00×   5.05×   5.02×    5.04×      5.00–5.08
+  for loop A/A       1.00×   1.00×   1.00×   1.00×   1.00×    1.00×      1.00–1.00
+```
+
+benk measures in this process first, and prints its tables as it does
+without the option. Then it runs the script again in 4 more processes, one
+after another, and prints a table of each group: a column for each
+process, then the median of their ratios and their range. This is one of 3
+runs of the quick start's `bench.ts` on an Apple M2 Pro with Node 26.13.0,
+with benk's bundle in another project and a load average near 5. The ratios
+of `reduce` ranged 5.00–5.08 in this one, and 5.01–5.07 and 5.05–5.10 in
+the others, within its interval in the first process of each.
+
+Each ratio is by the statistic that its group leads with in the first
+process, whose table names it. A process whose group led with the other
+statistic, as when its calls ran in another tier, gets its ratio from its
+rounds, as the first process compares them. A note below the table names
+such a process, as its ratio then differs from the one that its own table
+would have printed:
+
+```text
+  process 3 led with the median round: its ratios here are by the fastest round, from its rounds
+```
+
+| Column or note                                                              | What it says                                                                                                                                                                                                                                                                                                                                                                                           |
+| --------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `1` to `5`                                                                  | The ratio in each process. The first is the run whose tables are above.                                                                                                                                                                                                                                                                                                                                |
+| **median**                                                                  | The median of the ratios. Of an even count, it's the greater of the middle two, so that it's a process's ratio. With 2 processes, there's none.                                                                                                                                                                                                                                                        |
+| **range**                                                                   | The least and the greatest of the ratios.                                                                                                                                                                                                                                                                                                                                                              |
+| `the intervals of processes 1 and 3 don't overlap, 0.61–0.63 and 0.90–0.93` | The processes have disjoint 95% confidence intervals for their median per-round ratios. Individual rounds in the two processes can still overlap. In a group that leads with the fastest round, the note starts `round by round`: the intervals are of the median of the per-round ratios, as in each process's table, and the ratios beside them of the fastest rounds.                               |
+| `faster than for loop in 2 processes, and slower in 3`                      | The variant's ratios, as printed, lie on both sides of 1: which of the two is faster depends on the process. A ratio that prints as 1.00 is neither. An A/A copy gets no such note.                                                                                                                                                                                                                    |
+| `median 1.02×, no further from 1 than the A/A copy's median, 1.03×`         | The variant's median ratio is no further from 1 than the A/A copy's: it differs from the reference by no more than identical code does in the median process. The medians compare like with like: the A/A copy's furthest ratio, of one process, would dismiss a variant that differed alike in every process. A median that prints as 1.00 shows no difference, and gets no such note.                |
+
+If a process has no measurable ratio, its cell shows a dash. The median and
+range also show dashes because both summarize the full set of processes.
+The JSON records each missing value as `null`.
+
+The processes are few, as each runs the whole script, so benk gives their
+range rather than an interval. Like the rounds' 95% interval, the range is
+an interval of order statistics, which assumes nothing about the ratios'
+distribution. If the processes are alike and independent, it holds the
+median ratio of a process with a confidence of 1 − 2¹⁻ⁿ:
+
+| Processes | Confidence that the range holds the median |
+| --------- | ------------------------------------------ |
+| 2         | 50%                                        |
+| 3         | 75%                                        |
+| 4         | 88%                                        |
+| 5         | 94%                                        |
+| 6         | 97%                                        |
+
+With 2 processes, the table has no **median** column, and the JSON's
+`median` is `null`: the median of two would be the greater of them. Their
+range holds a process's median ratio only half the time, as the paragraph
+above the tables says. Use 3 or more for a range to go by.
+
+What the other processes do:
+
+1. Each runs the script with the same arguments, and with the flags that
+   Node started this process with. benk sets `BENK_PROCESS_RUN` in its
+   environment, where `bench()` measures as it does otherwise, and formats
+   the tables, but prints nothing, writes no JSON and doesn't call `after`.
+   It runs no process of its own, for `--processes` or `--v8-report`. It
+   writes its results to a temporary file, which the first process reads.
+2. benk sets `BENK_PARENT_PID` too, to the first process's pid. A process
+   that the script starts in turn, as with `spawnSync()`, inherits both
+   variables, but its parent isn't the first process. So it runs as any
+   other: it prints, and writes no results for the first process.
+3. They run one after another, after the first has measured, so that they
+   don't load each other.
+4. A script that does more than call `bench()`, such as writing files, does
+   it in each process. What it writes to stdout in another process doesn't
+   show. What it writes to stderr does, as an error does.
+5. A script that calls `bench()` more than once makes each call in each
+   process. Each call of the first process takes the other processes'
+   results from the same runs, so the script runs n times in all.
+6. If a run in another process fails, or measures other groups or variants
+   than the first, `bench()` writes the JSON without the other processes,
+   and then throws.
+
+With the other options:
+
+- `--filter` selects the same groups in every process.
+- `--json` writes the results with the other processes', as
+  [JSON results](#json-results) describes. With `--json -`, the tables
+  across processes go to stderr, with the others.
+- `--v8-report` runs the traced run after the other processes, and prints
+  the report after the tables across processes. The report is of one
+  traced run, a process of its own.
+
+Each process adds about as long as the script takes alone. These are 3 runs
+of each, on the same machine. The first two were run from this repository,
+with benk's source, and a load average of 1.3 to 3.2:
+
+| Script                                       | Alone       | `--processes 5` |
+| -------------------------------------------- | ----------- | --------------- |
+| [`examples/numbers.ts`](examples/numbers.ts) | 0.59–0.62 s | 2.92–3.19 s     |
+| [`benchmarks/loops.ts`](benchmarks/loops.ts) | 0.64–0.66 s | 3.21–3.35 s     |
+| The quick start's `bench.ts`, bundled        | 0.35–0.48 s | 1.73–1.75 s     |
+
+In those 6 runs of `--processes 5`, no two processes' intervals of a
+variant were apart, of the 33 variants that weren't references. For 30 of
+them, the 5 processes' ratios spanned less than the median width of one
+process's interval, and for the others at most 1.3 times as much. The
+longest span was of `number[]`'s sort in `examples/numbers.ts`, 5.69–6.63,
+whose intervals each spanned about 20%. With `--sample-ms 3` and `5`, the
+sums of `examples/numbers.ts` agreed as closely: `reduce` ranged 4.90–4.96
+and 8.44–8.53. So for these scripts, one process's interval didn't
+understate how the ratios varied between processes. That's a measurement of
+them, not of every script: the option is how to check another.
+
 ## JSON results
 
 `--json` writes a `RunResult`, whose types `benk` exports:
 
 ```jsonc
 {
-  "schema": 4,
+  "schema": 6,
   "date": "2026-11-22T12:33:03.133Z",
   "runtime": { "name": "Node", "version": "v26.13.0", "engine": "V8 14.6.202.34-node.40",
                "platform": "darwin", "arch": "arm64", "cpu": "Apple M2 Pro", "flags": [],
@@ -572,6 +721,7 @@ eager measurement and 1.64 ms with `gc()`.
       "v8": null                          // what V8 did with its code, with --v8-report
     }]
   }],
+  "processes": null,                     // the other processes, with --processes
   "v8Report": null                        // V8's report, with --v8-report
 }
 ```
@@ -584,6 +734,16 @@ the results of `measureGroups()`, and in d8. The runtime's flags include
 what benk knows of the process that changes what's measured, as
 [Typed arrays and detached buffers](#typed-arrays-and-detached-buffers)
 describes.
+
+`processes` is `null` without `--processes`, with `--processes 1`, and in
+the results of `measureGroups()`. With more processes, `groups` are the
+first process's, and `processes` has the others', and each variant's
+ratios in all of them:
+
+| Field              | What it has                                                                                                                                                                                                                                                                     |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `processes.runs`   | The runs after the first, in the order that they ran: each one's `date`, `runtime` and `groups`, as the first's. A run's flags and process state can differ from the first's.                                                                                                   |
+| `processes.groups` | Each group's `name`, its `lead` in the first process, its `leads` in each process's own run, and its `variants`: each one's `name`, `role`, `ratios` in each process from the first, `intervals` in each, or `null` for none, `median`, or `null` for 2 processes, and `range`. |
 
 A group's `timerResolution` is the shortest time that a timer loop of the
 runtime reads. benk estimates it once for each runtime, before a group's
@@ -1070,10 +1230,10 @@ with 10 ms.
 
 - The first run gets the script's options but `--v8-report` and
   `--v8-filter`, which benk-d8 carries out. The traced run gets none of
-  those, nor `--json`, so it writes no results.
+  those, nor `--json` or `--processes`, so it writes no results.
 - In the traced run, benk-d8 marks the process before the script loads.
-  `bench()` measures the groups and returns their results. Only the first
-  run prints tables, writes JSON and calls `after`.
+  `bench()` measures the groups and returns their results, but prints no
+  tables, writes no JSON and doesn't call `after`.
 - A bundle's source map places its positions, as in Node. A TypeScript
   `bench.ts` that imported `bench` from `benk/d8` and `sumLoop` from
   `./sum.ts`, bundled by rolldown 1.3.2 with
@@ -1089,6 +1249,37 @@ with 10 ms.
   bundle, which a script imports from `node_modules/benk/dist`, or which a
   bundle's source map names. A bundle that has benk in it, without a
   source map, can't tell them from the script's.
+
+benk-d8 carries out `--processes` too, as [Across processes](#across-processes)
+describes it in Node, but runs d8 once for each process:
+
+```sh
+npx benk-d8 bench.mjs -- --processes 5
+```
+
+- Each of d8's runs prints its tables, and writes its results to a
+  temporary file of benk-d8's, by `--json`, in place of the script's. Only
+  the first run's output shows.
+- benk-d8 marks the runs after the first before the script loads, as it
+  marks the traced run. Their `bench()` doesn't call `after`, as in Node.
+  The first run's `bench()` calls it, with that run's results, whose
+  `processes` is null, before benk-d8 prints the tables across processes.
+  In Node, `after` comes after those tables, and has the other processes'
+  results too.
+- For multiple processes the bundle and benk-d8 must use the same result
+  schema. If they differ, rebuild the script with the version of benk that
+  supplies benk-d8.
+- benk-d8 then prints the tables across processes, and writes the results
+  where the script's `--json` says, with the other processes'.
+- d8 writes the file at each call of `bench()`, so the results and the
+  ratios across processes are of the script's last call, as `--json` alone
+  writes them.
+- If the first run fails, benk-d8 exits with d8's code. If another fails,
+  or measures other groups, benk-d8 prints an error, and exits with 1.
+
+In one run of `bench.mjs` on the same machine, with Homebrew's d8
+15.8.62.9, `reduce`'s ratios ranged 4.44–4.50 in 5 processes. benk-d8 took
+1.34 s, and d8 alone 0.17 s.
 
 d8 counts array buffers only with the three flags of
 [Bytes in d8](#bytes-in-d8), so **buffers** shows `–` without them.
@@ -1152,7 +1343,10 @@ What the report can't show in d8:
 1. It runs the script with the same arguments. benk sets `BENK_TRACED_RUN`
    in its environment, where `bench()` measures as it does otherwise, so
    that V8 sees the same calls, but prints nothing and writes no JSON. A
-   script that does more, such as writing files, does it twice.
+   script that does more, such as writing files, does it twice. benk sets
+   `BENK_PARENT_PID` too, so that a process that the traced run starts,
+   which inherits both, runs as any other, as in
+   [Across processes](#across-processes).
 2. Its `bench()` writes a line to stdout, among V8's traces, as each call
    of it starts and ends measuring, and as each group's timed rounds start
    and end. The report cuts the lines out of the traces, wherever they
@@ -1526,6 +1720,7 @@ fails to load a value, such as `51`, as another script.
 | `--json <path>`                                                     | Writes the file with d8's `writeFile()`. benk checks the path by writing the file before it measures, as d8 can't check a directory.                                          |
 | `--json -`                                                          | Writes the JSON to stdout with d8's `write()`, and the tables to stderr with `printErr()`.                                                                                    |
 | `--no-heap`                                                         | Turns off the count of array buffers, where d8 counts them, as [Bytes in d8](#bytes-in-d8) describes. Otherwise it changes nothing.                                           |
+| `--processes <n>`                                                   | Throws for more than 1, before it measures, as d8 can't start a process. [`benk-d8`](#in-d8) runs d8 once for each process, and carries it out.                               |
 | `--v8-report`, `--v8-filter`                                        | Throws before it measures, as d8 can't run the script again. [`benk-d8`](#in-d8) runs the script in d8 from Node, and carries them out.                                       |
 | `--v8-check`, `--v8-max-bytecode`                                   | Throws before it measures, and so does `benk-d8`: [The check](#the-check) needs Node's traced run, which reads where each variant's `run` starts, and marks the timed rounds. |
 

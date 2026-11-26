@@ -1,9 +1,13 @@
 import { ALLOCATING_CALL, LONG_CALL } from './lead.ts';
 import type {
+    GroupAcrossProcesses,
     GroupResult,
+    Lead,
     LeadReason,
+    Processes,
     RecordedOptions,
     RuntimeDescription,
+    VariantAcrossProcesses,
     VariantResult
 } from './types.ts';
 
@@ -121,7 +125,7 @@ function formatRow(variant: VariantResult, nameWidth: number): string {
         formatTime(summary.fastest),
         formatTime(summary.median),
         `${(summary.spread * 100).toFixed(1)}%`,
-        `${formatRatio(ratio)}×`,
+        formatRatioCell(ratio),
         interval == null
             ? ''
             : `${formatRatio(interval[0])}–${formatRatio(interval[1])}`,
@@ -199,7 +203,7 @@ function formatModes({ name, summary }: VariantResult): string[] {
  * The median may then suit the group better as its lead.
  */
 function formatOutside({ name, ratio, interval }: VariantResult): string[] {
-    if (interval == null) {
+    if (ratio == null || interval == null) {
         return [];
     }
 
@@ -212,6 +216,240 @@ function formatOutside({ name, ratio, interval }: VariantResult): string[] {
     return [
         `  ${name}: ${formatRatio(ratio)}× by the fastest rounds, but ${formatRatio(low)}–${formatRatio(high)}× round by round`
     ];
+}
+
+/** The width of the column of a process's ratios */
+const PROCESS_WIDTH = 8;
+
+/** The columns of a group's ratios after those of the processes */
+const PROCESSES_COLUMNS: ReadonlyArray<
+    readonly [title: string, width: number]
+> = [
+    ['median', 9],
+    ['range', 15]
+];
+
+/**
+ * The lines of a run's ratios in several processes: a paragraph that
+ * describes them, and each group's table, of each variant's ratio in each
+ * process, with their median and range, and its notes
+ */
+export function formatProcesses({ runs, groups }: Processes): string[] {
+    const count = runs.length + 1;
+    const description =
+        count === 2
+            ? "In 2 processes, the first of them the run above, and the other its repeat: each variant's ratio in each, by the statistic that its group leads with in the first, and their range. Two ratios have no median, and their range holds a process's median ratio with 50% confidence: 3 processes give 75%."
+            : `In ${count} processes, the first of them the run above, and the others its repeats: each variant's ratio in each, by the statistic that its group leads with in the first, the median of the ${count} ratios, and their range.`;
+
+    return ['', description, ...groups.flatMap(formatGroupAcrossProcesses)];
+}
+
+/**
+ * A group's table of ratios in each process: its name and lead, a row for
+ * each variant, a note for the processes that led with the other statistic,
+ * and notes for a variant whose intervals of two processes are apart, whose
+ * ratios lie on both sides of 1, or whose median is no further from 1 than
+ * the A/A copy's median
+ */
+function formatGroupAcrossProcesses({
+    name,
+    lead,
+    leads,
+    variants
+}: GroupAcrossProcesses): string[] {
+    const [reference] = variants;
+    const aa = variants.find(variant => variant.role === 'aa');
+    const count = reference.ratios.length;
+    const nameWidth = Math.max(
+        NAME_WIDTH,
+        ...variants.map(variant => variant.name.length)
+    );
+    const processes = Array.from({ length: count }, (_, i) =>
+        String(i + 1).padStart(PROCESS_WIDTH)
+    );
+    const columns =
+        count === 2 ? PROCESSES_COLUMNS.slice(1) : PROCESSES_COLUMNS;
+    const summaries = columns.map(([title, width]) => title.padStart(width));
+
+    return [
+        '',
+        `${name}: ${count} processes, by the ${lead} round`,
+        `  ${''.padEnd(nameWidth)}${processes.join('')}${summaries.join('')}`,
+        ...variants.map(variant => formatProcessesRow(variant, nameWidth)),
+        ...formatOtherLeads(lead, leads),
+        ...variants.flatMap(variant => formatApart(variant, lead)),
+        ...variants.flatMap(variant =>
+            formatBothSides(variant, reference.name)
+        ),
+        ...(aa == null
+            ? []
+            : variants.flatMap(variant => formatWithinAA(variant, aa)))
+    ];
+}
+
+/**
+ * A variant's row of ratios in each process, with their median, if they
+ * have one, and their range
+ */
+function formatProcessesRow(
+    { role, name, ratios, median, range }: VariantAcrossProcesses,
+    nameWidth: number
+): string {
+    const [[, medianWidth], [, rangeWidth]] = PROCESSES_COLUMNS;
+    const cells = [
+        ...ratios.map(ratio => padCell(formatRatioCell(ratio), PROCESS_WIDTH)),
+        ...(ratios.length === 2
+            ? []
+            : [padCell(formatRatioCell(median), medianWidth)]),
+        padCell(
+            role === 'reference'
+                ? ''
+                : range == null
+                  ? '–'
+                  : formatInterval(range),
+            rangeWidth
+        )
+    ];
+
+    // The reference's range is empty, and ends its row
+    return `  ${name.padEnd(nameWidth)}${cells.join('')}`.trimEnd();
+}
+
+/**
+ * A note for the processes whose group led with the other statistic than in
+ * the first, in their own runs: their ratios in the table are by the
+ * first's, from their rounds, and differ from those that their own tables
+ * would have printed
+ */
+function formatOtherLeads(lead: Lead, leads: readonly Lead[]): string[] {
+    const other = leads.flatMap((own, i) => (own === lead ? [] : [i + 1]));
+    if (other.length === 0) {
+        return [];
+    }
+
+    // Of the two statistics, the one that isn't the first's
+    const own = leads[other[0] - 1];
+    const [processes, their] =
+        other.length === 1 ? ['process', 'its'] : ['processes', 'their'];
+    return [
+        `  ${processes} ${formatList(other)} led with the ${own} round: ${their} ratios here are by the ${lead} round, from ${their} rounds`
+    ];
+}
+
+/** Numbers as a sentence lists them: `2`, `2 and 4`, or `2, 3 and 4` */
+function formatList(numbers: readonly number[]): string {
+    const last = numbers[numbers.length - 1];
+
+    return numbers.length === 1
+        ? String(last)
+        : `${numbers.slice(0, -1).join(', ')} and ${last}`;
+}
+
+/**
+ * A note for a variant whose 95% intervals of two processes don't overlap:
+ * the two estimates of the median have disjoint confidence intervals.
+ * It names the interval of the lowest end, and
+ * the interval of the highest start, which are apart if any two are.
+ *
+ * An interval is of the median of the per-round ratios. In a group that
+ * leads with the fastest round, whose ratios compare the fastest rounds,
+ * the note says that it's round by round, so as not to quote an interval
+ * as if it were of the ratios beside it.
+ */
+function formatApart(
+    { name, intervals }: VariantAcrossProcesses,
+    lead: Lead
+): string[] {
+    const present = intervals.flatMap((interval, i) =>
+        interval == null ? [] : [{ process: i + 1, interval }]
+    );
+    if (present.length < 2) {
+        return [];
+    }
+
+    let lowest = present[0];
+    let highest = present[0];
+    for (const entry of present) {
+        lowest = entry.interval[1] < lowest.interval[1] ? entry : lowest;
+        highest = entry.interval[0] > highest.interval[0] ? entry : highest;
+    }
+    if (highest.interval[0] <= lowest.interval[1]) {
+        return [];
+    }
+
+    const [first, second] =
+        lowest.process < highest.process
+            ? [lowest, highest]
+            : [highest, lowest];
+    const byRound = lead === 'fastest' ? 'round by round, ' : '';
+    return [
+        `  ${name}: ${byRound}the intervals of processes ${first.process} and ${second.process} don't overlap, ${formatInterval(first.interval)} and ${formatInterval(second.interval)}`
+    ];
+}
+
+/**
+ * A note for a variant whose ratios lie on both sides of 1, as the table
+ * prints them: it was faster than the reference in some processes, and
+ * slower in others. A ratio that prints as 1.00 is neither. An A/A copy's
+ * ratios lie on both sides of 1 as a rule, so it gets none.
+ */
+function formatBothSides(
+    { name, role, ratios }: VariantAcrossProcesses,
+    reference: string
+): string[] {
+    const printed = ratios.flatMap(ratio =>
+        ratio == null ? [] : [printedRatio(ratio)]
+    );
+    const faster = printed.filter(ratio => ratio < 1).length;
+    const slower = printed.filter(ratio => ratio > 1).length;
+    if (role !== 'variant' || faster === 0 || slower === 0) {
+        return [];
+    }
+
+    return [
+        `  ${name}: faster than ${reference} in ${faster} ${faster === 1 ? 'process' : 'processes'}, and slower in ${slower}`
+    ];
+}
+
+/**
+ * A note for a variant whose median ratio is no further from 1, as a
+ * factor either way, than the A/A copy's median: it differs from the
+ * reference by no more than the reference's copy does in the median
+ * process, which is what the measurement gives code that doesn't differ. It
+ * compares the medians, like with like, rather than the variant's median
+ * with the A/A copy's furthest ratio: one process whose A/A ratio lay far
+ * from 1 would then dismiss a variant that differed alike in every process,
+ * and more often the more processes there are. A median that prints as 1.00
+ * shows no difference to explain, and gets none, and so do the ratios of 2
+ * processes, which have no median.
+ */
+function formatWithinAA(
+    { name, role, median }: VariantAcrossProcesses,
+    aa: VariantAcrossProcesses
+): string[] {
+    if (
+        role !== 'variant' ||
+        median == null ||
+        aa.median == null ||
+        printedRatio(median) === 1 ||
+        !(Math.abs(Math.log(median)) <= Math.abs(Math.log(aa.median)))
+    ) {
+        return [];
+    }
+
+    return [
+        `  ${name}: median ${formatRatio(median)}×, no further from 1 than the A/A copy's median, ${formatRatio(aa.median)}×`
+    ];
+}
+
+/** A ratio rounded as the table prints it, so that 1.004 is 1 */
+function printedRatio(ratio: number): number {
+    return Number(formatRatio(ratio));
+}
+
+/** An interval or a range of ratios, as `0.98–1.01` */
+function formatInterval([low, high]: readonly [number, number]): string {
+    return `${formatRatio(low)}–${formatRatio(high)}`;
 }
 
 /** A time in nanoseconds, to three significant digits, in a unit that fits */
@@ -234,6 +472,11 @@ export function formatTime(nanoseconds: number): string {
  */
 export function formatBytes(bytes: number): string {
     return `${Math.max(0, Math.round(bytes)).toLocaleString('en-US')} B`;
+}
+
+/** A ratio as a table cell, or a dash when the clock couldn't resolve it */
+function formatRatioCell(ratio: number | null): string {
+    return ratio == null ? '–' : `${formatRatio(ratio)}×`;
 }
 
 function formatRatio(ratio: number): string {

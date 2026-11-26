@@ -1,25 +1,21 @@
 import { arrayBufferBytesPerCall } from './array-buffers.ts';
 import { timerResolutionOf } from './clock.ts';
 import { heapCounterOf } from './heap.ts';
-import { chooseLead } from './lead.ts';
+import { chooseLead, ratioByLead } from './lead.ts';
 import { rotation } from './rotation.ts';
-import {
-    medianInterval,
-    pairedRatios,
-    quantile,
-    summarize
-} from './statistics.ts';
+import { medianInterval, pairedRatios, summarize } from './statistics.ts';
 import { TimedVariant } from './timed-variant.ts';
-import type {
-    Group,
-    GroupResult,
-    Lead,
-    Role,
-    RunResult,
-    Runtime,
-    Summary,
-    Variant,
-    VariantResult
+import {
+    RESULT_SCHEMA,
+    type Group,
+    type GroupResult,
+    type Lead,
+    type Role,
+    type RunResult,
+    type Runtime,
+    type Summary,
+    type Variant,
+    type VariantResult
 } from './types.ts';
 
 /** How a group's variants are timed */
@@ -123,11 +119,12 @@ export async function measureGroups(
     }
 
     return {
-        schema: 4,
+        schema: RESULT_SCHEMA,
         date,
         runtime: runtime.description,
         options: { ...resolved, filter: options.filter?.source ?? '' },
         groups: results,
+        processes: null,
         v8Report: null
     };
 }
@@ -347,10 +344,7 @@ function variantResult(
     const ratios = pairedRatios(samples, reference.samples);
     ratios.sort();
 
-    const ratio =
-        lead === 'fastest'
-            ? summary.fastest / reference.summary.fastest
-            : quantile(ratios, 0.5);
+    const interval = role === 'reference' ? null : medianInterval(ratios);
 
     return {
         name: variant.name(),
@@ -360,8 +354,11 @@ function variantResult(
         samples: Array.from(samples),
         positions: Array.from(positions),
         summary,
-        ratio: role === 'reference' ? 1 : ratio,
-        interval: role === 'reference' ? null : medianInterval(ratios),
+        ratio:
+            role === 'reference'
+                ? 1
+                : ratioByLead(lead, summary, reference.summary, ratios),
+        interval: interval?.every(Number.isFinite) ? interval : null,
         heapBytes,
         arrayBufferBytes,
         v8: null

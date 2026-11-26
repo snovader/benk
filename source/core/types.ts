@@ -215,12 +215,14 @@ export interface VariantResult {
     /**
      * The ratio to the reference's time by the group's lead: the fastest
      * round's to the reference's fastest, or the median of the ratios of
-     * each round's time to the reference's in the same round
+     * each round's time to the reference's in the same round. Null if the
+     * clock read zero for the reference and the ratio isn't finite.
      */
-    readonly ratio: number;
+    readonly ratio: number | null;
     /**
      * A 95% confidence interval of the median of the per-round ratios, or
-     * null for the reference itself, and with fewer than 6 rounds
+     * null for the reference, with fewer than 6 rounds, or if either end
+     * is unmeasurable
      */
     readonly interval: readonly [low: number, high: number] | null;
     /**
@@ -289,21 +291,102 @@ export interface RecordedOptions {
     readonly filter: string;
 }
 
+/** The JSON schema produced by this version of benk */
+export const RESULT_SCHEMA = 6;
+
 /** A run's results, which `JSON.stringify` writes as they are */
 export interface RunResult {
     /** The version of this format, which changes when a field does */
-    readonly schema: 4;
+    readonly schema: typeof RESULT_SCHEMA;
     /** When the run started, as an ISO 8601 string */
     readonly date: string;
     readonly runtime: RuntimeDescription;
     readonly options: RecordedOptions;
+    /** The groups that this run measured, in the first of its processes */
     readonly groups: readonly GroupResult[];
+    /**
+     * The script's runs in other processes, after this one, which `bench()`
+     * makes with `--processes`, and each variant's ratio in every process.
+     * It's null where there were none: without the option, with
+     * `--processes 1`, and from `measureGroups()`.
+     */
+    readonly processes: Processes | null;
     /**
      * V8's report of the run's traced run, which Node's `bench()` makes with
      * `--v8-report`. It's null where no report was made: without the
      * option, from `measureGroups()`, and in d8.
      */
     readonly v8Report: V8Report | null;
+}
+
+// The runs of `--processes`: the script run again in other processes, each
+// with its own V8's tiering decisions, heap layout and order of loading, and
+// each variant's ratio in every process. A variant's interval is of the
+// rounds of one process, and says nothing of how its ratio varies between
+// processes.
+
+/** A run of the script in another process, after the first */
+export interface ProcessRun {
+    /** When it started measuring, as an ISO 8601 string */
+    readonly date: string;
+    /**
+     * The runtime that it ran in, as `RunResult`'s `runtime` describes the
+     * first's. Its flags and process state can differ from the first's.
+     */
+    readonly runtime: RuntimeDescription;
+    /** Its groups, as the first run measured them, and in the same order */
+    readonly groups: readonly GroupResult[];
+}
+
+/** A variant's ratio in each of a run's processes, and their summary */
+export interface VariantAcrossProcesses {
+    readonly name: string;
+    readonly role: Role;
+    /**
+     * Its ratio to the reference in each process, from the first, by the
+     * statistic that its group leads with in the first, or null if unmeasurable
+     */
+    readonly ratios: ReadonlyArray<number | null>;
+    /**
+     * Its 95% interval in each process, as each process's `VariantResult`
+     * has it, or null where one has none
+     */
+    readonly intervals: ReadonlyArray<
+        readonly [low: number, high: number] | null
+    >;
+    /**
+     * The median of the ratios: of an even count, the greater of the middle
+     * two, so that it's a process's ratio. Null for two processes or if
+     * any ratio is missing.
+     */
+    readonly median: number | null;
+    /** The least and the greatest of the ratios, or null if any is missing */
+    readonly range: readonly [low: number, high: number] | null;
+}
+
+/** A group's ratios in each of a run's processes */
+export interface GroupAcrossProcesses {
+    readonly name: string;
+    /**
+     * The statistic that the group leads with in the first process, which
+     * each process's ratio is by
+     */
+    readonly lead: Lead;
+    /**
+     * The statistic that the group led with in each process's own run, from
+     * the first. Where it isn't `lead`, the ratio is from the process's
+     * rounds, rather than its own.
+     */
+    readonly leads: readonly Lead[];
+    readonly variants: readonly VariantAcrossProcesses[];
+}
+
+/** A run's results in its other processes, and its ratios in all of them */
+export interface Processes {
+    /** The runs after the first, in the order that they ran */
+    readonly runs: readonly ProcessRun[];
+    /** Each group's ratios in every process, by the first's groups */
+    readonly groups: readonly GroupAcrossProcesses[];
 }
 
 // V8's report, from a traced run of the script in another process, which
