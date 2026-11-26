@@ -1,5 +1,3 @@
-import { access, constants, writeFile } from 'node:fs/promises';
-import { dirname, resolve } from 'node:path';
 import {
     measureAndPrint,
     parseOptions,
@@ -8,7 +6,7 @@ import {
 } from '#source/core/command-line';
 import { measureGroups, type MeasureOptions } from '#source/core/measure';
 import { withProcesses } from '#source/core/processes';
-import { formatJson, formatProcesses } from '#source/core/report';
+import { formatProcesses } from '#source/core/report';
 import type {
     Group,
     GroupResult,
@@ -20,6 +18,7 @@ import type {
     VariantV8
 } from '#source/core/types';
 import { functionPositions } from './function-positions.ts';
+import { checkDirectory, writeJson } from './json-results.ts';
 import {
     processRunFile,
     recordProcessRun,
@@ -167,11 +166,7 @@ export async function bench(
             }));
         }
     } finally {
-        if (toStdout) {
-            (options.write ?? writeStdout)(formatJson(result));
-        } else if (json != null) {
-            await writeFile(json, formatJson(result));
-        }
+        await writeJson(json, result, options.write ?? writeStdout);
     }
 
     for (const line of report) {
@@ -276,23 +271,6 @@ let nodeRuntime: NodeRuntime | undefined;
 export function defaultRuntime(): Runtime {
     nodeRuntime ??= new NodeRuntime();
     return nodeRuntime;
-}
-
-/**
- * Checks that the directory of the results' file can be written to, before
- * the run rather than after it, when a mistyped path would lose the
- * measurements
- */
-async function checkDirectory(path: string): Promise<void> {
-    const directory = dirname(resolve(path));
-    try {
-        await access(directory, constants.W_OK);
-    } catch (error) {
-        throw new Error(
-            `Expected the directory of --json to be writable, got ${directory}`,
-            { cause: error }
-        );
-    }
 }
 
 /**
