@@ -6,9 +6,9 @@
 // returns, as `source-maps.ts` reads them, and marks its calls of `bench()`
 // among the traces, as `traced-markers.ts` describes.
 import { spawn } from 'node:child_process';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
+import { inTemporaryDirectory, isMissing, runChild } from './child-run.ts';
 import {
     readSourceMapFile,
     readSourceMaps,
@@ -184,13 +184,18 @@ export function runTraced(
 ): Promise<TracedOutput> {
     return inTemporaryDirectory(async directory => {
         const log = join(directory, 'code.log');
-        const output = await runChild(script, [
-            ...process.execArgv,
-            ...TRACE_FLAGS,
-            `${LOGFILE}${log}`,
-            script,
-            ...args
-        ]);
+        const output = await runChild({
+            name: `the traced run of ${script}`,
+            args: [
+                ...process.execArgv,
+                ...TRACE_FLAGS,
+                `${LOGFILE}${log}`,
+                script,
+                ...args
+            ],
+            mark: [TRACED_RUN, '1'],
+            stdout: 'collect'
+        });
 
         return {
             output,
@@ -418,21 +423,6 @@ function benkDirectory(): string {
 }
 
 /**
- * Runs a function with a temporary directory, which it removes after, as
- * the traced run writes its log there
- */
-async function inTemporaryDirectory<T>(
-    use: (directory: string) => Promise<T>
-): Promise<T> {
-    const directory = await mkdtemp(join(tmpdir(), 'benk-'));
-    try {
-        return await use(directory);
-    } finally {
-        await rm(directory, { recursive: true, force: true });
-    }
-}
-
-/**
  * The code log of a traced run
  *
  * @throws {Error} If the run wrote none.
@@ -468,38 +458,6 @@ async function readRecorded(path: string): Promise<Map<string, SourceMapFile>> {
 
     // Written by `recordSourceMaps()`, in the traced run
     return new Map(JSON.parse(text) as Array<[string, SourceMapFile]>);
-}
-
-function isMissing(error: unknown): boolean {
-    return error instanceof Error && 'code' in error && error.code === 'ENOENT';
-}
-
-/** Runs Node with the arguments, and collects what it writes to stdout */
-function runChild(script: string, args: readonly string[]): Promise<string> {
-    return new Promise((resolve, reject) => {
-        const child = spawn(process.execPath, args, {
-            env: { ...process.env, [TRACED_RUN]: '1' },
-            stdio: ['ignore', 'pipe', 'inherit']
-        });
-        const chunks: string[] = [];
-
-        child.stdout.setEncoding('utf8');
-        child.stdout.on('data', (chunk: string) => {
-            chunks.push(chunk);
-        });
-        child.on('error', reject);
-        child.on('close', (code, signal) => {
-            if (code === 0) {
-                resolve(chunks.join(''));
-            } else {
-                reject(
-                    new Error(
-                        `Expected the traced run of ${script} to exit with 0, got ${code ?? signal}`
-                    )
-                );
-            }
-        });
-    });
 }
 
 /**

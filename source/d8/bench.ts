@@ -51,9 +51,9 @@ declare function writeFile(path: string, data: string | ArrayBuffer): void;
  *   check of a directory, so `bench()` checks the path before it measures
  *   by writing the file: with the bytes that it has, or empty.
  * - `--v8-report` is an error, before it measures, as is `--v8-filter`,
- *   which implies it: d8 can't start the process that runs the script
- *   again. The command `benk-d8` runs a script in d8 from Node, and
- *   carries them out itself.
+ *   which implies it, and `--processes` of more than 1: d8 can't start the
+ *   process that runs the script again. The command `benk-d8` runs a script
+ *   in d8 from Node, and carries them out itself.
  * - `--v8-check` is an error too, as is `--v8-max-bytecode`, which implies
  *   it, in `benk-d8` as well: the check needs Node's traced run, which
  *   reads where each variant's `run` starts, and marks the timed rounds.
@@ -67,8 +67,8 @@ declare function writeFile(path: string, data: string | ArrayBuffer): void;
  * malformed, as `measureGroups()` describes.
  * @throws {RangeError} If a number is out of its range.
  * @throws {SyntaxError} If a filter isn't a regular expression.
- * @throws {Error} With `--v8-report`, `--v8-check` or an option that implies
- * either, or if the JSON's file can't be
+ * @throws {Error} With `--processes` of more than 1, `--v8-report`,
+ * `--v8-check` or an option that implies either, or if the JSON's file can't be
  * written, which it checks before it measures, if the runtime's clock reads
  * no time, or if a variant throws, with its error as the cause.
  */
@@ -76,8 +76,20 @@ export async function bench(
     groups: Iterable<Group>,
     options: BenchOptions = {}
 ): Promise<RunResult> {
-    const { json, v8Report, v8Filter, v8Check, v8MaxBytecode, ...command } =
-        parseOptions(options.args ?? scriptArguments());
+    const {
+        json,
+        processes,
+        v8Report,
+        v8Filter,
+        v8Check,
+        v8MaxBytecode,
+        ...command
+    } = parseOptions(options.args ?? scriptArguments());
+    if (processes > 1) {
+        throw new Error(
+            `Expected no --processes ${processes} in d8, which can't start a process: run it with benk-d8, as benk-d8 bench.mjs -- --processes ${processes}`
+        );
+    }
     if (v8Check) {
         const option =
             v8MaxBytecode == null ? '--v8-check' : '--v8-max-bytecode';

@@ -26,6 +26,7 @@ describe('parseOptions', () => {
             heap: true,
             filter: undefined,
             json: undefined,
+            processes: 1,
             v8Report: false,
             v8Filter: undefined,
             v8Check: false,
@@ -44,6 +45,8 @@ describe('parseOptions', () => {
             '^record',
             '--json',
             'results.json',
+            '--processes',
+            '5',
             '--no-aa',
             '--no-heap',
             '--v8-report',
@@ -62,6 +65,7 @@ describe('parseOptions', () => {
             heap: false,
             filter: /^record/u,
             json: 'results.json',
+            processes: 5,
             v8Report: true,
             v8Filter: /^sum/u,
             v8Check: true,
@@ -89,6 +93,8 @@ describe('parseOptions', () => {
             ['--rounds', ''],
             ['--warmup-rounds=-1'],
             ['--warmup-rounds', ''],
+            ['--processes', '0'],
+            ['--processes', '2.5'],
             ['--sample-ms', '0'],
             ['--sample-ms', 'Infinity'],
             ['--sample-ms', 'soon']
@@ -350,7 +356,7 @@ describe('--v8-check', () => {
                 const position = v8?.run?.position;
                 return [name, position?.line, position?.column];
             });
-            expect(result.schema).toBe(4);
+            expect(result.schema).toBe(5);
             expect(result.v8Report?.check).toBeNull();
             expect(result.v8Report?.functions.map(fn => fn.name)).toContain('mix');
             expect(runs).toStrictEqual([

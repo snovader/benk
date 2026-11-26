@@ -1,9 +1,12 @@
 import { ALLOCATING_CALL, LONG_CALL } from './lead.ts';
 import type {
+    GroupAcrossProcesses,
     GroupResult,
     LeadReason,
+    Processes,
     RecordedOptions,
     RuntimeDescription,
+    VariantAcrossProcesses,
     VariantResult
 } from './types.ts';
 
@@ -212,6 +215,182 @@ function formatOutside({ name, ratio, interval }: VariantResult): string[] {
     return [
         `  ${name}: ${formatRatio(ratio)}× by the fastest rounds, but ${formatRatio(low)}–${formatRatio(high)}× round by round`
     ];
+}
+
+/** The width of the column of a process's ratios */
+const PROCESS_WIDTH = 8;
+
+/** The columns of a group's ratios after those of the processes */
+const PROCESSES_COLUMNS: ReadonlyArray<
+    readonly [title: string, width: number]
+> = [
+    ['median', 9],
+    ['range', 15]
+];
+
+/**
+ * The lines of a run's ratios in several processes: a paragraph that
+ * describes them, and each group's table, of each variant's ratio in each
+ * process, with their median and range, and its notes
+ */
+export function formatProcesses({ runs, groups }: Processes): string[] {
+    const count = runs.length + 1;
+
+    return [
+        '',
+        `In ${count} processes, the first of them the run above, and the others its repeats: each variant's ratio in each, by the statistic that its group leads with in the first, the median of the ${count} ratios, and their range.`,
+        ...groups.flatMap(formatGroupAcrossProcesses)
+    ];
+}
+
+/**
+ * A group's table of ratios in each process: its name and lead, a row for
+ * each variant, and notes for a variant whose intervals of two processes
+ * are apart, whose ratios lie on both sides of 1, or whose median is no
+ * further from 1 than the A/A copy's ratios
+ */
+function formatGroupAcrossProcesses({
+    name,
+    lead,
+    variants
+}: GroupAcrossProcesses): string[] {
+    const [reference] = variants;
+    const aa = variants.find(variant => variant.role === 'aa');
+    const count = reference.ratios.length;
+    const nameWidth = Math.max(
+        NAME_WIDTH,
+        ...variants.map(variant => variant.name.length)
+    );
+    const processes = Array.from({ length: count }, (_, i) =>
+        String(i + 1).padStart(PROCESS_WIDTH)
+    );
+    const summaries = PROCESSES_COLUMNS.map(([title, width]) =>
+        title.padStart(width)
+    );
+
+    return [
+        '',
+        `${name}: ${count} processes, by the ${lead} round`,
+        `  ${''.padEnd(nameWidth)}${processes.join('')}${summaries.join('')}`,
+        ...variants.map(variant => formatProcessesRow(variant, nameWidth)),
+        ...variants.flatMap(formatApart),
+        ...variants.flatMap(variant =>
+            formatBothSides(variant, reference.name)
+        ),
+        ...(aa == null
+            ? []
+            : variants.flatMap(variant => formatWithinAA(variant, aa)))
+    ];
+}
+
+/** A variant's row of ratios in each process, with their median and range */
+function formatProcessesRow(
+    { role, name, ratios, median, range }: VariantAcrossProcesses,
+    nameWidth: number
+): string {
+    const [[, medianWidth], [, rangeWidth]] = PROCESSES_COLUMNS;
+    const cells = [
+        ...ratios.map(ratio =>
+            padCell(`${formatRatio(ratio)}×`, PROCESS_WIDTH)
+        ),
+        padCell(`${formatRatio(median)}×`, medianWidth),
+        padCell(role === 'reference' ? '' : formatInterval(range), rangeWidth)
+    ];
+
+    // The reference's range is empty, and ends its row
+    return `  ${name.padEnd(nameWidth)}${cells.join('')}`.trimEnd();
+}
+
+/**
+ * A note for a variant whose 95% intervals of two processes don't overlap:
+ * its ratio differed between them by more than its rounds varied within
+ * either, so that the interval of one process understates how much the
+ * ratio varies between runs. It names the interval of the lowest end, and
+ * the interval of the highest start, which are apart if any two are.
+ */
+function formatApart({ name, intervals }: VariantAcrossProcesses): string[] {
+    const present = intervals.flatMap((interval, i) =>
+        interval == null ? [] : [{ process: i + 1, interval }]
+    );
+    if (present.length < 2) {
+        return [];
+    }
+
+    let lowest = present[0];
+    let highest = present[0];
+    for (const entry of present) {
+        lowest = entry.interval[1] < lowest.interval[1] ? entry : lowest;
+        highest = entry.interval[0] > highest.interval[0] ? entry : highest;
+    }
+    if (highest.interval[0] <= lowest.interval[1]) {
+        return [];
+    }
+
+    const [first, second] =
+        lowest.process < highest.process
+            ? [lowest, highest]
+            : [highest, lowest];
+    return [
+        `  ${name}: the intervals of processes ${first.process} and ${second.process} don't overlap, ${formatInterval(first.interval)} and ${formatInterval(second.interval)}`
+    ];
+}
+
+/**
+ * A note for a variant whose ratios lie on both sides of 1, as the table
+ * prints them: it was faster than the reference in some processes, and
+ * slower in others. A ratio that prints as 1.00 is neither. An A/A copy's
+ * ratios lie on both sides of 1 as a rule, so it gets none.
+ */
+function formatBothSides(
+    { name, role, ratios }: VariantAcrossProcesses,
+    reference: string
+): string[] {
+    const printed = ratios.map(printedRatio);
+    const faster = printed.filter(ratio => ratio < 1).length;
+    const slower = printed.filter(ratio => ratio > 1).length;
+    if (role !== 'variant' || faster === 0 || slower === 0) {
+        return [];
+    }
+
+    return [
+        `  ${name}: faster than ${reference} in ${faster} ${faster === 1 ? 'process' : 'processes'}, and slower in ${slower}`
+    ];
+}
+
+/**
+ * A note for a variant whose median ratio is no further from 1, as a
+ * factor either way, than the A/A copy's ratio in some process: it differs
+ * from the reference by no more than the reference differed from itself. A
+ * median that prints as 1.00 shows no difference to explain, and gets none.
+ */
+function formatWithinAA(
+    { name, role, median }: VariantAcrossProcesses,
+    aa: VariantAcrossProcesses
+): string[] {
+    const reach = Math.max(
+        ...aa.ratios.map(ratio => Math.abs(Math.log(ratio)))
+    );
+    if (
+        role !== 'variant' ||
+        printedRatio(median) === 1 ||
+        !(Math.abs(Math.log(median)) <= reach)
+    ) {
+        return [];
+    }
+
+    return [
+        `  ${name}: median ${formatRatio(median)}×, no further from 1 than the A/A copy's ratios, ${formatInterval(aa.range)}`
+    ];
+}
+
+/** A ratio rounded as the table prints it, so that 1.004 is 1 */
+function printedRatio(ratio: number): number {
+    return Number(formatRatio(ratio));
+}
+
+/** An interval or a range of ratios, as `0.98–1.01` */
+function formatInterval([low, high]: readonly [number, number]): string {
+    return `${formatRatio(low)}–${formatRatio(high)}`;
 }
 
 /** A time in nanoseconds, to three significant digits, in a unit that fits */

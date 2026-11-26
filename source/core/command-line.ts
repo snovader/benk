@@ -25,6 +25,12 @@ export interface CommandOptions {
     /** Where to write the results as JSON: a path, `-` for stdout, or none */
     readonly json: string | undefined;
     /**
+     * The processes to measure in: this one, and as many more less one, each
+     * of which runs the script again, after this one has measured, as
+     * `--processes` asks. 1 by default.
+     */
+    readonly processes: number;
+    /**
      * Whether to run the script again with V8's traces, after measuring,
      * and print a report of its hot functions, as `--v8-report` asks, and
      * each of the options below
@@ -79,6 +85,7 @@ const OPTIONS: ArgumentSpec = {
         'sample-ms',
         'filter',
         'json',
+        'processes',
         'v8-filter',
         'v8-max-bytecode'
     ]),
@@ -94,6 +101,9 @@ const OPTIONS: ArgumentSpec = {
  * - `--filter <regex>`: selects groups by name
  * - `--json <path>`: writes the results as JSON to a file, or to stdout for
  *   `-`, when the tables go to stderr
+ * - `--processes <n>`: measures in n processes, 1 by default: this one, and
+ *   then the script run again in n − 1 more, and prints each variant's
+ *   ratio in each
  * - `--no-aa`: leaves out the A/A copy of each group's first variant
  * - `--no-heap`: leaves out the counts of bytes allocated, on the heap and
  *   in array buffers
@@ -136,6 +146,7 @@ export function parseOptions(args: readonly string[]): CommandOptions {
         heap: flags.get('heap') ?? DEFAULT_OPTIONS.heap,
         filter: filterOption(values.get('filter'), '--filter'),
         json: values.get('json'),
+        processes: integerOption(values.get('processes'), '--processes', 1, 1),
         v8Report:
             (flags.get('v8-report') ?? false) ||
             values.get('v8-filter') != null ||
