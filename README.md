@@ -1003,8 +1003,8 @@ This project, `numbers`, is on a branch that sums with a for loop where
                             1       2       3       4       5       6   median          range
      sum                0.20×   0.20×   0.20×   0.20×   0.20×   0.20×    0.20×      0.20–0.20
      max                1.00×   0.99×   1.00×   1.00×   1.00×   0.99×    1.00×      0.99–1.00
-     sum: head faster, beyond the A/A copy's noise: of 6 processes, its ratio lay below the A/A copy's in 6, and its interval apart from the A/A copy's in 6
-     max: within the A/A copy's noise: of 6 processes, its ratio lay above the A/A copy's in 2 and below in 4, and its interval apart from the A/A copy's in none
+     sum: head faster, beyond the A/A copy's noise: of 6 processes, its ratio lay below the A/A copy's in 6, and its interval showed a difference in 6
+     max: within the A/A copy's noise: of 6 processes, its ratio lay above the A/A copy's in 2 and below in 4, and its interval showed a difference in none
    ```
 
 5. Remove the worktree when you're done. `--force` removes it with what
@@ -1040,7 +1040,8 @@ groups. `--filter` selects pairs by their names, as
 These are errors, before benk measures:
 
 - `--base` or `--head` missing, naming a directory, or naming the file that
-  the other names, also through a symbolic link;
+  the other names. Node and `benk-d8` also resolve symbolic links in the
+  command-line paths;
 - a group or a variant that only one build made, or a group that sets `lead`
   or `aa` otherwise in the other;
 - a variant that's async in one build only;
@@ -1093,15 +1094,25 @@ shows whether they change with the load order, and between processes.
 
 ### What it says
 
-| Column or note                                       | What it says                                                                                                                                                                                                                  |
-| ---------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `1` to `6`                                           | Head's ratio to base in each process, by the statistic that its pair leads with in the first.                                                                                                                                 |
-| **median**, **range**                                | As in [Across processes](#across-processes).                                                                                                                                                                                  |
-| **ratio**, **95% interval**, **A/A interval**        | With one process, in place of the processes' columns: head's ratio, its interval, and the A/A copy's.                                                                                                                         |
-| `head faster, beyond the A/A copy's noise`           | Head's interval lay below the A/A copy's in every process. Or, where some intervals overlap, its ratio lay below the A/A copy's ratio in enough processes for a sign test to give a chance of 5% or less: 6 of 6, or 9 of 10. |
-| `head slower, beyond the A/A copy's noise`           | As `head faster`, above the A/A copy's.                                                                                                                                                                                       |
-| `within the A/A copy's noise`                        | Neither: the difference isn't beyond what identical code shows.                                                                                                                                                               |
-| `of 6 processes, its ratio lay below the A/A copy's` | How many processes' ratios lay on each side of the A/A copy's ratio in the same process, and in how many head's interval lay apart from the A/A copy's.                                                                       |
+| Column or note                                       | What it says                                                                                                                            |
+| ---------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `1` to `6`                                           | Head's ratio to base in each process, by the statistic that its pair leads with in the first.                                           |
+| **median**, **range**                                | As in [Across processes](#across-processes).                                                                                            |
+| **ratio**, **95% interval**, **A/A interval**        | With one process, head's ratio and the intervals for the median per-round ratios of head and the A/A copy to base.                      |
+| `head faster, beyond the A/A copy's noise`           | Head's interval lay below both 1 and the A/A interval in every process, or both sign tests described below found head faster.           |
+| `head slower, beyond the A/A copy's noise`           | Head's interval lay above both in every process, or both sign tests found head slower.                                                  |
+| `within the A/A copy's noise`                        | The processes did not establish either direction.                                                                                       |
+| `of 6 processes, its ratio lay below the A/A copy's` | Counts the comparisons with the A/A ratio and the processes whose interval showed a difference. Missing ratios are reported separately. |
+
+When the intervals do not all show the same direction, benk applies a
+two-sided sign test to head's ratios against 1 and another against the
+matching A/A ratios. Both must give the same direction at 5%. Each test
+ignores ties. Both leave out processes missing either ratio. For example,
+6 of 6 or 9 of 10 non-tied comparisons on one side pass a test.
+
+In a pair that leads with the fastest round, `round by round` identifies a
+verdict from intervals of the median per-round ratios. A verdict from sign
+tests of the fastest-round ratios says `by the fastest rounds`.
 
 Without A/A copies, as with `--no-aa`, head's interval and ratio are
 compared with 1, and the notes say `its interval's noise`.
@@ -1173,8 +1184,13 @@ with a copy for each. The adaptation, and what sharing them hid, are in
 
 `benk/d8` exports `compareBuilds()` too. d8 resolves an import from the
 module that imports it, which is benk's, so `--base` and `--head` are
-absolute paths there. `benk-d8` resolves them from its working directory,
-and with `--processes`, loads each build first in turn, as in Node:
+absolute paths there. When running d8 directly, give it two distinct files.
+The shell can load a file and a symbolic link to it as separate modules.
+
+`benk-d8` resolves the command-line paths from its working directory. A
+script that supplies its own `args` can reuse either resolved argument or
+give an absolute path to another file. With `--processes`, each build
+loads first in turn:
 
 ```sh
 npx benk-d8 bench/compare.mjs -- --base ../numbers-main/dist/index.js --head dist/index.js --processes 6

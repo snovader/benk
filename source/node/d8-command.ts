@@ -125,8 +125,7 @@ export async function runD8Command(args: readonly string[]): Promise<number> {
             ? await runInD8Processes(run, {
                   processes,
                   json,
-                  print,
-                  compares: options.base != null
+                  print
               })
             : await runD8(
                   { ...run, args: withoutOptions(run.args, WRAPPER_OPTIONS) },
@@ -169,10 +168,10 @@ async function withBuildPaths(
     }
 
     const builds = await resolveBuilds(buildsToCompare({ base, head }));
-    const paths = {
-        base: fileURLToPath(builds.base.url),
-        head: fileURLToPath(builds.head.url)
-    };
+    const paths = Object.values(builds).map(({ module, url }) => ({
+        module,
+        url: fileURLToPath(url)
+    }));
     // Before the user's flags, as --module applies to the next script
     const flags = [
         '-e',
@@ -272,11 +271,6 @@ interface D8ProcessesOptions {
     readonly json: string | undefined;
     /** Prints a line where the tables go: to stdout, or to stderr */
     readonly print: (line: string) => void;
-    /**
-     * Whether the script compares builds, whose runs then load each build
-     * first in turn
-     */
-    readonly compares: boolean;
 }
 
 /**
@@ -305,7 +299,7 @@ interface D8ProcessesOptions {
  */
 async function runInD8Processes(
     run: D8Run,
-    { processes, json, print, compares }: D8ProcessesOptions
+    { processes, json, print }: D8ProcessesOptions
 ): Promise<number> {
     if (json != null && json !== '-') {
         await checkDirectory(json);
@@ -330,7 +324,7 @@ async function runInD8Processes(
                           `globalThis[Symbol.for('${D8_PROCESS_RUN}')] = true`
                       ]
                     : []),
-                ...(compares && firstBuildIn(number) === 'head'
+                ...(firstBuildIn(number) === 'head'
                     ? [
                           '-e',
                           `globalThis[Symbol.for('${D8_FIRST_BUILD}')] = 'head'`
@@ -368,7 +362,7 @@ async function runInD8Processes(
 /**
  * The first run's results with the other runs', and each variant's ratio in
  * each, and the comparison of builds across the runs, if the first has
- * one: each run loaded the build first that `firstBuildIn()` says
+ * one, using the build and load order that each process recorded
  */
 function acrossD8Processes(
     first: RunResult,
@@ -378,6 +372,20 @@ function acrossD8Processes(
         first,
         others.map(({ date, runtime, groups }) => ({ date, runtime, groups }))
     );
+    const loadedFirst = [...(first.builds?.loadedFirst ?? [])];
+    for (const [i, { builds }] of others.entries()) {
+        if (
+            builds?.base.url !== first.builds?.base.url ||
+            builds?.head.url !== first.builds?.head.url
+        ) {
+            throw new Error(
+                `Expected process ${i + 2} to compare the same builds as the first`
+            );
+        }
+        if (builds != null) {
+            loadedFirst.push(builds.loadedFirst[0]);
+        }
+    }
     if (first.builds == null) {
         return result;
     }
@@ -386,9 +394,7 @@ function acrossD8Processes(
     return withBuilds(result, {
         base,
         head,
-        loadedFirst: Array.from({ length: others.length + 1 }, (_, i) =>
-            firstBuildIn(i + 1)
-        ),
+        loadedFirst,
         origins: variants
     });
 }

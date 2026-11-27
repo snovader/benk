@@ -24,7 +24,7 @@
 // comparison sets the ratios of the processes that loaded each build first
 // against each other.
 import { withProcesses } from './processes.ts';
-import { quantile, sortedCopy } from './statistics.ts';
+import { binomialTailCount, quantile, sortedCopy } from './statistics.ts';
 import type {
     Build,
     BuildComparison,
@@ -377,8 +377,8 @@ function variantAcrossBuilds(
 
 /**
  * What a process's rounds showed of head's time against base's: faster or
- * slower where head's interval lies apart from the A/A copy's, or from 1
- * where the A/A copy has none, and within noise where it doesn't. Two 95%
+ * slower where head's interval lies to the same side of both 1 (base)
+ * and the A/A copy's interval, and within noise where it doesn't. Two 95%
  * intervals that don't overlap differ by more than either's width, so
  * identical code lies apart this way in far fewer than 5% of processes.
  */
@@ -391,9 +391,9 @@ function differenceOf(
     }
 
     const [low, high] = noise ?? [1, 1];
-    return interval[1] < low
+    return interval[1] < Math.min(1, low)
         ? 'faster'
-        : interval[0] > high
+        : interval[0] > Math.max(1, high)
           ? 'slower'
           : 'within noise';
 }
@@ -401,10 +401,9 @@ function differenceOf(
 /**
  * What a variant's processes showed together of head's time against
  * base's: what each of them showed, where they agree that head was faster,
- * or slower, and otherwise what head's ratio against the A/A copy's, in
- * the same process, showed across them, as `sidesOf()` counts it. In a
- * process, the A/A copy's ratio is of identical code, so head's lies above
- * it about as often as below where head's time doesn't differ from base's.
+ * or slower round by round, and otherwise whether head's ratio to base
+ * lies on the same side of 1 and of the A/A ratio across processes. Each
+ * comparison uses a two-sided sign test on the processes with both ratios.
  * It's null where no process has an interval.
  */
 function overallDifference(
@@ -423,50 +422,61 @@ function overallDifference(
         return first;
     }
 
-    const { above, below } = sidesOf(ratios, noise);
-    if (signChance(above, below) > SIDE_CHANCE) {
-        return 'within noise';
+    // Both sign tests must support the same direction. A displaced A/A
+    // copy can hide a difference but cannot make a slowdown a speedup.
+    const sides = sidesOf(ratios, noise);
+    const byBase = signDifference(sides.aboveBase, sides.belowBase);
+    if (noise == null || byBase === 'within noise') {
+        return byBase;
     }
-
-    return above > below ? 'slower' : 'faster';
+    return byBase === signDifference(sides.above, sides.below)
+        ? byBase
+        : 'within noise';
 }
 
 /**
  * In how many processes head's ratio lay above the A/A copy's ratio, or 1
- * without an A/A copy, and in how many below. A process with a missing
- * ratio, or the same, counts as neither.
+ * without an A/A copy, and in how many below. Count head's ratios above
+ * and below 1 in the same comparable processes. Ties count as comparable
+ * but contribute to neither side of their sign test.
  */
 export function sidesOf(
     ratios: ReadonlyArray<number | null>,
     noise: ReadonlyArray<number | null> | null
-): { readonly above: number; readonly below: number } {
+): {
+    readonly above: number;
+    readonly below: number;
+    readonly aboveBase: number;
+    readonly belowBase: number;
+    readonly comparable: number;
+} {
     let above = 0;
     let below = 0;
+    let aboveBase = 0;
+    let belowBase = 0;
+    let comparable = 0;
     for (const [i, ratio] of ratios.entries()) {
         const other = noise == null ? 1 : noise[i];
         if (ratio != null && other != null) {
             above += ratio > other ? 1 : 0;
             below += ratio < other ? 1 : 0;
+            aboveBase += ratio > 1 ? 1 : 0;
+            belowBase += ratio < 1 ? 1 : 0;
+            comparable++;
         }
     }
 
-    return { above, below };
+    return { above, below, aboveBase, belowBase, comparable };
 }
 
-/**
- * The chance of a split of processes between above and below at least as
- * uneven as this one, either way, where each side is as likely: the
- * two-sided sign test
- */
-function signChance(above: number, below: number): number {
-    const count = above + below;
-    const most = Math.max(above, below);
-    let ways = 0;
-    for (let k = most; k <= count; k++) {
-        ways += arrangements(count, k);
+/** The direction supported by a two-sided sign test, excluding ties. */
+function signDifference(above: number, below: number): Difference {
+    const cutoff = binomialTailCount(above + below, SIDE_CHANCE / 2);
+    if (Math.min(above, below) >= cutoff) {
+        return 'within noise';
     }
 
-    return Math.min(1, (2 * ways) / 2 ** count);
+    return above > below ? 'slower' : 'faster';
 }
 
 /** A variant's ratios by the build that each process loaded first */

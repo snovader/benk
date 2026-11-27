@@ -126,7 +126,7 @@ export async function bench(
     const command = parseOptions(options.args ?? process.argv.slice(2));
     checkNoBuilds(command);
 
-    return runBench(groups, command, options);
+    return runBench(groups, command, options, benchCalls++);
 }
 
 /**
@@ -159,6 +159,9 @@ export async function compareBuilds<M>(
     options: BenchOptions = {}
 ): Promise<RunResult> {
     const command = parseOptions(options.args ?? process.argv.slice(2));
+    // Child runs and traces identify calls by invocation order. Resolving the
+    // paths and making groups can finish in a different order in each process.
+    const call = benchCalls++;
     const builds = await resolveBuilds(buildsToCompare(command));
     const first = firstBuildOfProcess();
     // The module is what the function of groups says it is
@@ -170,6 +173,7 @@ export async function compareBuilds<M>(
         pairs.map(({ pair }) => pair),
         command,
         options,
+        call,
         { builds, first, pairs }
     );
 }
@@ -182,13 +186,13 @@ async function runBench(
     groups: Iterable<Group>,
     command: CommandOptions,
     options: BenchOptions,
+    call: number,
     comparison?: Comparison
 ): Promise<RunResult> {
     const { json, processes, v8Report, v8Filter, v8Check, v8MaxBytecode } =
         command;
     const measure = printedRunOptions(command);
     const runtime = options.runtime ?? defaultRuntime();
-    const call = benchCalls++;
     if (isTracedRun()) {
         // The process that runs this one prints the report, and the results
         const result = await measureTraced(groups, measure, runtime, call);

@@ -184,18 +184,18 @@ function checkInD8({
 function d8Builds(
     modules: Readonly<Record<BuildName, string>>
 ): Record<BuildName, Build> {
-    const resolved = shellValue(D8_BUILDS) as
-        | Readonly<Record<BuildName, string>>
-        | undefined;
+    const resolved = shellValue(D8_BUILDS) as readonly Build[] | undefined;
     const build = (name: BuildName): Build => {
-        const url = resolved?.[name] ?? modules[name];
+        const module = modules[name];
+        const url =
+            resolved?.find(path => path.module === module)?.url ?? module;
         if (!isAbsolute(url)) {
             throw new TypeError(
                 `Expected --${name} to be an absolute path in d8, which resolves an import from benk's module, got ${url}: benk-d8 resolves a path from its working directory, as benk-d8 bench.mjs -- --${name} ${url}`
             );
         }
 
-        return { module: modules[name], url };
+        return { module, url };
     };
     const builds = { base: build('base'), head: build('head') };
     if (builds.base.url === builds.head.url) {

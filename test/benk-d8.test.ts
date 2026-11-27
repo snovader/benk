@@ -363,7 +363,7 @@ describe.skipIf(process.platform === 'win32')('benk-d8 with d8 faked', () => {
             const mark = ['-e', "globalThis[Symbol.for('benk.d8.processRun')] = true"];
             expect(d8Runs.map(args => args.slice(0, args.indexOf(D8_BUNDLE)))).toStrictEqual([
                 [],
-                mark,
+                [...mark, '-e', "globalThis[Symbol.for('benk.d8.firstBuild')] = 'head'"],
                 mark
             ]);
             // Only the first run's output shows
@@ -410,10 +410,10 @@ describe.skipIf(process.platform === 'win32')('benk-d8 with d8 faked', () => {
             ]);
             const result = JSON.parse(await readFile(path, 'utf8')) as RunResult;
             const builds = expectPresent(result.builds);
-            const paths = {
-                base: await realpath(join(REPOSITORY, BUILD_BASE)),
-                head: await realpath(join(REPOSITORY, BUILD_HEAD))
-            };
+            const paths = [
+                { module: BUILD_BASE, url: await realpath(join(REPOSITORY, BUILD_BASE)) },
+                { module: BUILD_HEAD, url: await realpath(join(REPOSITORY, BUILD_HEAD)) }
+            ];
             const given = [
                 '-e',
                 `globalThis[Symbol.for('benk.d8.builds')] = ${JSON.stringify(paths)}`
@@ -429,7 +429,7 @@ describe.skipIf(process.platform === 'win32')('benk-d8 with d8 faked', () => {
                 [...later, ...head, ...given]
             ]);
             // The script's options name the builds as the command line did
-            expect(builds.base).toStrictEqual({ module: BUILD_BASE, url: paths.base });
+            expect(builds.base).toStrictEqual(paths[0]);
             expect(builds.loadedFirst).toStrictEqual(['base', 'head', 'base', 'head']);
             for (const ratio of builds.variants[0].ratios) {
                 expectClose(expectPresent(ratio), 0.5);
@@ -439,7 +439,7 @@ describe.skipIf(process.platform === 'win32')('benk-d8 with d8 faked', () => {
             expect(lines).toContain('calls: 4 processes, by the fastest round');
             expect(lines.some(line => line.startsWith('calls / sum: 4 processes'))).toBe(false);
             expect(lines).toContain(
-                "  sort: within the A/A copy's noise: of 4 processes, its ratio equalled the A/A copy's in each, and its interval apart from the A/A copy's in none"
+                "  sort: within the A/A copy's noise: of 4 processes, its ratio equalled the A/A copy's in each, and its interval showed a difference in none"
             );
         });
     });
@@ -691,6 +691,59 @@ describe.runIf(version)('benk-d8 in d8', () => {
             expect(builds.loadedFirst).toStrictEqual(['base', 'head']);
             expect(result.groups.map(group => group.name)).toStrictEqual(['sum / numbers']);
             expect(stderr).toMatch(/\nsum: 2 processes, by the (fastest|median) round\n/);
+        });
+    });
+
+    it('loads the paths chosen by each call and records the order observed in real d8 processes', async () => {
+        await inDirectory(async directory => {
+            const base = join(directory, 'base.mjs');
+            const head = join(directory, 'head.mjs');
+            await writeFile(base, "export const name = 'base';");
+            await writeFile(head, "export const name = 'head';");
+            // A script can choose absolute paths itself or swap the wrapper's relative arguments.
+            for (const wrapperPaths of [false, true]) {
+                const modules = wrapperPaths
+                    ? [relative(REPOSITORY, head), relative(REPOSITORY, base)]
+                    : [base, head];
+                const script = await writeScript(
+                    directory,
+                    'orders',
+                    `
+                    import { compareBuilds } from 'benk/d8';
+                    const made = [];
+                    const orderFile = ${JSON.stringify(join(directory, 'order'))};
+                    await compareBuilds(build => {
+                        made.push(build.name);
+                        return [{ name: 'calls', variants: [{ name: 'name', run: () => build.name }] }];
+                    }, { args: [...globalThis.arguments, '--base', ${JSON.stringify(modules[0])},
+                             '--head', ${JSON.stringify(modules[1])}] });
+                    writeFile(orderFile, read(orderFile) + made.join(' ') + '\\n');
+                `
+                );
+                await writeFile(join(directory, 'order'), '');
+                const args = wrapperPaths ? ['--base', modules[1], '--head', modules[0]] : [];
+                const run = await runCommand([
+                    script,
+                    '--',
+                    ...QUICK,
+                    ...args,
+                    '--processes',
+                    '2',
+                    '--json',
+                    '-'
+                ]);
+                expect(run.status, run.stdout + run.stderr).toBe(0);
+                const result = JSON.parse(run.stdout) as RunResult;
+                const builds = expectPresent(result.builds);
+                expect(builds.base).toStrictEqual({
+                    module: modules[0],
+                    url: wrapperPaths ? await realpath(head) : base
+                });
+                expect(builds.loadedFirst).toStrictEqual(['base', 'head']);
+                expect(await readFile(join(directory, 'order'), 'utf8')).toBe(
+                    wrapperPaths ? 'head base\nbase head\n' : 'base head\nhead base\n'
+                );
+            }
         });
     });
 

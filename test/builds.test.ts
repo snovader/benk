@@ -128,8 +128,8 @@ describe('compareBuilds', () => {
             ['ratio', '95% interval', 'A/A interval'],
             ['sum', '0.50×', '0.50–0.50', '1.00–1.00'],
             ['sort', '1.00×', '1.00–1.00', '1.00–1.00'],
-            ["sum: head faster, beyond the A/A copy's noise"],
-            ["sort: within the A/A copy's noise"]
+            ["sum: round by round, head faster, beyond the A/A copy's noise"],
+            ["sort: round by round, within the A/A copy's noise"]
         ]);
     });
 
@@ -142,7 +142,7 @@ describe('compareBuilds', () => {
             'head'
         ]);
         expect([sum.aa, sum.difference]).toStrictEqual([null, 'faster']);
-        expect(lines).toContain("  sum: head faster, beyond its interval's noise");
+        expect(lines).toContain("  sum: round by round, head faster, beyond its interval's noise");
     });
 
     it("calls the function of groups with each build's module as soon as it's loaded, base first", async () => {
@@ -437,6 +437,31 @@ describe('withBuilds', () => {
         }
     });
 
+    it('requires the same direction against base and its displaced A/A copy', () => {
+        for (const [head, aa] of [
+            [1.05, 1.1],
+            [0.95, 0.9],
+            [1, 1.1]
+        ]) {
+            const [variant] = comparisonOf(
+                pairResult(new Array<number>(6).fill(head), new Array<number>(6).fill(aa))
+            ).variants;
+            expect(variant.differences).toStrictEqual(new Array<string>(6).fill('within noise'));
+            expect(variant.difference).toBe('within noise');
+        }
+    });
+
+    it('evaluates both balanced and significant sign tests across 1,024 processes', () => {
+        for (const [above, verdict] of [
+            [512, 'within noise'],
+            [600, 'slower']
+        ] as const) {
+            const ratios = Array.from({ length: 1024 }, (_, i) => (i < above ? 1.005 : 0.995));
+            const [variant] = comparisonOf(pairResult(ratios, null)).variants;
+            expect(variant.difference).toBe(verdict);
+        }
+    });
+
     it('compares head with 1 without an A/A copy', () => {
         const [variant] = comparisonOf(pairResult([1.05, 1.004], null)).variants;
 
@@ -511,7 +536,7 @@ describe('formatBuilds', () => {
             ['1', '2', '3', '4', 'median', 'range'],
             ['sum', '1.10×', '1.12×', '1.09×', '1.11×', '1.11×', '1.09–1.12'],
             [
-                "sum: head slower, beyond the A/A copy's noise: of 4 processes, its ratio lay above the A/A copy's in 4, and its interval apart from the A/A copy's in 4"
+                "sum: head slower, beyond the A/A copy's noise: of 4 processes, its ratio lay above the A/A copy's in 4, and its interval showed a difference in 4"
             ]
         ]);
     });
@@ -523,9 +548,35 @@ describe('formatBuilds', () => {
             ['1', '2', 'range'],
             ['sum', '1.00×', '1.00×', '1.00–1.00'],
             [
-                "sum: within the A/A copy's noise: of 2 processes, its ratio lay above the A/A copy's in 1 and below in 1, and its interval apart from the A/A copy's in none"
+                "sum: within the A/A copy's noise: of 2 processes, its ratio lay above the A/A copy's in 1 and below in 1, and its interval showed a difference in none"
             ]
         ]);
+    });
+
+    it('distinguishes ties from missing ratios', () => {
+        const builds = comparisonOf(pairResult([1, 1], [1, 1]));
+        const [variant] = builds.variants;
+        for (const [ratios, note] of [
+            [[null, null], "could not be compared with the A/A copy's in any process"],
+            [[1, null], "equalled the A/A copy's in 1, with 1 missing comparison"]
+        ] as const) {
+            const lines = formatBuilds({ ...builds, variants: [{ ...variant, ratios }] });
+            expect(lines.at(-1)).toContain(note);
+        }
+    });
+
+    it('names the statistic behind a fastest-led verdict', () => {
+        const ratios = new Array<number>(6).fill(0.995);
+        const aa = new Array<number>(6).fill(1);
+        const builds = comparisonOf(pairResult(ratios, aa, { lead: 'fastest' }));
+        expect(formatBuilds(builds).at(-1)).toContain('by the fastest rounds, head faster');
+        const [variant] = comparisonOf(pairResult([1.1], [1], { lead: 'fastest' })).variants;
+        const one = {
+            ...builds,
+            loadedFirst: ['base'] as const,
+            variants: [{ ...variant, ratios: [0.9] }]
+        };
+        expect(formatBuilds(one).at(-1)).toContain('round by round, head slower');
     });
 
     it('notes a variant whose ratio depends on which build loaded first', () => {
@@ -554,6 +605,34 @@ describe('formatBuilds', () => {
 });
 
 describe('compareBuilds across processes', () => {
+    it('keeps overlapping calls paired when their factories finish in opposite orders', async () => {
+        const { stdout } = await promisify(execFile)(
+            process.execPath,
+            [
+                '--no-strip-types',
+                '--import',
+                '@snovader/node-hooks/register',
+                join('test', 'fixtures', 'overlapping-builds.ts'),
+                ...QUICK,
+                ...BUILDS,
+                '--processes',
+                '2'
+            ],
+            { cwd: REPOSITORY }
+        );
+        const calls = stdout
+            .trimEnd()
+            .split('\n')
+            .map(line => JSON.parse(line) as [number, number[]]);
+        expect(calls.map(([expected]) => expected).sort((a, b) => a - b)).toStrictEqual([2, 3]);
+        for (const [expected, ratios] of calls) {
+            expect(ratios).toHaveLength(2);
+            for (const ratio of ratios) {
+                expectClose(ratio, expected);
+            }
+        }
+    });
+
     it("loads each build first in turn, and prints head's ratio to base in each process", async () => {
         const directory = await mkdtemp(join(tmpdir(), 'benk-'));
         try {
@@ -599,7 +678,7 @@ describe('compareBuilds across processes', () => {
             expect(lines).toContain('calls: 4 processes, by the fastest round');
             expect(lines.some(line => line.startsWith('calls / sum: 4 processes'))).toBe(false);
             expect(lines).toContain(
-                "  sum: head faster, beyond the A/A copy's noise: of 4 processes, its ratio lay below the A/A copy's in 4, and its interval apart from the A/A copy's in 4"
+                "  sum: round by round, head faster, beyond the A/A copy's noise: of 4 processes, its ratio lay below the A/A copy's in 4, and its interval showed a difference in 4"
             );
         } finally {
             await rm(directory, { recursive: true });

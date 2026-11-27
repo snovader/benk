@@ -523,8 +523,8 @@ export interface Build {
 
 /**
  * What a process's rounds showed of head's time against base's: `faster`
- * or `slower` where its interval lay apart from the A/A copy's interval,
- * or from 1 without an A/A copy, and `within noise` where it didn't
+ * or `slower` where its interval lay below or above both 1 and the A/A
+ * copy's interval (when available), and `within noise` otherwise
  */
 export type Difference = 'faster' | 'slower' | 'within noise';
 
@@ -561,7 +561,7 @@ export interface VariantAcrossBuilds {
     readonly lead: Lead;
     /** Head's ratio to base in each process, from the first, or null */
     readonly ratios: ReadonlyArray<number | null>;
-    /** Head's 95% interval in each process, or null where it has none */
+    /** The 95% interval of the median per-round ratio in each process, or null */
     readonly intervals: ReadonlyArray<
         readonly [low: number, high: number] | null
     >;
@@ -583,8 +583,8 @@ export interface VariantAcrossBuilds {
     /**
      * What the processes showed together: what each of them showed, where
      * they agree that head was faster, or slower, or else whether head's
-     * ratio lay on one side of the A/A copy's, or of 1 without one, in so
-     * many processes that a sign test gives a chance of 5% or less. Null
+     * ratio differs from 1 and from the A/A copy's ratio (if enabled) in
+     * the same direction by two-sided sign tests at 5%. Null
      * where no process has an interval.
      */
     readonly difference: Difference | null;

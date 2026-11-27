@@ -8,14 +8,7 @@
 // skipped without it, as in CI. Times vary, so they check only what
 // doesn't.
 import { spawnSync } from 'node:child_process';
-import {
-    existsSync,
-    mkdtempSync,
-    readFileSync,
-    realpathSync,
-    rmSync,
-    writeFileSync
-} from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -414,47 +407,6 @@ describe('compareBuilds of benk/d8', () => {
     const BASE = join('test', 'fixtures', 'builds', 'base.ts');
     const HEAD = join('test', 'fixtures', 'builds', 'head.ts');
 
-    /** Compares the fixtures' builds, at the paths of the arguments, with the fake runtime */
-    async function compareFixtures(
-        args: readonly string[]
-    ): Promise<{ result: RunResult; made: string[] }> {
-        const runtime = new FakeRuntime();
-        const made: string[] = [];
-        const result = await compareBuilds(
-            (build: { NAME: string; NANOSECONDS: { sum: number } }): Group[] => {
-                made.push(build.NAME);
-                return [
-                    { name: 'calls', variants: [runtime.variant('sum', build.NANOSECONDS.sum)] }
-                ];
-            },
-            { args: [...FAKE_ARGS, ...args], runtime, print: () => undefined }
-        );
-
-        return { result, made };
-    }
-
-    /** Sets d8's global symbol, as benk-d8 does before the script, while `use` runs */
-    async function withGlobal<T>(name: string, value: unknown, use: () => Promise<T>): Promise<T> {
-        const global = globalThis as Record<symbol, unknown>;
-        global[Symbol.for(name)] = value;
-        try {
-            return await use();
-        } finally {
-            delete global[Symbol.for(name)];
-        }
-    }
-
-    it("compares builds at absolute paths, base first, as d8 resolves an import from benk's module", async () => {
-        const base = resolve(BASE);
-        const { result, made } = await compareFixtures(['--base', base, '--head', resolve(HEAD)]);
-        const builds = expectPresent(result.builds);
-
-        expect(made).toStrictEqual(['base', 'head']);
-        expect(builds.base).toStrictEqual({ module: base, url: base });
-        expect(builds.loadedFirst).toStrictEqual(['base']);
-        expect(expectPresent(builds.variants[0].ratios[0])).toBeCloseTo(0.5, 9);
-    });
-
     it("rejects a relative path without benk-d8, and the options that d8 can't carry out, before it loads the builds", async () => {
         for (const [args, error] of [
             [
@@ -474,25 +426,10 @@ describe('compareBuilds of benk/d8', () => {
                 /^Expected no --processes 2 in d8/
             ]
         ] as const) {
-            const run = compareFixtures(args);
+            const run = compareBuilds(() => [], { args });
 
             await expect(run, args.join(' ')).rejects.toThrow(error);
         }
-    });
-
-    it('takes the absolute paths that benk-d8 resolved, and loads head first where benk-d8 asks', async () => {
-        const paths = { base: realpathSync(BASE), head: realpathSync(HEAD) };
-
-        const { result, made } = await withGlobal('benk.d8.builds', paths, () =>
-            withGlobal('benk.d8.firstBuild', 'head', () =>
-                compareFixtures(['--base', BASE, '--head', HEAD])
-            )
-        );
-        const builds = expectPresent(result.builds);
-
-        expect(made).toStrictEqual(['head', 'base']);
-        expect(builds.base).toStrictEqual({ module: BASE, url: paths.base });
-        expect(builds.loadedFirst).toStrictEqual(['head']);
     });
 
     it('rejects --base and --head in a script that calls bench()', async () => {

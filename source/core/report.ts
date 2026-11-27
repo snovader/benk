@@ -741,7 +741,7 @@ export function formatBuilds({
 function describeComparison(loadedFirst: readonly BuildName[]): string {
     const count = loadedFirst.length;
     if (count === 1) {
-        return `Head against base in this process, which loaded ${loadedFirst[0]} first: each variant's ratio of head's time to base's, by the statistic that its pair leads with, its 95% interval, and the A/A copy's. With --processes 2 or more, the processes load each build first in turn.`;
+        return `Head against base in this process, which loaded ${loadedFirst[0]} first: each variant's ratio of head's time to base's, by the statistic that its pair leads with. The 95% intervals compare median per-round ratios. With --processes 2 or more, the processes load each build first in turn.`;
     }
 
     const processes = (build: BuildName): string =>
@@ -752,7 +752,10 @@ function describeComparison(loadedFirst: readonly BuildName[]): string {
         count === 2
             ? 'and their range'
             : `the median of the ${count} ratios, and their range`;
-    return `Head against base in ${count} processes: each variant's ratio of head's time to base's in each, by the statistic that its pair leads with in the first, ${summary}. Processes ${processes('base')} loaded base first, and ${processes('head')} head first.`;
+    const order = loadedFirst.every(first => first === loadedFirst[0])
+        ? `Every process loaded ${loadedFirst[0]} first.`
+        : `Processes ${processes('base')} loaded base first, and ${processes('head')} head first.`;
+    return `Head against base in ${count} processes: each variant's ratio of head's time to base's in each, by the statistic that its pair leads with in the first, ${summary}. ${order}`;
 }
 
 /** A table of a group's variants across builds, and its notes */
@@ -841,10 +844,11 @@ function formatBuildsRow(
  * beyond the A/A copy's noise, or within it, or, without an A/A copy,
  * beyond its interval's noise, or within it. Of several processes, it
  * says in how many head's ratio lay on its side of the A/A copy's ratio,
- * or of 1, and in how many its interval lay apart from the A/A copy's.
+ * or of 1, and in how many its interval showed a difference from base.
  */
 function formatDifferences({
     variant,
+    lead,
     aa,
     ratios,
     differences,
@@ -857,23 +861,56 @@ function formatDifferences({
             : difference === 'within noise'
               ? `within ${noise}`
               : `head ${difference}, beyond ${noise}`;
+    let statistic = '';
+    if (lead === 'fastest' && difference != null) {
+        if (
+            differences.length === 1 ||
+            (difference !== 'within noise' &&
+                differences.every(d => d === difference))
+        ) {
+            statistic = 'round by round, ';
+        } else if (difference !== 'within noise') {
+            statistic = 'by the fastest rounds, ';
+        }
+    }
+    const note = `  ${variant}: ${statistic}${verdict}`;
     if (differences.length === 1) {
-        return `  ${variant}: ${verdict}`;
+        return note;
     }
 
-    const { above, below } = sidesOf(ratios, aa?.ratios ?? null);
+    const { above, below, comparable } = sidesOf(ratios, aa?.ratios ?? null);
     const other = aa == null ? '1' : "the A/A copy's";
     const count = differences.length;
-    const sides =
-        above + below === 0
-            ? `equalled ${other} in each`
-            : above === 0 || below === 0
-              ? `lay ${above === 0 ? 'below' : 'above'} ${other} in ${above + below}`
-              : `lay above ${other} in ${above} and below in ${below}`;
+    const sides = describeSides(other, above, below, comparable, count);
     const apart = differences.filter(
         difference => difference === 'faster' || difference === 'slower'
     ).length;
-    return `  ${variant}: ${verdict}: of ${count} processes, its ratio ${sides}, and its interval apart from ${other} in ${apart === 0 ? 'none' : apart}`;
+    return `${note}: of ${count} processes, its ratio ${sides}, and its interval showed a difference in ${apart === 0 ? 'none' : apart}`;
+}
+
+/** How many ratios could be compared, distinguishing missing pairs from ties. */
+function describeSides(
+    other: string,
+    above: number,
+    below: number,
+    comparable: number,
+    count: number
+): string {
+    if (comparable === 0) {
+        return `could not be compared with ${other} in any process`;
+    }
+    const missing =
+        comparable < count
+            ? `, with ${count - comparable} missing comparison${count - comparable === 1 ? '' : 's'}`
+            : '';
+    if (above + below === 0) {
+        const where = comparable === count ? 'each' : String(comparable);
+        return `equalled ${other} in ${where}${missing}`;
+    }
+    if (above === 0 || below === 0) {
+        return `lay ${above === 0 ? 'below' : 'above'} ${other} in ${above + below}${missing}`;
+    }
+    return `lay above ${other} in ${above} and below in ${below}${missing}`;
 }
 
 /**
