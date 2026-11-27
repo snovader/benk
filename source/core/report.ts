@@ -1,10 +1,10 @@
+import { sidesOf } from './builds.ts';
 import { ALLOCATING_CALL, LONG_CALL } from './lead.ts';
 import { modesAreOf } from './statistics.ts';
 import type {
     BuildComparison,
     BuildName,
     Change,
-    Difference,
     GroupAcrossProcesses,
     GroupResult,
     Lead,
@@ -836,48 +836,38 @@ function formatBuildsRow(
 }
 
 /**
- * A note of what each process's rounds showed of a variant's time in head
- * against base's: faster or slower beyond the A/A copy's noise, or within
- * it, or, without an A/A copy, beyond its interval, or within it
+ * A note of what a variant's processes showed of head's time against
+ * base's, as `VariantAcrossBuilds.difference` has it: head faster or slower
+ * beyond the A/A copy's noise, or within it, or, without an A/A copy,
+ * beyond its interval's noise, or within it. Of several processes, it
+ * says in how many head's ratio lay on its side of the A/A copy's ratio,
+ * or of 1, and in how many its interval lay apart from the A/A copy's.
  */
 function formatDifferences({
     variant,
     aa,
-    differences
+    ratios,
+    differences,
+    difference
 }: VariantAcrossBuilds): string {
     const noise = aa == null ? "its interval's noise" : "the A/A copy's noise";
-    const count = differences.length;
-    const counts = new Map<Difference | null, number>();
-    for (const difference of differences) {
-        counts.set(difference, (counts.get(difference) ?? 0) + 1);
+    const verdict =
+        difference == null
+            ? 'no interval to compare'
+            : difference === 'within noise'
+              ? `within ${noise}`
+              : `head ${difference}, beyond ${noise}`;
+    if (differences.length === 1) {
+        return `  ${variant}: ${verdict}`;
     }
 
-    const [only] = counts.keys();
-    if (counts.size === 1 && only != null) {
-        const where =
-            count === 1
-                ? ''
-                : count === 2
-                  ? ' in both processes'
-                  : ` in all ${count} processes`;
-        return only === 'within noise'
-            ? `  ${variant}: within ${noise}${where}`
-            : `  ${variant}: head ${only}${where}, beyond ${noise}`;
-    }
-
-    const parts = (
-        [
-            ['faster', `head faster in ${counts.get('faster')}`],
-            ['slower', `head slower in ${counts.get('slower')}`],
-            [
-                'within noise',
-                `within ${noise} in ${counts.get('within noise')}`
-            ],
-            [null, `without an interval in ${counts.get(null)}`]
-        ] as const
-    ).flatMap(([difference, text]) => (counts.has(difference) ? [text] : []));
-    const processes = count === 1 ? 'process' : 'processes';
-    return `  ${variant}: ${formatList(parts)} of ${count} ${processes}`;
+    const { above, below } = sidesOf(ratios, aa?.ratios ?? null);
+    const [side, most] = above >= below ? ['above', above] : ['below', below];
+    const other = aa == null ? '1' : "the A/A copy's";
+    const apart = differences.filter(
+        other => other === 'faster' || other === 'slower'
+    ).length;
+    return `  ${variant}: ${verdict}: its ratio was ${side} ${other} in ${most} of ${differences.length} processes, and its interval apart from ${other} in ${apart === 0 ? 'none' : apart}`;
 }
 
 /**

@@ -581,6 +581,14 @@ export interface VariantAcrossBuilds {
      */
     readonly differences: ReadonlyArray<Difference | null>;
     /**
+     * What the processes showed together: what each of them showed, where
+     * they agree that head was faster, or slower, or else whether head's
+     * ratio lay on one side of the A/A copy's, or of 1 without one, in so
+     * many processes that a sign test gives a chance of 5% or less. Null
+     * where no process has an interval.
+     */
+    readonly difference: Difference | null;
+    /**
      * The median of the ratios, as `VariantAcrossProcesses` has it: null
      * for fewer than 3 processes, or if any ratio is missing
      */

@@ -48,6 +48,15 @@ import type {
  */
 const APART_CHANCE = 0.05;
 
+/**
+ * The chance, at most, of a split of processes between head's ratio above
+ * the A/A copy's and below it at least as uneven as a variant's, where
+ * head's time doesn't differ from base's, for the processes together to
+ * show a difference that not every one of them shows: 6 processes of 6
+ * on one side are the fewest, 2 in 64, and 9 of 10.
+ */
+const SIDE_CHANCE = 0.05;
+
 /** A variant of the two builds, which a group of its own pairs */
 export interface BuildPair {
     /** The variant's group, by its name in both builds */
@@ -337,6 +346,9 @@ function variantAcrossBuilds(
     const aa = variants.find(other => other.role === 'aa');
     const ratios = head?.ratios ?? [];
     const intervals = head?.intervals ?? [];
+    const differences = intervals.map((interval, i) =>
+        differenceOf(interval, aa?.intervals[i] ?? null)
+    );
 
     return {
         group,
@@ -345,9 +357,8 @@ function variantAcrossBuilds(
         ratios,
         intervals,
         aa: aa == null ? null : { ratios: aa.ratios, intervals: aa.intervals },
-        differences: intervals.map((interval, i) =>
-            differenceOf(interval, aa?.intervals[i] ?? null)
-        ),
+        differences,
+        difference: overallDifference(differences, ratios, aa?.ratios ?? null),
         median: head?.median ?? null,
         range: head?.range ?? null,
         loadOrder: loadOrderOf(ratios, loadedFirst)
@@ -375,6 +386,77 @@ function differenceOf(
         : interval[0] > high
           ? 'slower'
           : 'within noise';
+}
+
+/**
+ * What a variant's processes showed together of head's time against
+ * base's: what each of them showed, where they agree that head was faster,
+ * or slower, and otherwise what head's ratio against the A/A copy's, in
+ * the same process, showed across them, as `sidesOf()` counts it. In a
+ * process, the A/A copy's ratio is of identical code, so head's lies above
+ * it about as often as below where head's time doesn't differ from base's.
+ * It's null where no process has an interval.
+ */
+function overallDifference(
+    differences: ReadonlyArray<Difference | null>,
+    ratios: ReadonlyArray<number | null>,
+    noise: ReadonlyArray<number | null> | null
+): Difference | null {
+    const [first] = differences;
+    if (differences.every(difference => difference == null)) {
+        return null;
+    }
+    if (
+        first !== 'within noise' &&
+        differences.every(other => other === first)
+    ) {
+        return first;
+    }
+
+    const { above, below } = sidesOf(ratios, noise);
+    if (signChance(above, below) > SIDE_CHANCE) {
+        return 'within noise';
+    }
+
+    return above > below ? 'slower' : 'faster';
+}
+
+/**
+ * In how many processes head's ratio lay above the A/A copy's ratio, or 1
+ * without an A/A copy, and in how many below. A process with a missing
+ * ratio, or the same, counts as neither.
+ */
+export function sidesOf(
+    ratios: ReadonlyArray<number | null>,
+    noise: ReadonlyArray<number | null> | null
+): { readonly above: number; readonly below: number } {
+    let above = 0;
+    let below = 0;
+    for (const [i, ratio] of ratios.entries()) {
+        const other = noise == null ? 1 : noise[i];
+        if (ratio != null && other != null) {
+            above += ratio > other ? 1 : 0;
+            below += ratio < other ? 1 : 0;
+        }
+    }
+
+    return { above, below };
+}
+
+/**
+ * The chance of a split of processes between above and below at least as
+ * uneven as this one, either way, where each side is as likely: the
+ * two-sided sign test
+ */
+function signChance(above: number, below: number): number {
+    const count = above + below;
+    const most = Math.max(above, below);
+    let ways = 0;
+    for (let k = most; k <= count; k++) {
+        ways += arrangements(count, k);
+    }
+
+    return Math.min(1, (2 * ways) / 2 ** count);
 }
 
 /** A variant's ratios by the build that each process loaded first */
