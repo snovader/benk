@@ -1,15 +1,30 @@
 import {
+    groupsOfBuilds,
+    withComparison,
+    type Comparison
+} from '#source/core/builds';
+import {
+    buildsToCompare,
+    checkNoBuilds,
     measureAndPrint,
     parseOptions,
+    printedRunOptions,
     type BenchOptions,
-    type CommandOptions
+    type CommandOptions,
+    type PrintedRunOptions
 } from '#source/core/command-line';
-import { measureGroups, type MeasureOptions } from '#source/core/measure';
+import { measureGroups } from '#source/core/measure';
 import { withProcesses } from '#source/core/processes';
-import { formatProcesses } from '#source/core/report';
+import {
+    describeBuilds,
+    formatBuilds,
+    formatProcesses
+} from '#source/core/report';
 import type {
+    BuildName,
     Group,
     GroupResult,
+    GroupsOfBuild,
     InliningLimits,
     RunResult,
     Runtime,
@@ -17,6 +32,7 @@ import type {
     VariantResult,
     VariantV8
 } from '#source/core/types';
+import { firstBuildOfProcess, loadBuild, resolveBuilds } from './builds.ts';
 import { functionPositions } from './function-positions.ts';
 import { checkDirectory, writeJson } from './json-results.ts';
 import {
@@ -107,31 +123,102 @@ export async function bench(
     groups: Iterable<Group>,
     options: BenchOptions = {}
 ): Promise<RunResult> {
-    const {
-        json,
-        processes,
-        v8Report,
-        v8Filter,
-        v8Check,
-        v8MaxBytecode,
-        ...command
-    } = parseOptions(options.args ?? process.argv.slice(2));
+    const command = parseOptions(options.args ?? process.argv.slice(2));
+    checkNoBuilds(command);
+
+    return runBench(groups, command, options);
+}
+
+/**
+ * Compares two builds of the code that a script times, as `bench()` runs
+ * groups: base, the module of `--base`, and head, the module of `--head`,
+ * each a path from the working directory. It imports each module, as a
+ * module of its own, and calls `groupsOf` with it, as soon as it's loaded,
+ * for the build's groups. Each variant of base is paired with head's of the
+ * same group and name, in a group of its own, named `group / variant`: base
+ * as the reference, head as the variant, and base's A/A copy. It measures
+ * and prints those groups as `bench()` does, with each of its options, and
+ * then a table of each variant's ratio of head's time to base's, and
+ * whether it's beyond the A/A copy's noise.
+ *
+ * This process loads base first. With `--processes <n>`, the other
+ * processes load head first and base first in turn, as `firstBuildIn()`
+ * says, and the table has each process's ratio, and whether the ratios
+ * depend on which build loaded first. The results have the comparison in
+ * `builds`.
+ *
+ * @throws {TypeError} If `--base` or `--head` is missing, names a
+ * directory, or both name the same file, or if the builds' groups don't
+ * pair, as when a variant has the same `run` in both, as `pairBuilds()`
+ * describes, or else as `bench()` throws.
+ * @throws {Error} If a build's module is missing, or fails to load, or as
+ * `bench()` throws.
+ */
+export async function compareBuilds<M>(
+    groupsOf: GroupsOfBuild<M>,
+    options: BenchOptions = {}
+): Promise<RunResult> {
+    const command = parseOptions(options.args ?? process.argv.slice(2));
+    const builds = await resolveBuilds(buildsToCompare(command));
+    const first = firstBuildOfProcess();
+    // The module is what the function of groups says it is
+    const load = (build: BuildName): Promise<M> =>
+        loadBuild(builds[build]) as Promise<M>;
+    const pairs = await groupsOfBuilds(groupsOf, load, first);
+
+    return runBench(
+        pairs.map(({ pair }) => pair),
+        command,
+        options,
+        { builds, first, pairs }
+    );
+}
+
+/**
+ * Runs groups as `bench()` describes, and compares builds as
+ * `compareBuilds()` describes, if the groups are of their pairs
+ */
+async function runBench(
+    groups: Iterable<Group>,
+    command: CommandOptions,
+    options: BenchOptions,
+    comparison?: Comparison
+): Promise<RunResult> {
+    const { json, processes, v8Report, v8Filter, v8Check, v8MaxBytecode } =
+        command;
+    const measure = printedRunOptions(command);
     const runtime = options.runtime ?? defaultRuntime();
     const call = benchCalls++;
     if (isTracedRun()) {
         // The process that runs this one prints the report, and the results
-        const result = await measureTraced(groups, command, runtime, call);
+        const result = await measureTraced(groups, measure, runtime, call);
         await recordSourceMaps();
-        return result;
+        return compared(result, comparison);
     }
 
+    const preface =
+        comparison == null
+            ? []
+            : [
+                  describeBuilds(
+                      modulesOf(comparison),
+                      comparison.first,
+                      measure.aa
+                  )
+              ];
     const processFile = processRunFile();
     if (processFile) {
         // Formats the tables, as the first process does between groups, and
         // drops them: the first process prints, and writes the results
-        const result = await measureAndPrint(groups, command, runtime, drop);
+        const result = await measureAndPrint(
+            groups,
+            measure,
+            runtime,
+            drop,
+            preface
+        );
         recordProcessRun(processFile, call, result);
-        return result;
+        return compared(result, comparison);
     }
 
     const toStdout = json === '-';
@@ -144,9 +231,16 @@ export async function bench(
     const again = processes > 1 ? '--processes' : v8Report ? '--v8-report' : '';
     const script = again ? scriptToRunAgain(again) : undefined;
 
-    const measured = await measureAndPrint(groups, command, runtime, print);
+    const measured = await measureAndPrint(
+        groups,
+        measure,
+        runtime,
+        print,
+        preface
+    );
 
-    let result: RunResult = measured;
+    // The comparison in this process, which the JSON has if the others fail
+    let result = compared(measured, comparison);
     let report: string[] = [];
     try {
         if (script != null && processes > 1) {
@@ -155,8 +249,15 @@ export async function bench(
                 processes
             });
             const repeated = withProcesses(measured, runs);
-            result = repeated;
-            for (const line of formatProcesses(repeated.processes)) {
+            result = compared(repeated, comparison);
+            if (comparison == null) {
+                for (const line of formatProcesses(repeated.processes)) {
+                    print(line);
+                }
+            }
+        }
+        if (result.builds != null) {
+            for (const line of formatBuilds(result.builds)) {
                 print(line);
             }
         }
@@ -186,6 +287,19 @@ export async function bench(
     return result;
 }
 
+/** The results with the comparison of builds, if the run compares them */
+function compared(
+    result: RunResult,
+    comparison: Comparison | undefined
+): RunResult {
+    return comparison == null ? result : withComparison(result, comparison);
+}
+
+/** The builds' modules, as the command line named them */
+function modulesOf({ builds }: Comparison): Record<BuildName, string> {
+    return { base: builds.base.module, head: builds.head.module };
+}
+
 /**
  * Measures the groups in the traced run, and marks among V8's traces where
  * this call of `bench()` starts and ends, and each group's timed rounds.
@@ -193,7 +307,7 @@ export async function bench(
  */
 async function measureTraced(
     groups: Iterable<Group>,
-    options: Required<MeasureOptions> & Pick<CommandOptions, 'filter'>,
+    options: PrintedRunOptions,
     runtime: Runtime,
     call: number
 ): Promise<RunResult> {

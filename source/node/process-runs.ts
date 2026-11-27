@@ -13,6 +13,7 @@
 import { appendFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { firstBuildIn } from '#source/core/builds';
 import type { ProcessRun, RunResult } from '#source/core/types';
 import {
     childRunValue,
@@ -81,7 +82,7 @@ export async function runInProcesses(
         const name = processName(script, i + 2, processes);
         // Reserve this process before awaiting it. Each caller waits for
         // it to finish before it can reserve the next.
-        runs[i] ??= runInProcess(name, script, args).catch(error => {
+        runs[i] ??= runInProcess(name, script, args, i + 2).catch(error => {
             // This child is still the last one. A later call can retry it.
             runs.length = i;
             throw error;
@@ -113,14 +114,17 @@ function processName(
 /**
  * Runs the script in another process, without its stdout, where the script
  * may write what the first process's run wrote, and returns the results of
- * each of its calls of `bench()`
+ * each of its calls of `bench()`. Its number, from 1 for the first, decides
+ * which build `compareBuilds()` loads first in it, as `firstBuildIn()`
+ * does.
  *
  * @throws {Error} If it exits with another code than 0.
  */
 function runInProcess(
     name: string,
     script: string,
-    args: readonly string[]
+    args: readonly string[],
+    number: number
 ): Promise<readonly ProcessRun[]> {
     return inTemporaryDirectory(async directory => {
         const file = join(directory, 'results.jsonl');
@@ -128,7 +132,8 @@ function runInProcess(
             name,
             args: [...process.execArgv, script, ...args],
             mark: [PROCESS_RUN, file],
-            stdout: 'drop'
+            stdout: 'drop',
+            firstBuild: firstBuildIn(number)
         });
 
         return readRecorded(file);

@@ -21,7 +21,7 @@ export { asyncTimerSource, timerSource } from './core/timer-source.ts';
 export { parseOptions } from './core/command-line.ts';
 export { compiledCopy, compiledFrom } from './compiling/compiled-copy.ts';
 export { inTurn } from './compiling/in-turn.ts';
-export { bench } from './node/cli.ts';
+export { bench, compareBuilds } from './node/cli.ts';
 export { NodeRuntime } from './node/runtime.ts';
 export type {
     MeasureOptions,

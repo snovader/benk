@@ -1,7 +1,10 @@
 import { ALLOCATING_CALL, LONG_CALL } from './lead.ts';
 import { modesAreOf } from './statistics.ts';
 import type {
+    BuildComparison,
+    BuildName,
     Change,
+    Difference,
     GroupAcrossProcesses,
     GroupResult,
     Lead,
@@ -10,6 +13,7 @@ import type {
     RecordedOptions,
     RuntimeDescription,
     SharedChange,
+    VariantAcrossBuilds,
     VariantAcrossProcesses,
     VariantResult
 } from './types.ts';
@@ -580,13 +584,16 @@ function formatOtherLeads(lead: Lead, leads: readonly Lead[]): string[] {
     ];
 }
 
-/** Numbers as a sentence lists them: `2`, `2 and 4`, or `2, 3 and 4` */
-function formatList(numbers: readonly number[]): string {
-    const last = numbers[numbers.length - 1];
+/**
+ * Numbers, or phrases, as a sentence lists them: `2`, `2 and 4`, or
+ * `2, 3 and 4`
+ */
+function formatList(items: ReadonlyArray<number | string>): string {
+    const last = items[items.length - 1];
 
-    return numbers.length === 1
+    return items.length === 1
         ? String(last)
-        : `${numbers.slice(0, -1).join(', ')} and ${last}`;
+        : `${items.slice(0, -1).join(', ')} and ${last}`;
 }
 
 /**
@@ -683,6 +690,211 @@ function formatWithinAA(
 
     return [
         `  ${name}: median ${formatRatio(median)}×, no further from 1 than the A/A copy's median, ${formatRatio(aa.median)}×`
+    ];
+}
+
+/**
+ * A line that says which builds a run compares, by their modules as the
+ * command line named them, how each group pairs them, and which of them the
+ * process loaded first
+ */
+export function describeBuilds(
+    { base, head }: Readonly<Record<BuildName, string>>,
+    first: BuildName,
+    aa: boolean
+): string {
+    const variants = aa ? "base, head, and base's A/A copy" : 'base and head';
+
+    return `Comparing head, ${head}, with base, ${base}: each group is a variant of the two, as group / variant, of ${variants}. This process loaded ${first} first.`;
+}
+
+/** The columns of a comparison in one process */
+const BUILD_COLUMNS: ReadonlyArray<readonly [title: string, width: number]> = [
+    ['ratio', 9],
+    ['95% interval', 15],
+    ['A/A interval', 15]
+];
+
+/**
+ * The lines of a comparison of two builds: a paragraph that describes it,
+ * and a table of each group's variants, of head's ratio to base in each
+ * process, with their median and range, or its interval and the A/A copy's
+ * in a single process, and its notes
+ */
+export function formatBuilds({
+    loadedFirst,
+    variants
+}: BuildComparison): string[] {
+    const count = loadedFirst.length;
+    const groups = Map.groupBy(variants, variant => variant.group);
+
+    return [
+        '',
+        describeComparison(loadedFirst),
+        ...Array.from(groups, ([name, members]) =>
+            formatGroupOfBuilds(name, members, count)
+        ).flat()
+    ];
+}
+
+/** The paragraph above a comparison's tables */
+function describeComparison(loadedFirst: readonly BuildName[]): string {
+    const count = loadedFirst.length;
+    if (count === 1) {
+        return `Head against base in this process, which loaded ${loadedFirst[0]} first: each variant's ratio of head's time to base's, by the statistic that its pair leads with, its 95% interval, and the A/A copy's. With --processes 2 or more, the processes load each build first in turn.`;
+    }
+
+    const processes = (build: BuildName): string =>
+        formatList(
+            loadedFirst.flatMap((first, i) => (first === build ? [i + 1] : []))
+        );
+    const summary =
+        count === 2
+            ? 'and their range'
+            : `the median of the ${count} ratios, and their range`;
+    return `Head against base in ${count} processes: each variant's ratio of head's time to base's in each, by the statistic that its pair leads with in the first, ${summary}. Processes ${processes('base')} loaded base first, and ${processes('head')} head first.`;
+}
+
+/** A table of a group's variants across builds, and its notes */
+function formatGroupOfBuilds(
+    name: string,
+    variants: readonly VariantAcrossBuilds[],
+    count: number
+): string[] {
+    const [{ lead }] = variants;
+    const nameWidth = Math.max(
+        NAME_WIDTH,
+        ...variants.map(variant => variant.variant.length)
+    );
+    const sameLead = variants.every(variant => variant.lead === lead);
+    const by = sameLead
+        ? `by the ${lead} round`
+        : 'by the round that each pair leads with';
+    const titles =
+        count === 1
+            ? BUILD_COLUMNS
+            : [
+                  ...Array.from(
+                      { length: count },
+                      (_, i) => [String(i + 1), PROCESS_WIDTH] as const
+                  ),
+                  ...(count === 2
+                      ? PROCESSES_COLUMNS.slice(1)
+                      : PROCESSES_COLUMNS)
+              ];
+
+    return [
+        '',
+        `${name}: ${count} ${count === 1 ? 'process' : 'processes'}, ${by}`,
+        `  ${''.padEnd(nameWidth)}${titles.map(([title, width]) => title.padStart(width)).join('')}`,
+        ...variants.map(variant => formatBuildsRow(variant, nameWidth)),
+        ...(sameLead
+            ? []
+            : variants.map(
+                  variant =>
+                      `  ${variant.variant}: by the ${variant.lead} round`
+              )),
+        ...variants.map(formatDifferences),
+        ...variants.flatMap(formatLoadOrder)
+    ];
+}
+
+/**
+ * A variant's row: its ratio, interval and the A/A copy's interval in a
+ * single process, or else its ratio in each process, their median, if they
+ * have one, and their range
+ */
+function formatBuildsRow(
+    { variant, ratios, intervals, aa, median, range }: VariantAcrossBuilds,
+    nameWidth: number
+): string {
+    const interval = (value: readonly [number, number] | null): string =>
+        value == null ? '' : formatInterval(value);
+    const [[, ratioWidth], [, intervalWidth], [, aaWidth]] = BUILD_COLUMNS;
+    const [[, medianWidth], [, rangeWidth]] = PROCESSES_COLUMNS;
+    const cells =
+        ratios.length === 1
+            ? [
+                  padCell(formatRatioCell(ratios[0]), ratioWidth),
+                  padCell(interval(intervals[0]), intervalWidth),
+                  padCell(interval(aa?.intervals[0] ?? null), aaWidth)
+              ]
+            : [
+                  ...ratios.map(ratio =>
+                      padCell(formatRatioCell(ratio), PROCESS_WIDTH)
+                  ),
+                  ...(ratios.length === 2
+                      ? []
+                      : [padCell(formatRatioCell(median), medianWidth)]),
+                  padCell(
+                      range == null ? '–' : formatInterval(range),
+                      rangeWidth
+                  )
+              ];
+
+    return `  ${variant.padEnd(nameWidth)}${cells.join('')}`.trimEnd();
+}
+
+/**
+ * A note of what each process's rounds showed of a variant's time in head
+ * against base's: faster or slower beyond the A/A copy's noise, or within
+ * it, or, without an A/A copy, beyond its interval, or within it
+ */
+function formatDifferences({
+    variant,
+    aa,
+    differences
+}: VariantAcrossBuilds): string {
+    const noise = aa == null ? "its interval's noise" : "the A/A copy's noise";
+    const count = differences.length;
+    const counts = new Map<Difference | null, number>();
+    for (const difference of differences) {
+        counts.set(difference, (counts.get(difference) ?? 0) + 1);
+    }
+
+    const [only] = counts.keys();
+    if (counts.size === 1 && only != null) {
+        const where =
+            count === 1
+                ? ''
+                : count === 2
+                  ? ' in both processes'
+                  : ` in all ${count} processes`;
+        return only === 'within noise'
+            ? `  ${variant}: within ${noise}${where}`
+            : `  ${variant}: head ${only}${where}, beyond ${noise}`;
+    }
+
+    const parts = (
+        [
+            ['faster', `head faster in ${counts.get('faster')}`],
+            ['slower', `head slower in ${counts.get('slower')}`],
+            [
+                'within noise',
+                `within ${noise} in ${counts.get('within noise')}`
+            ],
+            [null, `without an interval in ${counts.get(null)}`]
+        ] as const
+    ).flatMap(([difference, text]) => (counts.has(difference) ? [text] : []));
+    const processes = count === 1 ? 'process' : 'processes';
+    return `  ${variant}: ${formatList(parts)} of ${count} ${processes}`;
+}
+
+/**
+ * A note for a variant whose ratios in the processes that loaded base first
+ * lie apart from those that loaded head first, as `LoadOrder` describes
+ */
+function formatLoadOrder({
+    variant,
+    loadOrder
+}: VariantAcrossBuilds): string[] {
+    const { base, head, apart } = loadOrder;
+    if (!apart || base == null || head == null) {
+        return [];
+    }
+
+    return [
+        `  ${variant}: ${formatRatio(base)}× in the processes that loaded base first, and ${formatRatio(head)}× in those that loaded head first: which build a process loads first changes the ratio`
     ];
 }
 

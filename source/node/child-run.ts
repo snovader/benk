@@ -13,6 +13,7 @@ import { spawn } from 'node:child_process';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { BuildName } from '#source/core/types';
 
 /**
  * The environment variable of a child run that names the process that
@@ -25,6 +26,12 @@ export const TRACED_RUN = 'BENK_TRACED_RUN';
 export const PROCESS_RUN = 'BENK_PROCESS_RUN';
 type RunMarker = typeof TRACED_RUN | typeof PROCESS_RUN;
 
+/**
+ * The environment variable of a run of `--processes` that names the build
+ * that `compareBuilds()` loads first in it, `base` or `head`
+ */
+export const FIRST_BUILD = 'BENK_FIRST_BUILD';
+
 /** A run of a script in a child Node process */
 export interface ChildRun {
     /** What the run is, as an error names it: `the traced run of bench.ts` */
@@ -35,6 +42,8 @@ export interface ChildRun {
     readonly mark: readonly [variable: RunMarker, value: string];
     /** Whether to collect what the child writes to stdout, or to drop it */
     readonly stdout: 'collect' | 'drop';
+    /** The build that `compareBuilds()` loads first in the child, or base */
+    readonly firstBuild?: BuildName;
 }
 
 /**
@@ -48,7 +57,8 @@ export function runChild({
     name,
     args,
     mark: [variable, value],
-    stdout
+    stdout,
+    firstBuild
 }: ChildRun): Promise<string> {
     return new Promise((resolve, reject) => {
         const child = spawn(process.execPath, args, {
@@ -58,6 +68,7 @@ export function runChild({
                 // Only the marker for that run belongs to the new child.
                 [TRACED_RUN]: undefined,
                 [PROCESS_RUN]: undefined,
+                [FIRST_BUILD]: firstBuild,
                 [variable]: value,
                 [PARENT]: String(process.pid)
             },
@@ -92,7 +103,9 @@ export function runChild({
  * The value of a child run's variable, if this process is that run, or else
  * undefined: if the process that `runChild()` started was this one's parent
  */
-export function childRunValue(variable: RunMarker): string | undefined {
+export function childRunValue(
+    variable: RunMarker | typeof FIRST_BUILD
+): string | undefined {
     const parent = process.env[PARENT];
     if (!parent || Number(parent) !== process.ppid) {
         return undefined;
