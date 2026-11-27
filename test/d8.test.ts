@@ -444,49 +444,58 @@ describe('compareBuilds of benk/d8', () => {
         }
     }
 
-    it("compares builds at absolute paths, base first, as d8 resolves an import from benk's module", async () => {
-        const base = resolve(BASE);
-        const { result, made } = await compareFixtures(['--base', base, '--head', resolve(HEAD)]);
-        const builds = expectPresent(result.builds);
+    // Node runs d8's import of each build here, and on Windows it imports a file's URL rather
+    // than the absolute path that d8 imports
+    describe.skipIf(process.platform === 'win32')('loading the builds', () => {
+        it("compares builds at absolute paths, base first, as d8 resolves an import from benk's module", async () => {
+            const base = resolve(BASE);
+            const { result, made } = await compareFixtures([
+                '--base',
+                base,
+                '--head',
+                resolve(HEAD)
+            ]);
+            const builds = expectPresent(result.builds);
 
-        expect(made).toStrictEqual(['base', 'head']);
-        expect(builds.base).toStrictEqual({ module: base, url: base });
-        expect(builds.loadedFirst).toStrictEqual(['base']);
-        expect(expectPresent(builds.variants[0].ratios[0])).toBeCloseTo(0.5, 9);
-    });
+            expect(made).toStrictEqual(['base', 'head']);
+            expect(builds.base).toStrictEqual({ module: base, url: base });
+            expect(builds.loadedFirst).toStrictEqual(['base']);
+            expect(expectPresent(builds.variants[0].ratios[0])).toBeCloseTo(0.5, 9);
+        });
 
-    it('takes the absolute paths that benk-d8 resolved, and loads head first where benk-d8 asks', async () => {
-        const paths = [
-            { module: BASE, url: realpathSync(BASE) },
-            { module: HEAD, url: realpathSync(HEAD) }
-        ];
+        it('takes the absolute paths that benk-d8 resolved, and loads head first where benk-d8 asks', async () => {
+            const paths = [
+                { module: BASE, url: realpathSync(BASE) },
+                { module: HEAD, url: realpathSync(HEAD) }
+            ];
 
-        const { result, made } = await withGlobal('benk.d8.builds', paths, () =>
-            withGlobal('benk.d8.firstBuild', 'head', () =>
-                compareFixtures(['--base', BASE, '--head', HEAD])
-            )
-        );
-        const builds = expectPresent(result.builds);
+            const { result, made } = await withGlobal('benk.d8.builds', paths, () =>
+                withGlobal('benk.d8.firstBuild', 'head', () =>
+                    compareFixtures(['--base', BASE, '--head', HEAD])
+                )
+            );
+            const builds = expectPresent(result.builds);
 
-        expect(made).toStrictEqual(['head', 'base']);
-        expect(builds.base).toStrictEqual(paths[0]);
-        expect(builds.loadedFirst).toStrictEqual(['head']);
-    });
+            expect(made).toStrictEqual(['head', 'base']);
+            expect(builds.base).toStrictEqual(paths[0]);
+            expect(builds.loadedFirst).toStrictEqual(['head']);
+        });
 
-    it("takes each path that benk-d8 resolved by the argument that names it, where a script's own arguments swap the builds", async () => {
-        const paths = [
-            { module: BASE, url: realpathSync(BASE) },
-            { module: HEAD, url: realpathSync(HEAD) }
-        ];
+        it("takes each path that benk-d8 resolved by the argument that names it, where a script's own arguments swap the builds", async () => {
+            const paths = [
+                { module: BASE, url: realpathSync(BASE) },
+                { module: HEAD, url: realpathSync(HEAD) }
+            ];
 
-        const { result, made } = await withGlobal('benk.d8.builds', paths, () =>
-            compareFixtures(['--base', HEAD, '--head', BASE])
-        );
-        const builds = expectPresent(result.builds);
+            const { result, made } = await withGlobal('benk.d8.builds', paths, () =>
+                compareFixtures(['--base', HEAD, '--head', BASE])
+            );
+            const builds = expectPresent(result.builds);
 
-        expect(made).toStrictEqual(['head', 'base']);
-        expect(builds.base).toStrictEqual(paths[1]);
-        expect(builds.head).toStrictEqual(paths[0]);
+            expect(made).toStrictEqual(['head', 'base']);
+            expect(builds.base).toStrictEqual(paths[1]);
+            expect(builds.head).toStrictEqual(paths[0]);
+        });
     });
 
     it("rejects a relative path without benk-d8, and the options that d8 can't carry out, before it loads the builds", async () => {
