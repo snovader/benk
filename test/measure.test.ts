@@ -735,7 +735,7 @@ describe('measureGroups', () => {
 
         expect(reported).toStrictEqual(['banana', 'blueberry']);
         expect(result.groups.map(group => group.name)).toStrictEqual(['banana', 'blueberry']);
-        expect(result.schema).toBe(7);
+        expect(result.schema).toBe(8);
         expect(result.v8Report).toBeNull();
         expect(result.runtime).toBe(runtime.description);
         expect(result.options).toStrictEqual({

@@ -7,7 +7,7 @@
 // it, and are skipped without it, as in CI. Times vary, so they check only
 // what doesn't.
 import { execFile, spawnSync } from 'node:child_process';
-import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -17,6 +17,7 @@ import { fc, it } from 'hypotes/fast-check';
 import { build } from 'rolldown';
 import { parseOptions, type RunResult } from 'benk';
 import { TRACE_FLAGS } from '#source/node/traced-run';
+import { expectClose, expectPresent } from './expectations.ts';
 import { BENCH, D8_BUNDLE, D8_VERSION, REPOSITORY } from './v8-fixtures.ts';
 
 /**
@@ -29,6 +30,10 @@ const BENK_D8 = fileURLToPath(
         import.meta.resolve('benk')
     )
 );
+
+/** The builds of the tests of a comparison, from the repository's directory */
+const BUILD_BASE = join('test', 'fixtures', 'builds', 'base.ts');
+const BUILD_HEAD = join('test', 'fixtures', 'builds', 'head.ts');
 
 /** What a run of benk-d8 wrote, and its exit code */
 interface CommandRun {
@@ -114,6 +119,14 @@ describe('benk-d8', () => {
             [
                 [missing, D8_BUNDLE, '--', '--processes', '2', '--json', '/nowhere/results.json'],
                 'Error: Expected the directory of --json to be writable, got '
+            ],
+            [
+                [missing, D8_BUNDLE, '--', '--base', BUILD_BASE],
+                'TypeError: Expected --base and --head to name the modules of the builds to compare'
+            ],
+            [
+                [missing, D8_BUNDLE, '--', '--base', BUILD_BASE, '--head', BUILD_BASE],
+                'TypeError: Expected --base and --head to name two builds, but both are '
             ]
         ] as const) {
             const { status, stdout, stderr } = await runCommand(args);
@@ -374,6 +387,63 @@ describe.skipIf(process.platform === 'win32')('benk-d8 with d8 faked', () => {
         });
     });
 
+    it("gives d8 the paths of the builds, and loads each build first in turn, and prints head's ratio to base across processes", async () => {
+        await inDirectory(async directory => {
+            const path = join(directory, 'results.json');
+            const { status, stdout, stderr, d8Runs } = await runFake('compares', [
+                D8_BUNDLE,
+                '--',
+                '--rounds',
+                '6',
+                '--warmup-rounds',
+                '1',
+                '--sample-ms',
+                '0.01',
+                '--base',
+                BUILD_BASE,
+                '--head',
+                BUILD_HEAD,
+                '--processes',
+                '4',
+                '--json',
+                path
+            ]);
+            const result = JSON.parse(await readFile(path, 'utf8')) as RunResult;
+            const builds = expectPresent(result.builds);
+            const paths = {
+                base: await realpath(join(REPOSITORY, BUILD_BASE)),
+                head: await realpath(join(REPOSITORY, BUILD_HEAD))
+            };
+            const given = [
+                '-e',
+                `globalThis[Symbol.for('benk.d8.builds')] = ${JSON.stringify(paths)}`
+            ];
+            const later = ['-e', "globalThis[Symbol.for('benk.d8.processRun')] = true"];
+            const head = ['-e', "globalThis[Symbol.for('benk.d8.firstBuild')] = 'head'"];
+
+            expect(status, stderr).toBe(0);
+            expect(d8Runs.map(args => args.slice(0, args.indexOf(D8_BUNDLE)))).toStrictEqual([
+                given,
+                [...later, ...head, ...given],
+                [...later, ...given],
+                [...later, ...head, ...given]
+            ]);
+            // The script's options name the builds as the command line did
+            expect(builds.base).toStrictEqual({ module: BUILD_BASE, url: paths.base });
+            expect(builds.loadedFirst).toStrictEqual(['base', 'head', 'base', 'head']);
+            for (const ratio of builds.variants[0].ratios) {
+                expectClose(expectPresent(ratio), 0.5);
+            }
+            // The comparison across the runs takes the place of each pair's ratios
+            const lines = stdout.split('\n');
+            expect(lines).toContain('calls: 4 processes, by the fastest round');
+            expect(lines.some(line => line.startsWith('calls / sum: 4 processes'))).toBe(false);
+            expect(lines).toContain(
+                "  sort: within the A/A copy's noise: of 4 processes, its ratio equalled the A/A copy's in each, and its interval apart from the A/A copy's in none"
+            );
+        });
+    });
+
     it('writes the results with the other processes to stdout for --json -, and the rest to stderr', async () => {
         const { status, stdout, stderr } = await runFake('measures', [
             D8_BUNDLE,
@@ -542,7 +612,7 @@ describe.runIf(version)('benk-d8 in d8', () => {
         ]);
 
         expect(status).toBe(1);
-        expect(stderr).toContain('write result schema 7, got 3: rebuild the script');
+        expect(stderr).toContain('write result schema 8, got 3: rebuild the script');
         expect(stdout).toBe('');
     });
 
@@ -562,7 +632,7 @@ describe.runIf(version)('benk-d8 in d8', () => {
 
             expect(status, stderr).toBe(0);
             const result = JSON.parse(stdout) as RunResult;
-            expect(result.schema).toBe(7);
+            expect(result.schema).toBe(8);
             expect(result.v8Report).toBeNull();
             expect(result.runtime.name).toBe('d8');
             expect(result.processes?.runs).toHaveLength(1);

@@ -122,7 +122,12 @@ export async function runD8Command(args: readonly string[]): Promise<number> {
 
     const exit =
         processes > 1
-            ? await runInD8Processes(run, { processes, json, print })
+            ? await runInD8Processes(run, {
+                  processes,
+                  json,
+                  print,
+                  compares: options.base != null
+              })
             : await runD8(
                   { ...run, args: withoutOptions(run.args, WRAPPER_OPTIONS) },
                   'inherit'
@@ -267,6 +272,11 @@ interface D8ProcessesOptions {
     readonly json: string | undefined;
     /** Prints a line where the tables go: to stdout, or to stderr */
     readonly print: (line: string) => void;
+    /**
+     * Whether the script compares builds, whose runs then load each build
+     * first in turn
+     */
+    readonly compares: boolean;
 }
 
 /**
@@ -279,7 +289,10 @@ interface D8ProcessesOptions {
  * `bench()` then doesn't call `after`, as in Node. The first run's calls it,
  * before the ratios across processes. Then it prints
  * each variant's ratio in each run, and writes the results where the
- * script's `--json` says, with the other runs'.
+ * script's `--json` says, with the other runs'. For a script that compares
+ * builds, another global symbol makes the runs that `firstBuildIn()` names
+ * load head first, and the comparison across the runs takes the place of
+ * the ratios of each pair.
  *
  * d8 writes `--json`'s file at each call of `bench()`, so the results are
  * of the script's last call, as without `--processes`, and so are the
@@ -292,7 +305,7 @@ interface D8ProcessesOptions {
  */
 async function runInD8Processes(
     run: D8Run,
-    { processes, json, print }: D8ProcessesOptions
+    { processes, json, print, compares }: D8ProcessesOptions
 ): Promise<number> {
     if (json != null && json !== '-') {
         await checkDirectory(json);
@@ -317,7 +330,7 @@ async function runInD8Processes(
                           `globalThis[Symbol.for('${D8_PROCESS_RUN}')] = true`
                       ]
                     : []),
-                ...(firstBuildIn(number) === 'head'
+                ...(compares && firstBuildIn(number) === 'head'
                     ? [
                           '-e',
                           `globalThis[Symbol.for('${D8_FIRST_BUILD}')] = 'head'`

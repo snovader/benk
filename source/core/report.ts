@@ -862,12 +862,18 @@ function formatDifferences({
     }
 
     const { above, below } = sidesOf(ratios, aa?.ratios ?? null);
-    const [side, most] = above >= below ? ['above', above] : ['below', below];
     const other = aa == null ? '1' : "the A/A copy's";
+    const count = differences.length;
+    const sides =
+        above + below === 0
+            ? `equalled ${other} in each`
+            : above === 0 || below === 0
+              ? `lay ${above === 0 ? 'below' : 'above'} ${other} in ${above + below}`
+              : `lay above ${other} in ${above} and below in ${below}`;
     const apart = differences.filter(
-        other => other === 'faster' || other === 'slower'
+        difference => difference === 'faster' || difference === 'slower'
     ).length;
-    return `  ${variant}: ${verdict}: its ratio was ${side} ${other} in ${most} of ${differences.length} processes, and its interval apart from ${other} in ${apart === 0 ? 'none' : apart}`;
+    return `  ${variant}: ${verdict}: of ${count} processes, its ratio ${sides}, and its interval apart from ${other} in ${apart === 0 ? 'none' : apart}`;
 }
 
 /**

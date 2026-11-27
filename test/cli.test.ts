@@ -28,6 +28,8 @@ describe('parseOptions', () => {
             filter: undefined,
             json: undefined,
             processes: 1,
+            base: undefined,
+            head: undefined,
             v8Report: false,
             v8Filter: undefined,
             v8Check: false,
@@ -48,6 +50,9 @@ describe('parseOptions', () => {
             'results.json',
             '--processes',
             '5',
+            '--base',
+            '../main/dist/index.js',
+            '--head=dist/index.js',
             '--no-aa',
             '--no-heap',
             '--v8-report',
@@ -67,6 +72,8 @@ describe('parseOptions', () => {
             filter: /^record/u,
             json: 'results.json',
             processes: 5,
+            base: '../main/dist/index.js',
+            head: 'dist/index.js',
             v8Report: true,
             v8Filter: /^sum/u,
             v8Check: true,
@@ -448,7 +455,7 @@ describe('--v8-check', () => {
                 const position = v8?.run?.position;
                 return [name, position?.line, position?.column];
             });
-            expect(result.schema).toBe(7);
+            expect(result.schema).toBe(8);
             expect(result.v8Report?.check).toBeNull();
             expect(result.v8Report?.functions.map(fn => fn.name)).toContain('mix');
             expect(runs).toStrictEqual([
@@ -550,7 +557,7 @@ describe('--processes', () => {
         );
         expect(lines).toContain('  grows: faster than base in 1 process, and slower in 1');
         // The JSON is of the last call, as without the option
-        expect(result.schema).toBe(7);
+        expect(result.schema).toBe(8);
         expect(result.groups.map(group => group.name)).toStrictEqual(['crossing']);
         // Each run's own runtime, as the first's describes its own
         expect(processes.runs.map(run => run.runtime)).toStrictEqual([
