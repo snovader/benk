@@ -1030,11 +1030,12 @@ the three, and `max` 0.98× to 1.01×.
 reads the command line as `bench()` does. `--base` and `--head` name the
 builds' modules, by their paths from the working directory, as
 [Options](#options) lists them. It imports each module, as a module of its
-own, and calls `groupsOf` with it, for that build's groups. Then it pairs each variant of base with head's
-variant of the same group and name. Each pair is a group of its own, of
-`base`, `head`, and `base A/A`, with the group's `lead` and `aa`, and benk
-measures them as `bench()` measures groups. `--filter` selects pairs by
-their names, as `^1,000 numbers / sum$`.
+own, and calls `groupsOf` with it, for that build's groups. Then it pairs
+each variant of base with head's variant of the same group and name. Each
+pair is a group of its own, of `base`, `head`, and `base A/A`, with the
+group's `lead` and `aa`, and benk measures them as `bench()` measures
+groups. `--filter` selects pairs by their names, as
+`^1,000 numbers / sum$`.
 
 These are errors, before benk measures:
 
@@ -1068,10 +1069,12 @@ V8 can treat the code that a process loads and runs first otherwise, as
 where both builds' calls share code whose feedback the first shapes. So
 which build loads first changes in turn between processes: base in
 process 1, head in process 2, base in process 3, and so on. A process loads
-the first build, makes its groups, and then loads the other.
+the first build, makes its groups, and then loads the other. In
+[The validation](#the-validation), no ratio depended on the order, but
+benk doesn't assume that it doesn't.
 
-The table of the processes says which loaded which first. A note says when a
-variant's ratio depends on it:
+The paragraph above the processes' tables says which process loaded which
+build first. A note says when a variant's ratio depends on it:
 
 ```text
   sum: 1.11× in the processes that loaded base first, and 1.01× in those that loaded head first: which build a process loads first changes the ratio
@@ -1090,14 +1093,15 @@ shows whether they change with the load order, and between processes.
 
 ### What it says
 
-| Column or note                                       | What it says                                                                                                                                                                                                                       |
-| ---------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `1` to `6`                                           | Head's ratio to base in each process, by the statistic that its pair leads with in the first.                                                                                                                                       |
-| **median**, **range**                                | As in [Across processes](#across-processes).                                                                                                                                                                                       |
-| **ratio**, **95% interval**, **A/A interval**        | With one process, in place of the processes' columns: head's ratio, its interval, and the A/A copy's.                                                                                                                              |
-| `head faster, beyond the A/A copy's noise`           | Head's interval lay below the A/A copy's in every process. Or, where some intervals overlap, its ratio lay below the A/A copy's ratio in enough processes for a sign test to give a chance of 5% or less: 6 of 6, or 9 of 10.        |
-| `within the A/A copy's noise`                        | Neither: the difference isn't beyond what identical code shows.                                                                                                                                                                    |
-| `of 6 processes, its ratio lay below the A/A copy's` | How many processes' ratios lay on each side of the A/A copy's ratio in the same process, and in how many head's interval lay apart from the A/A copy's.                                                                             |
+| Column or note                                       | What it says                                                                                                                                                                                                                  |
+| ---------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `1` to `6`                                           | Head's ratio to base in each process, by the statistic that its pair leads with in the first.                                                                                                                                 |
+| **median**, **range**                                | As in [Across processes](#across-processes).                                                                                                                                                                                  |
+| **ratio**, **95% interval**, **A/A interval**        | With one process, in place of the processes' columns: head's ratio, its interval, and the A/A copy's.                                                                                                                         |
+| `head faster, beyond the A/A copy's noise`           | Head's interval lay below the A/A copy's in every process. Or, where some intervals overlap, its ratio lay below the A/A copy's ratio in enough processes for a sign test to give a chance of 5% or less: 6 of 6, or 9 of 10. |
+| `head slower, beyond the A/A copy's noise`           | As `head faster`, above the A/A copy's.                                                                                                                                                                                       |
+| `within the A/A copy's noise`                        | Neither: the difference isn't beyond what identical code shows.                                                                                                                                                               |
+| `of 6 processes, its ratio lay below the A/A copy's` | How many processes' ratios lay on each side of the A/A copy's ratio in the same process, and in how many head's interval lay apart from the A/A copy's.                                                                       |
 
 Without A/A copies, as with `--no-aa`, head's interval and ratio are
 compared with 1, and the notes say `its interval's noise`.
@@ -1116,15 +1120,22 @@ with copies of itself: a sum of 10,000 numbers of a `Float64Array`, 100
 objects of a class, and a string of 100 words. Each run was of 10
 processes:
 
-| Head                                       | Runs | Load average | `sum` across processes | Every process                              |
-| ------------------------------------------ | ---- | ------------ | ---------------------- | ------------------------------------------ |
-| A copy of base, in another directory       | 3    | 20 to 22     | medians 0.9998–1.0002  | 90 of 90 variants within the A/A's noise   |
-| `sum` of 3% more numbers                   | 3    | 15 to 20     | medians 1.032–1.033    | 30 of 30 ratios 1.017–1.045                |
-| `sum` of twice as many numbers             | 3    | 13 to 15     | medians 2.005–2.010    | 30 of 30 ratios 1.991–2.023                |
+| Head                                 | Runs | Load average | `sum` across processes | Every process                            |
+| ------------------------------------ | ---- | ------------ | ---------------------- | ---------------------------------------- |
+| A copy of base, in another directory | 3    | 20 to 22     | medians 0.9998–1.0002  | 90 of 90 variants within the A/A's noise |
+| `sum` of 3% more numbers             | 3    | 15 to 20     | medians 1.032–1.033    | 30 of 30 ratios 1.017–1.045              |
+| `sum` of twice as many numbers       | 3    | 13 to 15     | medians 2.005–2.010    | 30 of 30 ratios 1.991–2.023              |
 
 The script's `run`s were closures of one function for both builds. No
 variant's ratio depended on the load order. The objects and strings, which
 no head changed, had medians of 0.995 to 1.011.
+
+With `--sample-ms 10`, where Turbofan's code takes over, the copy of base
+was compared in 10 processes with each form of the script: with closures of
+one function, and with a `compiledCopy()` for each build. The 6 medians
+were 0.998 to 1.003, and every process of every variant was within the A/A
+copy's noise, with a load average near 5. No ratio depended on the load
+order.
 
 Compared with timing each build alone in processes of its own, alternating,
 in the same time: 10 processes of the comparison, and 14 of builds alone, 7
@@ -1132,14 +1143,14 @@ of each, in turn, 5 times each, with a load average of 3 to 10. The
 estimate of the comparison is the median of the processes' ratios. That of
 the builds alone is the ratio of the median of each build's median rounds.
 
-| Head                 | Call    | Comparison: estimates | Their deviation | Builds alone: estimates | Their deviation |
-| -------------------- | ------- | --------------------- | --------------- | ----------------------- | --------------- |
-| A copy of base       | sum     | 0.9996–1.0043         | 0.0022          | 0.9964–1.0034           | 0.0028          |
-|                      | objects | 0.9985–1.0066         | 0.0029          | 0.9930–1.0108           | 0.0079          |
-|                      | strings | 0.9961–1.0075         | 0.0042          | 0.9868–0.9998           | 0.0060          |
-| `sum` 3% more        | sum     | 1.0301–1.0330         | 0.0012          | 1.0181–1.0375           | 0.0070          |
-|                      | objects | 1.0016–1.0152         | 0.0051          | 0.9902–1.0168           | 0.0117          |
-|                      | strings | 0.9967–1.0127         | 0.0062          | 0.9698–1.0169           | 0.0203          |
+| Head           | Call    | Comparison: estimates | Their deviation | Builds alone: estimates | Their deviation |
+| -------------- | ------- | --------------------- | --------------- | ----------------------- | --------------- |
+| A copy of base | sum     | 0.9996–1.0043         | 0.0022          | 0.9964–1.0034           | 0.0028          |
+|                | objects | 0.9985–1.0066         | 0.0029          | 0.9930–1.0108           | 0.0079          |
+|                | strings | 0.9961–1.0075         | 0.0042          | 0.9868–0.9998           | 0.0060          |
+| `sum` 3% more  | sum     | 1.0301–1.0330         | 0.0012          | 1.0181–1.0375           | 0.0070          |
+|                | objects | 1.0016–1.0152         | 0.0051          | 0.9902–1.0168           | 0.0117          |
+|                | strings | 0.9967–1.0127         | 0.0062          | 0.9698–1.0169           | 0.0203          |
 
 The deviations are the standard deviations of the 5 estimates. The
 comparison's were 0.17 to 0.79 times those of the builds alone, and the
@@ -1243,10 +1254,10 @@ With `compareBuilds()`, `groups` are the pairs of each variant of the
 builds, as [Comparing two builds](#comparing-two-builds) describes, and
 `builds` has the comparison:
 
-| Field                        | What it has                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `builds.base`, `builds.head` | Each build's `module`, as `--base` or `--head` named it, and the `url` of the module that the runtime loaded: its file's URL in Node, and its absolute path in d8.                                                                                                                                                                                                                                                                           |
-| `builds.loadedFirst`         | The build that each process loaded first, `base` or `head`, from the first.                                                                                                                                                                                                                                                                                                                                                                  |
+| Field                        | What it has                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `builds.base`, `builds.head` | Each build's `module`, as `--base` or `--head` named it, and the `url` of the module that the runtime loaded: its file's URL in Node, and its absolute path in d8.                                                                                                                                                                                                                                                                                                                 |
+| `builds.loadedFirst`         | The build that each process loaded first, `base` or `head`, from the first.                                                                                                                                                                                                                                                                                                                                                                                                        |
 | `builds.variants`            | For each of `groups`, in its order: the `group` and `variant` that it pairs, its `lead` in the first process, head's `ratios` and `intervals` in each process, the A/A copy's `aa.ratios` and `aa.intervals`, or `null` without it, the `differences` that each process showed, `faster`, `slower` or `within noise`, the `difference` that they showed together, the `median` and `range` of the ratios, and the `loadOrder`'s medians of each order and whether they're `apart`. |
 
 A group's `timerResolution` is the shortest time that a timer loop of the
@@ -1941,7 +1952,7 @@ none of V8's compilations, or its log none of its functions,
 | Export                                | What it does                                                                                                                                                              |
 | ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `bench(groups, options?)`             | Runs a benchmark script: reads the command line's options, prints the run's description and each group's table, and writes the JSON if asked to. Returns the `RunResult`. |
-| `compareBuilds(groupsOf, options?)`   | Runs a script that compares two builds, as `bench()` runs one, with each variant of the builds in a group of its own, as [Comparing two builds](#comparing-two-builds) describes. |
+| `compareBuilds(groupsOf, options?)`   | Runs a script that compares two builds, as `bench()` runs one, each variant of both in a group, as [Comparing two builds](#comparing-two-builds) describes.               |
 | `measureGroups(groups, options?)`     | Measures the groups without printing, and returns the `RunResult`.                                                                                                        |
 | `measureGroup(group, options?)`       | Measures one group, and returns its `GroupResult`.                                                                                                                        |
 | `parseOptions(args)`                  | Reads a script's options from command-line arguments, as `bench()` does.                                                                                                  |
@@ -2045,14 +2056,14 @@ variants. Importing `benk/core` loads none.
 `benk/core` exports what `benk` does, except these, which need Node, or
 compile a string:
 
-| Export           | What to do without it                                                                                                                         |
-| ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| `bench()`        | Call `measureGroups()`, and print with `describeRun()` and `formatGroup()`. In d8, import `bench()` of `benk/d8`.                             |
-| `compareBuilds()` | Import both builds, and measure a group of each variant's pair, base's first, with `measureGroups()`. In d8, import it of `benk/d8`.        |
-| `NodeRuntime`    | Pass a `Runtime` as the `runtime` option, which `benk/core` requires.                                                                         |
-| `compiledCopy()` | Write a function for each variant, or generate them at build time. In d8, import it of `benk/d8`.                                             |
-| `compiledFrom()` | As `compiledCopy()`.                                                                                                                          |
-| `inTurn()`       | Keep a counter in the variant, as [`benchmarks/inputs-in-turn.ts`](benchmarks/inputs-in-turn.ts) does by hand. In d8, import it of `benk/d8`. |
+| Export            | What to do without it                                                                                                                         |
+| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `bench()`         | Call `measureGroups()`, and print with `describeRun()` and `formatGroup()`. In d8, import `bench()` of `benk/d8`.                             |
+| `compareBuilds()` | Import both builds, and measure a group of each variant's pair, base's first, with `measureGroups()`. In d8, import it of `benk/d8`.          |
+| `NodeRuntime`     | Pass a `Runtime` as the `runtime` option, which `benk/core` requires.                                                                         |
+| `compiledCopy()`  | Write a function for each variant, or generate them at build time. In d8, import it of `benk/d8`.                                             |
+| `compiledFrom()`  | As `compiledCopy()`.                                                                                                                          |
+| `inTurn()`        | Keep a counter in the variant, as [`benchmarks/inputs-in-turn.ts`](benchmarks/inputs-in-turn.ts) does by hand. In d8, import it of `benk/d8`. |
 
 A runtime that can't compile a string needs its loops written before it
 runs. Each variant needs a loop from a source of its own: V8 shares the
@@ -2162,14 +2173,14 @@ do, and Node 26.13.0 has small integers of 32 bits.
 `benk/d8` exports d8's `bench()` and runtime, and what compiles a string,
 and loads none of Node's modules:
 
-| Export                    | What it does                                                                                                                                   |
-| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| `bench(groups, options?)` | Runs a benchmark script in d8, as `benk`'s `bench()` does in Node, with the options that d8 can carry out.                                     |
-| `compareBuilds(groupsOf, options?)` | Compares two builds in d8, as `benk`'s `compareBuilds()` does in Node, with the options that d8 can carry out.                      |
-| `D8Runtime`               | Times variants in d8, each in a timer loop that `new Function` compiles, as in Node, and with three of d8's flags counts array buffers' bytes. |
-| `compiledCopy(fn)`        | Returns a copy of a function, compiled from a source of its own, as `benk`'s does.                                                             |
-| `compiledFrom(source)`    | Returns a function compiled from the text of a function expression, as `benk`'s does.                                                          |
-| `inTurn(inputs)`          | Returns a function that returns the inputs one after another, as `benk`'s does.                                                                |
+| Export                              | What it does                                                                                                                                   |
+| ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `bench(groups, options?)`           | Runs a benchmark script in d8, as `benk`'s `bench()` does in Node, with the options that d8 can carry out.                                     |
+| `compareBuilds(groupsOf, options?)` | Compares two builds in d8, as `benk`'s `compareBuilds()` does in Node, with the options that d8 can carry out.                                 |
+| `D8Runtime`                         | Times variants in d8, each in a timer loop that `new Function` compiles, as in Node, and with three of d8's flags counts array buffers' bytes. |
+| `compiledCopy(fn)`                  | Returns a copy of a function, compiled from a source of its own, as `benk`'s does.                                                             |
+| `compiledFrom(source)`              | Returns a function compiled from the text of a function expression, as `benk`'s does.                                                          |
+| `inTurn(inputs)`                    | Returns a function that returns the inputs one after another, as `benk`'s does.                                                                |
 
 d8 reads an import as a path, not as a package's name. So a script imports
 benk's bundle from `node_modules`, as this one, `bench.mjs`, does:
@@ -2235,7 +2246,7 @@ fails to load a value, such as `51`, as another script.
 | `--json -`                                                          | Writes the JSON to stdout with d8's `write()`, and the tables to stderr with `printErr()`.                                                                                    |
 | `--no-heap`                                                         | Turns off the count of array buffers, where d8 counts them, as [Bytes in d8](#bytes-in-d8) describes. Otherwise it changes nothing.                                           |
 | `--processes <n>`                                                   | Throws for more than 1, before it measures, as d8 can't start a process. [`benk-d8`](#in-d8) runs d8 once for each process, and carries it out.                               |
-| `--base`, `--head`                                                  | Absolute paths: d8 resolves an import from the module that imports it, which is benk's. `benk-d8` resolves them from its working directory, and gives d8 their paths.           |
+| `--base`, `--head`                                                  | Absolute paths: d8 resolves an import from the module that imports it, which is benk's. `benk-d8` resolves them from its working directory, and gives d8 their paths.         |
 | `--v8-report`, `--v8-filter`                                        | Throws before it measures, as d8 can't run the script again. [`benk-d8`](#in-d8) runs the script in d8 from Node, and carries them out.                                       |
 | `--v8-check`, `--v8-max-bytecode`                                   | Throws before it measures, and so does `benk-d8`: [The check](#the-check) needs Node's traced run, which reads where each variant's `run` starts, and marks the timed rounds. |
 
@@ -2748,11 +2759,11 @@ benk keeps these in view rather than out of the results:
   these times as base's, the medians of 6 processes, in 3 runs of each, in
   turn:
 
-  | Codec and `run`                            | Ratios            |
-  | ------------------------------------------ | ----------------- |
-  | One function of each for both builds       | 0.99, 1.00, 0.99  |
-  | A `compiledCopy()` of each for each build  | 1.14, 1.10, 1.12  |
-  | Each build alone, in 12 processes of each  | 1.03, 1.11, 1.07  |
+  | Codec and `run`                           | Ratios           |
+  | ----------------------------------------- | ---------------- |
+  | One function of each for both builds      | 0.99, 1.00, 0.99 |
+  | A `compiledCopy()` of each for each build | 1.14, 1.10, 1.12 |
+  | Each build alone, in 12 processes of each | 1.03, 1.11, 1.07 |
 
   The last row times each build in processes of its own, as the code runs
   with one build, by the ratio of the medians of each build's median
