@@ -147,7 +147,7 @@ describe('parseOptions', () => {
         expect(parse).toThrow(TypeError);
         expect(parse).toThrow(/, got --round$/);
         expect(parse).toThrow(
-            /--rounds, --warmup-rounds, --sample-ms, --filter, --json, --processes, --v8-filter, --v8-max-bytecode, --\[no-\]aa/
+            /--rounds, --warmup-rounds, --sample-ms, --filter, --json, --processes, --base, --head, --v8-filter, --v8-max-bytecode, --\[no-\]aa/
         );
     });
 

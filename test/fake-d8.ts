@@ -22,12 +22,18 @@
 //   against `base`'s 50 ns, as the runs recorded in `FAKE_D8_ARGS` count.
 // - `measures-then-fails`: as `measures`, but each run after the first
 //   prints an error, and exits with 1.
+// - `compares`: a run other than the traced one runs the scripts that `-e`
+//   gives it, and then `benk/d8`'s `compareBuilds()` on the builds of
+//   `fixtures/builds/`, with the fake runtime, and with d8's globals that
+//   it prints and writes files with, as d8 would run a script that compares
+//   them.
 //
 // With `FAKE_D8_ARGS`, it appends its arguments to that file, as a line of
 // JSON for each run.
 import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 import { formatJson, measureGroups } from 'benk';
 import { FakeRuntime } from './fake-runtime.ts';
+import type * as Builds from './fixtures/builds/base.ts';
 import { fixture, D8_VERSION } from './v8-fixtures.ts';
 
 /** What d8 prints of an uncaught error, on stdout */
@@ -38,6 +44,8 @@ const ERROR = [
 ];
 
 const LOGFILE = '--logfile=';
+
+type Build = typeof Builds;
 
 const args = process.argv.slice(2);
 const mode = process.env.FAKE_D8 ?? 'replay';
@@ -52,6 +60,8 @@ if (mode === 'fails') {
     trace();
 } else if (mode.startsWith('measures')) {
     await measure();
+} else if (mode === 'compares') {
+    await compare();
 } else {
     console.log('d8 ran the script');
 }
@@ -87,6 +97,45 @@ async function measure(): Promise<void> {
 
     console.log(`d8 measured other in ${nanoseconds} ns`);
     writeFileSync(json, formatJson(result));
+}
+
+/**
+ * Runs `compareBuilds()` of `benk/d8` as d8 runs a script that calls it:
+ * after the scripts of `-e`, with d8's globals, and the script's options
+ */
+async function compare(): Promise<void> {
+    for (const [i, arg] of args.entries()) {
+        if (arg === '-e') {
+            // oxlint-disable-next-line typescript/no-implied-eval -- d8 runs the script that -e gives it
+            (new Function(args[i + 1]) as () => void)();
+        }
+    }
+    Object.assign(globalThis, {
+        print: (line: string) => console.log(line),
+        printErr: (line: string) => console.error(line),
+        write: (text: string) => process.stdout.write(text),
+        writeFile: (path: string, data: string | ArrayBuffer) =>
+            writeFileSync(
+                path,
+                typeof data === 'string' ? data : new Uint8Array(data)
+            ),
+        readbuffer: (path: string) => new Uint8Array(readFileSync(path)).buffer
+    });
+
+    const { compareBuilds } = await import('benk/d8');
+    const runtime = new FakeRuntime();
+    await compareBuilds(
+        (build: Build) => [
+            {
+                name: 'calls',
+                variants: [
+                    runtime.variant('sum', build.NANOSECONDS.sum),
+                    runtime.variant('sort', build.NANOSECONDS.sort)
+                ]
+            }
+        ],
+        { args: args.slice(args.indexOf('--') + 1), runtime }
+    );
 }
 
 /** Writes what d8 writes in a traced run, as the mode says */

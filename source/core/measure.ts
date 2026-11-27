@@ -132,6 +132,7 @@ export async function measureGroups(
         options: { ...resolved, filter: options.filter?.source ?? '' },
         groups: results,
         processes: null,
+        builds: null,
         v8Report: null
     };
 }

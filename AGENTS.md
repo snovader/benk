@@ -169,6 +169,13 @@ between them: the author does.
   `benk-d8` carries out instead, and a new option needs a decision for each
   host, which the README's table for d8 records. `benk-d8` passes d8 the
   script's options, but those that it carries out.
+- `compareBuilds()` loads each build's module the way its host imports a
+  path: Node by its file's URL, and d8 by an absolute path, which benk-d8
+  resolves from its working directory. The core, in `builds.ts`, pairs the
+  builds' variants in groups of their own and compares them. A process of
+  `--processes` takes the build to load first from the process that runs
+  it, as `firstBuildIn()` numbers them: from `BENK_FIRST_BUILD` in Node,
+  and from a global symbol that benk-d8 sets in d8.
 - The source of the timer loops is the core's, in `timer-source.ts`, since
   a runtime that can't compile a string writes its loops from it at build
   time. A change to it changes what every runtime times.

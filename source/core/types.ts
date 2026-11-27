@@ -385,7 +385,7 @@ export interface RecordedOptions {
 }
 
 /** The JSON schema produced by this version of benk */
-export const RESULT_SCHEMA = 7;
+export const RESULT_SCHEMA = 8;
 
 /** A run's results, which `JSON.stringify` writes as they are */
 export interface RunResult {
@@ -404,6 +404,14 @@ export interface RunResult {
      * `--processes 1`, and from `measureGroups()`.
      */
     readonly processes: Processes | null;
+    /**
+     * The comparison of two builds that `compareBuilds()` makes: which
+     * builds, which of them each process loaded first, and each variant's
+     * ratio of head's time to base's in every process. Its `groups` are then
+     * the pairs of each variant of the two builds. It's null for `bench()`
+     * and from `measureGroups()`.
+     */
+    readonly builds: BuildComparison | null;
     /**
      * V8's report of the run's traced run, which Node's `bench()` makes with
      * `--v8-report`. It's null where no report was made: without the
@@ -480,6 +488,125 @@ export interface Processes {
     readonly runs: readonly ProcessRun[];
     /** Each group's ratios in every process, by the first's groups */
     readonly groups: readonly GroupAcrossProcesses[];
+}
+
+// The comparison of two builds of the code that a script times, which
+// `compareBuilds()` makes: the script's groups are made from each build's
+// module, and each variant of base and of head is timed in a group of its
+// own, interleaved, with base as the reference and its A/A copy. Which
+// build a process loads first changes in turn between processes, since V8
+// can treat the code that it loads first otherwise.
+
+/** One of the two builds that `compareBuilds()` compares */
+export type BuildName = 'base' | 'head';
+
+/**
+ * Makes a benchmark script's groups from a build's module, its namespace
+ * object. `compareBuilds()` calls it once for each build. Each variant's
+ * `run` calls the build's code: a variant whose `run` is the same function
+ * in both builds would compare a build with itself.
+ */
+export type GroupsOfBuild<M> = (
+    build: M
+) => Iterable<Group> | PromiseLike<Iterable<Group>>;
+
+/** A build that a run compared */
+export interface Build {
+    /** Its module, as `--base` or `--head` named it */
+    readonly module: string;
+    /**
+     * The module that the runtime loaded: its file's URL in Node, past any
+     * symbolic link, and its absolute path in d8
+     */
+    readonly url: string;
+}
+
+/**
+ * What a process's rounds showed of head's time against base's: `faster`
+ * or `slower` where its interval lay below or above both 1 and the A/A
+ * copy's interval (when available), and `within noise` otherwise
+ */
+export type Difference = 'faster' | 'slower' | 'within noise';
+
+/**
+ * A variant's ratios in the processes that loaded each build first, which
+ * show whether the order changes them
+ */
+export interface LoadOrder {
+    /**
+     * The median ratio of the processes that loaded base first, or null
+     * where none did or a ratio is missing
+     */
+    readonly base: number | null;
+    /** The median ratio of the processes that loaded head first, or null */
+    readonly head: number | null;
+    /**
+     * Whether every ratio of one order lies above every ratio of the other,
+     * with enough processes of each that this happens by chance in 5% of
+     * runs or fewer, where the order doesn't matter
+     */
+    readonly apart: boolean;
+}
+
+/** A variant's ratio of head's time to base's, in each process */
+export interface VariantAcrossBuilds {
+    /** Its group's name, as both builds made it */
+    readonly group: string;
+    /** Its name, as both builds made it */
+    readonly variant: string;
+    /**
+     * The statistic that its pair's group leads with in the first process,
+     * which each ratio is by
+     */
+    readonly lead: Lead;
+    /** Head's ratio to base in each process, from the first, or null */
+    readonly ratios: ReadonlyArray<number | null>;
+    /** The 95% interval of the median per-round ratio in each process, or null */
+    readonly intervals: ReadonlyArray<
+        readonly [low: number, high: number] | null
+    >;
+    /**
+     * The ratios and intervals of base's A/A copy in each process, or null
+     * for a run without A/A copies
+     */
+    readonly aa: {
+        readonly ratios: ReadonlyArray<number | null>;
+        readonly intervals: ReadonlyArray<
+            readonly [low: number, high: number] | null
+        >;
+    } | null;
+    /**
+     * What each process's rounds showed, or null where head's interval is
+     * missing
+     */
+    readonly differences: ReadonlyArray<Difference | null>;
+    /**
+     * What the processes showed together: what each of them showed, where
+     * they agree that head was faster, or slower, or else whether head's
+     * ratio differs from 1 and from the A/A copy's ratio (if enabled) in
+     * the same direction by two-sided sign tests at 5%. Null
+     * where no process has an interval.
+     */
+    readonly difference: Difference | null;
+    /**
+     * The median of the ratios, as `VariantAcrossProcesses` has it: null
+     * for fewer than 3 processes, or if any ratio is missing
+     */
+    readonly median: number | null;
+    /** The least and the greatest of the ratios, or null if any is missing */
+    readonly range: readonly [low: number, high: number] | null;
+    /** Its ratios by the build that each process loaded first */
+    readonly loadOrder: LoadOrder;
+}
+
+/** The two builds that a run compared, and each variant's ratios */
+export interface BuildComparison {
+    readonly base: Build;
+    readonly head: Build;
+    /** The build that each process loaded first, from the first process */
+    readonly loadedFirst: readonly BuildName[];
+    /** Each variant's ratios, one for each of the run's `groups`, in order */
+    readonly variants: readonly VariantAcrossBuilds[];
 }
 
 // V8's report, from a traced run of the script in another process, which

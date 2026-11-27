@@ -11,7 +11,7 @@ import {
     type MeasureOptions
 } from './measure.ts';
 import { describeRun, formatGroup } from './report.ts';
-import type { Group, RunResult, Runtime } from './types.ts';
+import type { BuildName, Group, RunResult, Runtime } from './types.ts';
 
 /** The options of a benchmark script, from its command line */
 export interface CommandOptions {
@@ -30,6 +30,13 @@ export interface CommandOptions {
      * `--processes` asks. 1 by default.
      */
     readonly processes: number;
+    /**
+     * The module of the build to compare with, as `--base` names it: a
+     * path from the working directory, or none
+     */
+    readonly base: string | undefined;
+    /** The module of the build that's compared with base, as `--head` names it */
+    readonly head: string | undefined;
     /**
      * Whether to run the script again with V8's traces, after measuring,
      * and print a report of its hot functions, as `--v8-report` asks, and
@@ -89,7 +96,7 @@ export type AfterBench = (
 ) => void | Promise<void>;
 
 /** The options of a run that `measureAndPrint()` measures and describes */
-type PrintedRunOptions = Required<MeasureOptions> &
+export type PrintedRunOptions = Required<MeasureOptions> &
     Pick<CommandOptions, 'filter'>;
 
 /** The command line's options, by their names as arguments */
@@ -101,6 +108,8 @@ const OPTIONS: ArgumentSpec = {
         'filter',
         'json',
         'processes',
+        'base',
+        'head',
         'v8-filter',
         'v8-max-bytecode'
     ]),
@@ -119,6 +128,8 @@ const OPTIONS: ArgumentSpec = {
  * - `--processes <n>`: measures in n processes, 1 by default: this one, and
  *   then the script run again in n − 1 more, and prints each variant's
  *   ratio in each
+ * - `--base <module>` and `--head <module>`: the builds that
+ *   `compareBuilds()` compares, by their modules' paths
  * - `--no-aa`: leaves out the A/A copy of each group's first variant
  * - `--no-heap`: leaves out the counts of bytes allocated, on the heap and
  *   in array buffers
@@ -162,6 +173,8 @@ export function parseOptions(args: readonly string[]): CommandOptions {
         filter: filterOption(values.get('filter'), '--filter'),
         json: values.get('json'),
         processes: integerOption(values.get('processes'), '--processes', 1, 1),
+        base: values.get('base'),
+        head: values.get('head'),
         v8Report:
             (flags.get('v8-report') ?? false) ||
             values.get('v8-filter') != null ||
@@ -172,10 +185,23 @@ export function parseOptions(args: readonly string[]): CommandOptions {
     };
 }
 
+/** The options of the command line that measure and describe a run */
+export function printedRunOptions({
+    rounds,
+    warmupRounds,
+    sampleTime,
+    aa,
+    heap,
+    filter
+}: CommandOptions): PrintedRunOptions {
+    return { rounds, warmupRounds, sampleTime, aa, heap, filter };
+}
+
 /**
  * Measures the groups as `measureGroups()` does, and prints what each
- * entry point's `bench()` prints: a description of the run first, and then
- * each group's table as soon as it's measured
+ * entry point's `bench()` prints: a description of the run first, with the
+ * lines of `preface` after it, and then each group's table as soon as it's
+ * measured
  *
  * @throws {RangeError} If an option is out of its range.
  * @throws {TypeError} If a group has no variants, or two of the same name.
@@ -186,7 +212,8 @@ export function measureAndPrint(
     groups: Iterable<Group>,
     options: PrintedRunOptions,
     runtime: Runtime,
-    print: (line: string) => void
+    print: (line: string) => void,
+    preface: readonly string[] = []
 ): Promise<RunResult> {
     print(
         describeRun(runtime.description, {
@@ -194,6 +221,9 @@ export function measureAndPrint(
             filter: options.filter?.source ?? ''
         })
     );
+    for (const line of preface) {
+        print(line);
+    }
 
     return measureGroups(
         groups,
@@ -207,6 +237,48 @@ export function measureAndPrint(
         },
         runtime
     );
+}
+
+/**
+ * The modules of the two builds that `compareBuilds()` compares, from the
+ * command line
+ *
+ * @throws {TypeError} If `--base` or `--head` is missing or empty.
+ */
+export function buildsToCompare({
+    base,
+    head
+}: Pick<CommandOptions, 'base' | 'head'>): Record<BuildName, string> {
+    if (!base || !head) {
+        throw new TypeError(
+            `Expected --base and --head to name the modules of the builds to compare, as --base ../main/dist/index.js --head dist/index.js, got ${describeBuild('--base', base)} and ${describeBuild('--head', head)}`
+        );
+    }
+
+    return { base, head };
+}
+
+/**
+ * Checks that a script that calls `bench()` wasn't given builds to compare,
+ * which only `compareBuilds()` compares
+ *
+ * @throws {TypeError} If it was.
+ */
+export function checkNoBuilds({
+    base,
+    head
+}: Pick<CommandOptions, 'base' | 'head'>): void {
+    if (base != null || head != null) {
+        throw new TypeError(
+            `Expected no --base or --head for bench(), which measures the groups that it's given: compareBuilds() compares two builds`
+        );
+    }
+}
+
+function describeBuild(option: string, value: string | undefined): string {
+    return value == null
+        ? `no ${option}`
+        : `${option} ${JSON.stringify(value)}`;
 }
 
 function filterOption(

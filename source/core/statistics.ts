@@ -927,11 +927,15 @@ export function medianInterval(
     confidence = 0.95
 ): readonly [low: number, high: number] | null {
     const count = sorted.length;
-    const tail = (1 - confidence) / 2;
+    const k = binomialTailCount(count, (1 - confidence) / 2);
+    return k === 0 ? null : [sorted[k - 1], sorted[count - k]];
+}
 
-    // The greatest k whose probability of at most k − 1 samples below the
-    // median is within the tail, summed in logarithms, which don't underflow
-    // as 2^-count does
+/** How many outcomes from zero up fit in one tail of a fair binomial. */
+export function binomialTailCount(count: number, tail: number): number {
+    // Start at P(X = 0) and advance by P(X = k + 1) / P(X = k).
+    // Keeping the mass in logarithms lets it recover from an initial
+    // probability too small to represent, even when 2^-count underflows.
     let k = 0;
     let cumulative = 0;
     let logProbability = -count * Math.LN2;
@@ -946,7 +950,7 @@ export function medianInterval(
         k++;
     }
 
-    return k === 0 ? null : [sorted[k - 1], sorted[count - k]];
+    return k;
 }
 
 /** Each sample's ratio to the reference's sample at the same index */
