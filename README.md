@@ -978,19 +978,51 @@ This project, `numbers`, is on a branch that sums with a for loop where
    node bench/compare.ts --base ../numbers-main/dist/index.js --head dist/index.js --processes 6
    ```
 
-   SAMPLE_OUTPUT
+   ```text
+   Node v26.13.0, V8 14.6.202.34-node.40, darwin arm64, Apple M2 Pro. Process state: entry script from TypeScript source.
+   Per call, of at least 31 interleaved rounds of 1 ms per variant after 10 warm-up rounds, in an order that rotates each variant through each position:
+   the fastest and median round, the interquartile range as a share of the median, the ratio to the group's first variant by the statistic that the group leads with, a 95% interval of the median of the per-round ratios, and the bytes allocated on the heap and in array buffers outside it.
+   Comparing head, dist/index.js, with base, ../numbers-main/dist/index.js: each group is a variant of the two, as group / variant, of base, head, and base's A/A copy. This process loaded base first.
 
-5. Remove the worktree when you're done:
+   1,000 numbers / sum: 36 rounds, by the median round (a call of 1 µs or more)
+                         fastest     median   spread    ratio   95% interval        heap     buffers
+     base                7.04 µs    7.31 µs     3.8%    1.00×                   32,040 B         0 B
+     head                1.45 µs    1.47 µs     3.4%    0.20×      0.20–0.20        16 B         0 B
+     base A/A            7.04 µs    7.24 µs     3.3%    0.99×      0.97–1.01    32,040 B         0 B
+
+   1,000 numbers / max: 36 rounds, by the median round (a call of 1 µs or more)
+                         fastest     median   spread    ratio   95% interval        heap     buffers
+     base                2.06 µs    2.15 µs     4.8%    1.00×                   15,984 B         0 B
+     head                2.06 µs    2.18 µs     4.3%    1.00×      0.98–1.03    15,984 B         0 B
+     base A/A            2.07 µs    2.18 µs     4.1%    1.01×      0.98–1.03    15,984 B         0 B
+     base: two modes, 26 rounds near 2.13 µs and 10 near 2.28 µs
+
+   Head against base in 6 processes: each variant's ratio of head's time to base's in each, by the statistic that its pair leads with in the first, the median of the 6 ratios, and their range. Processes 1, 3 and 5 loaded base first, and 2, 4 and 6 head first.
+
+   1,000 numbers: 6 processes, by the median round
+                            1       2       3       4       5       6   median          range
+     sum                0.20×   0.20×   0.20×   0.20×   0.20×   0.20×    0.20×      0.20–0.20
+     max                1.00×   0.99×   1.00×   1.00×   1.00×   0.99×    1.00×      0.99–1.00
+     sum: head faster, beyond the A/A copy's noise: of 6 processes, its ratio lay below the A/A copy's in 6, and its interval apart from the A/A copy's in 6
+     max: within the A/A copy's noise: of 6 processes, its ratio lay above the A/A copy's in 2 and below in 4, and its interval apart from the A/A copy's in none
+   ```
+
+5. Remove the worktree when you're done. `--force` removes it with what
+   the install and the build wrote in it, as a lockfile that the project
+   doesn't commit:
 
    ```sh
-   git worktree remove ../numbers-main
+   git worktree remove --force ../numbers-main
    ```
 
 The first process prints a table of each pair, as each group's, named
 `group / variant`. Then it runs the script in 5 more processes, and prints
-head's ratio to base in each. Here, head's `sum` took SUM_RATIO of base's
+head's ratio to base in each. Here, head's `sum` took 0.20 times base's
 time, beyond the A/A copy's noise in every process. Its `max`, whose code
-didn't change, stayed within the A/A copy's noise. SAMPLE_MACHINE
+didn't change, stayed within the A/A copy's noise. This is one of 3 runs on
+an Apple M2 Pro with Node 26.13.0, with benk's packed bundle in the
+project, and a load average near 11. `sum` was 0.20× in every process of
+the three, and `max` 0.98× to 1.01×.
 
 ### The script
 
@@ -1137,9 +1169,13 @@ and with `--processes`, loads each build first in turn, as in Node:
 npx benk-d8 bench/compare.mjs -- --base ../numbers-main/dist/index.js --head dist/index.js --processes 6
 ```
 
-The script imports `compareBuilds()` and `compiledCopy()` of
-`../node_modules/benk/dist/d8.js`, as [d8](#d8) describes, and is otherwise
-`bench/compare.ts` without its types.
+The script, `bench/compare.mjs`, imports `compareBuilds()` and
+`compiledCopy()` of `../node_modules/benk/dist/d8.js`, as [d8](#d8)
+describes, and is otherwise `bench/compare.ts` without its types. The first
+run prints the comparison of its own process, before `benk-d8` prints the
+comparison across the processes. With Homebrew's d8 15.8.62.9, head's `sum`
+took 0.23 times base's time in each of the 6 processes, and `max` 1.00 to
+1.01 times.
 
 ## JSON results
 
