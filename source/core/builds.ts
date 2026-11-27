@@ -98,7 +98,7 @@ export function firstBuildIn(process: number): BuildName {
 }
 
 /** The name of a variant's pair, as a group, as `sum / for loop` */
-export function pairName(group: string, variant: string): string {
+function pairName(group: string, variant: string): string {
     return `${group} / ${variant}`;
 }
 
@@ -173,7 +173,8 @@ export function withComparison(
  * two variants of one name, or none, or the builds' groups or variants
  * differ by name, or a group's lead or A/A copy, or a variant is async in
  * one build only, or has the same `run` in both, which would compare a
- * build with itself.
+ * build with itself, or if two pairs have one name, as a group `a / b` of
+ * a variant `c` and a group `a` of `b / c`.
  */
 export function pairBuilds(
     base: readonly Group[],
@@ -186,11 +187,20 @@ export function pairBuilds(
     );
     const heads = new Map(head.map(group => [group.name, group]));
 
-    return base.flatMap(group => {
+    const pairs = base.flatMap(group => {
         // The names are the same, and each once in each build
         const other = heads.get(group.name) ?? group;
         return pairsOf(group, other);
     });
+    const names = pairs.map(({ pair }) => pair.name);
+    const repeated = names.find((name, i) => names.indexOf(name) !== i);
+    if (repeated != null) {
+        throw new TypeError(
+            `Expected the pairs of the builds' variants to have different names, but "${repeated}" repeats`
+        );
+    }
+
+    return pairs;
 }
 
 /** The pairs of the variants of a group of each build */

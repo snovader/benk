@@ -265,6 +265,13 @@ describe('compareBuilds', () => {
             ],
             [() => [call('sum', { variants: [] })], /^Expected group "calls" to have variants$/],
             [
+                () => [
+                    { name: 'a / b', variants: [runtime.variant('c', 10)] },
+                    { name: 'a', variants: [runtime.variant('b / c', 10)] }
+                ],
+                /^Expected the pairs of the builds' variants to have different names, but "a \/ b \/ c" repeats$/
+            ],
+            [
                 build => [
                     {
                         name: 'calls',
