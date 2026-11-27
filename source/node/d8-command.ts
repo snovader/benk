@@ -8,11 +8,26 @@
 import { spawn } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { parseOptions } from '#source/core/command-line';
+import { fileURLToPath } from 'node:url';
+import { firstBuildIn, withBuilds } from '#source/core/builds';
+import {
+    buildsToCompare,
+    parseOptions,
+    type CommandOptions
+} from '#source/core/command-line';
 import { withProcesses } from '#source/core/processes';
-import { formatProcesses } from '#source/core/report';
-import { RESULT_SCHEMA, type RunResult } from '#source/core/types';
-import { D8_PROCESS_RUN } from '#source/d8/process-run';
+import { formatBuilds, formatProcesses } from '#source/core/report';
+import {
+    RESULT_SCHEMA,
+    type Processes,
+    type RunResult
+} from '#source/core/types';
+import {
+    D8_BUILDS,
+    D8_FIRST_BUILD,
+    D8_PROCESS_RUN
+} from '#source/d8/process-run';
+import { resolveBuilds } from './builds.ts';
 import { inTemporaryDirectory, isMissing } from './child-run.ts';
 import { checkDirectory, writeJson } from './json-results.ts';
 import { reportTracedRun, runTracedInD8, type D8Run } from './traced-run.ts';
@@ -91,9 +106,10 @@ type D8Stdout = 'inherit' | 'stderr' | 'drop';
  * `reportTracedRun()` describe.
  */
 export async function runD8Command(args: readonly string[]): Promise<number> {
-    const run = readCommand(args);
+    const command = readCommand(args);
+    const options = parseOptions(command.args);
     const { json, processes, v8Report, v8Filter, v8Check, v8MaxBytecode } =
-        parseOptions(run.args);
+        options;
     if (v8Check) {
         const option =
             v8MaxBytecode == null ? '--v8-check' : '--v8-max-bytecode';
@@ -101,6 +117,7 @@ export async function runD8Command(args: readonly string[]): Promise<number> {
             `Expected no ${option} in benk-d8: V8's check needs Node's traced run, which reads where each variant's run starts, and marks the timed rounds`
         );
     }
+    const run = await withBuildPaths(command, options);
     const print = json === '-' ? printError : printLine;
 
     const exit =
@@ -128,6 +145,36 @@ export async function runD8Command(args: readonly string[]): Promise<number> {
     }
 
     return 0;
+}
+
+/**
+ * The run, with a short script before it that gives d8 the absolute paths
+ * of `--base` and `--head`, as `D8_BUILDS` describes, if it has them
+ *
+ * @throws {TypeError} If it has one of them only, or a directory, or both
+ * name the same file.
+ * @throws {Error} If a build's module is missing.
+ */
+async function withBuildPaths(
+    run: D8Run,
+    { base, head }: Pick<CommandOptions, 'base' | 'head'>
+): Promise<D8Run> {
+    if (base == null && head == null) {
+        return run;
+    }
+
+    const builds = await resolveBuilds(buildsToCompare({ base, head }));
+    const paths = {
+        base: fileURLToPath(builds.base.url),
+        head: fileURLToPath(builds.head.url)
+    };
+    // Before the user's flags, as --module applies to the next script
+    const flags = [
+        '-e',
+        `globalThis[Symbol.for('${D8_BUILDS}')] = ${JSON.stringify(paths)}`,
+        ...run.flags
+    ];
+    return { ...run, flags };
 }
 
 /**
@@ -263,14 +310,21 @@ async function runInD8Processes(
             const stdout =
                 number > 1 ? 'drop' : json === '-' ? 'stderr' : 'inherit';
             // Before the user's flags, as --module applies to the next script
-            const flags =
-                number > 1
+            const flags = [
+                ...(number > 1
                     ? [
                           '-e',
-                          `globalThis[Symbol.for('${D8_PROCESS_RUN}')] = true`,
-                          ...run.flags
+                          `globalThis[Symbol.for('${D8_PROCESS_RUN}')] = true`
                       ]
-                    : run.flags;
+                    : []),
+                ...(firstBuildIn(number) === 'head'
+                    ? [
+                          '-e',
+                          `globalThis[Symbol.for('${D8_FIRST_BUILD}')] = 'head'`
+                      ]
+                    : []),
+                ...run.flags
+            ];
 
             const exit = await runD8({ ...run, flags, args }, stdout);
             if (exit !== 0 && number === 1) {
@@ -284,20 +338,45 @@ async function runInD8Processes(
         }
 
         const [first, ...others] = results;
-        const result = withProcesses(
-            first,
-            others.map(({ date, runtime, groups }) => ({
-                date,
-                runtime,
-                groups
-            }))
-        );
-        for (const line of formatProcesses(result.processes)) {
+        const result = acrossD8Processes(first, others);
+        const lines =
+            result.builds == null
+                ? formatProcesses(result.processes)
+                : formatBuilds(result.builds);
+        for (const line of lines) {
             print(line);
         }
         await writeJson(json, result, writeStdout);
 
         return 0;
+    });
+}
+
+/**
+ * The first run's results with the other runs', and each variant's ratio in
+ * each, and the comparison of builds across the runs, if the first has
+ * one: each run loaded the build first that `firstBuildIn()` says
+ */
+function acrossD8Processes(
+    first: RunResult,
+    others: readonly RunResult[]
+): RunResult & { readonly processes: Processes } {
+    const result = withProcesses(
+        first,
+        others.map(({ date, runtime, groups }) => ({ date, runtime, groups }))
+    );
+    if (first.builds == null) {
+        return result;
+    }
+
+    const { base, head, variants } = first.builds;
+    return withBuilds(result, {
+        base,
+        head,
+        loadedFirst: Array.from({ length: others.length + 1 }, (_, i) =>
+            firstBuildIn(i + 1)
+        ),
+        origins: variants
     });
 }
 

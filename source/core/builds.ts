@@ -314,10 +314,10 @@ function asBuild(variant: Variant, name: BuildName): Variant {
  * it, their median and range, and the ratios by the build that each
  * process loaded first
  */
-export function withBuilds(
-    result: RunResult,
+export function withBuilds<R extends RunResult>(
+    result: R,
     { base, head, loadedFirst, origins }: ComparedBuilds
-): RunResult & { readonly builds: BuildComparison } {
+): R & { readonly builds: BuildComparison } {
     const processes = result.processes ?? withProcesses(result, []).processes;
     const variants = processes.groups.map((group, i) =>
         variantAcrossBuilds(group, origins[i], loadedFirst)

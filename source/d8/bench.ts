@@ -4,14 +4,30 @@
 // 51`, in a global `arguments`, and prints and writes files with globals of
 // its own.
 import {
+    groupsOfBuilds,
+    withComparison,
+    type Comparison
+} from '#source/core/builds';
+import {
+    buildsToCompare,
+    checkNoBuilds,
     measureAndPrint,
     parseOptions,
-    type BenchOptions
+    printedRunOptions,
+    type BenchOptions,
+    type CommandOptions
 } from '#source/core/command-line';
 import { measureGroups } from '#source/core/measure';
-import { formatJson } from '#source/core/report';
-import type { Group, RunResult, Runtime } from '#source/core/types';
-import { D8_PROCESS_RUN } from './process-run.ts';
+import { describeBuilds, formatBuilds, formatJson } from '#source/core/report';
+import type {
+    Build,
+    BuildName,
+    Group,
+    GroupsOfBuild,
+    RunResult,
+    Runtime
+} from '#source/core/types';
+import { D8_BUILDS, D8_FIRST_BUILD, D8_PROCESS_RUN } from './process-run.ts';
 import { D8Runtime } from './runtime.ts';
 import { D8_TRACED_RUN } from './traced-run.ts';
 
@@ -83,15 +99,62 @@ export async function bench(
     groups: Iterable<Group>,
     options: BenchOptions = {}
 ): Promise<RunResult> {
-    const {
-        json,
-        processes,
-        v8Report,
-        v8Filter,
-        v8Check,
-        v8MaxBytecode,
-        ...command
-    } = parseOptions(options.args ?? scriptArguments());
+    const command = parseOptions(options.args ?? scriptArguments());
+    checkInD8(command);
+    checkNoBuilds(command);
+
+    return runBench(groups, command, options);
+}
+
+/**
+ * Compares two builds of the code that a script times, as `benk`'s
+ * `compareBuilds()` does in Node, with the options that d8 can carry out.
+ * d8 resolves an import from the module that imports it, which is benk's,
+ * so `--base` and `--head` are absolute paths, unless benk-d8 runs the
+ * script: it resolves them from its working directory. This run loads base
+ * first, unless benk-d8 asks for head, as in its runs of `--processes`.
+ *
+ * @throws {TypeError} If `--base` or `--head` is missing, or is a relative
+ * path without benk-d8, or both name the same path, or the builds' groups
+ * don't pair, as `pairBuilds()` describes, or else as `bench()` throws.
+ * @throws {Error} If d8 can't load a build's module, or as `bench()`
+ * throws.
+ */
+export async function compareBuilds<M>(
+    groupsOf: GroupsOfBuild<M>,
+    options: BenchOptions = {}
+): Promise<RunResult> {
+    const command = parseOptions(options.args ?? scriptArguments());
+    checkInD8(command);
+    const builds = d8Builds(buildsToCompare(command));
+    const first: BuildName =
+        shellValue(D8_FIRST_BUILD) === 'head' ? 'head' : 'base';
+    // The module is what the function of groups says it is
+    const load = (build: BuildName): Promise<M> =>
+        import(builds[build].url) as Promise<M>;
+    const pairs = await groupsOfBuilds(groupsOf, load, first);
+
+    return runBench(
+        pairs.map(({ pair }) => pair),
+        command,
+        options,
+        { builds, first, pairs }
+    );
+}
+
+/**
+ * Checks for the options that d8 can't carry out
+ *
+ * @throws {Error} With `--processes` of more than 1, `--v8-report`,
+ * `--v8-check` or an option that implies either.
+ */
+function checkInD8({
+    processes,
+    v8Report,
+    v8Filter,
+    v8Check,
+    v8MaxBytecode
+}: CommandOptions): void {
     if (processes > 1) {
         throw new Error(
             `Expected no --processes ${processes} in d8, which can't start a process: run it with benk-d8, as benk-d8 bench.mjs -- --processes ${processes}`
@@ -109,10 +172,69 @@ export async function bench(
             `Expected no --v8-report${v8Filter == null ? '' : ' or --v8-filter'} in d8, which can't run the script again: run it with benk-d8, as benk-d8 bench.mjs -- --v8-report`
         );
     }
+}
+
+/**
+ * The builds of `--base` and `--head`: by the absolute paths that benk-d8
+ * resolved, or else by their own, as the command line named them
+ *
+ * @throws {TypeError} If a path is relative without benk-d8, or both are
+ * the same.
+ */
+function d8Builds(
+    modules: Readonly<Record<BuildName, string>>
+): Record<BuildName, Build> {
+    const resolved = shellValue(D8_BUILDS) as
+        | Readonly<Record<BuildName, string>>
+        | undefined;
+    const build = (name: BuildName): Build => {
+        const url = resolved?.[name] ?? modules[name];
+        if (!isAbsolute(url)) {
+            throw new TypeError(
+                `Expected --${name} to be an absolute path in d8, which resolves an import from benk's module, got ${url}: benk-d8 resolves a path from its working directory, as benk-d8 bench.mjs -- --${name} ${url}`
+            );
+        }
+
+        return { module: modules[name], url };
+    };
+    const builds = { base: build('base'), head: build('head') };
+    if (builds.base.url === builds.head.url) {
+        throw new TypeError(
+            `Expected --base and --head to name two builds, but both are ${builds.base.url}`
+        );
+    }
+
+    return builds;
+}
+
+/** Whether a path is absolute, on a Unix or Windows */
+function isAbsolute(path: string): boolean {
+    return path.startsWith('/') || /^[A-Za-z]:[\\/]/.test(path);
+}
+
+/** A global symbol's value, which benk-d8 sets before the script loads */
+function shellValue(name: string): unknown {
+    return (globalThis as Record<symbol, unknown>)[Symbol.for(name)];
+}
+
+/**
+ * Runs groups as `bench()` describes, and compares builds as
+ * `compareBuilds()` describes, if the groups are of their pairs
+ */
+async function runBench(
+    groups: Iterable<Group>,
+    command: CommandOptions,
+    options: BenchOptions,
+    comparison?: Comparison
+): Promise<RunResult> {
+    const { json } = command;
     const runtime = options.runtime ?? new D8Runtime();
-    const run = { ...command, heap: command.heap && countsBytes(runtime) };
+    const run = {
+        ...printedRunOptions(command),
+        heap: command.heap && countsBytes(runtime)
+    };
     if (Object.hasOwn(globalThis, Symbol.for(D8_TRACED_RUN))) {
-        return measureGroups(groups, run, runtime);
+        return compared(await measureGroups(groups, run, runtime), comparison);
     }
 
     const toStdout = json === '-';
@@ -120,9 +242,34 @@ export async function bench(
     if (json != null && !toStdout) {
         checkFile(json);
     }
+    const preface =
+        comparison == null
+            ? []
+            : [
+                  describeBuilds(
+                      {
+                          base: comparison.builds.base.module,
+                          head: comparison.builds.head.module
+                      },
+                      comparison.first,
+                      run.aa
+                  )
+              ];
 
-    const result = await measureAndPrint(groups, run, runtime, printLine);
+    const measured = await measureAndPrint(
+        groups,
+        run,
+        runtime,
+        printLine,
+        preface
+    );
 
+    const result = compared(measured, comparison);
+    if (result.builds != null) {
+        for (const line of formatBuilds(result.builds)) {
+            printLine(line);
+        }
+    }
     if (toStdout) {
         (options.write ?? write)(formatJson(result));
     } else if (json != null) {
@@ -136,6 +283,14 @@ export async function bench(
     }
 
     return result;
+}
+
+/** The results with the comparison of builds, if the run compares them */
+function compared(
+    result: RunResult,
+    comparison: Comparison | undefined
+): RunResult {
+    return comparison == null ? result : withComparison(result, comparison);
 }
 
 /**
