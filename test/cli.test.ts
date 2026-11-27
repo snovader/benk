@@ -335,12 +335,20 @@ async function runScriptWithCode(
     }
 }
 
-/** What `fixtures/after.ts` wrote, whose `after` prints a line, run with the arguments */
+/**
+ * What `fixtures/after.ts` wrote, whose `after` prints a line, run with the
+ * arguments. Node's warning that `vm.measureMemory()` is experimental is
+ * turned off: the collection after the counts prints it to stderr when a
+ * sample saw a collection, which depends on what the process allocated
+ * before. In Node 26 on an Apple M2 Pro, two copies of benk that differed
+ * only in comments printed it in 8 and 34 of 50 runs.
+ */
 async function runAfter(args: readonly string[]): Promise<{ stdout: string; stderr: string }> {
     return promisify(execFile)(
         process.execPath,
         [
             '--no-strip-types',
+            '--disable-warning=ExperimentalWarning',
             '--import',
             '@snovader/node-hooks/register',
             join('test', 'fixtures', 'after.ts'),
