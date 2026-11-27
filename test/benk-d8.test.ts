@@ -9,7 +9,7 @@
 import { execFile, spawnSync } from 'node:child_process';
 import { chmod, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { describe, expect } from 'hypotes';
@@ -522,6 +522,25 @@ function fillNumbers() {
 await bench([{ name: 'buffers', variants: [{ name: 'fill', run: fillNumbers }] }]);
 `;
 
+const COMPARE_SCRIPT = `import { compareBuilds } from 'benk/d8';
+
+const values = new Float64Array(1000).fill(1);
+
+await compareBuilds(build => [
+    { name: 'sum', variants: [{ name: 'numbers', run: () => build.sum(values) }] }
+]);
+`;
+
+/** A build of the code that `COMPARE_SCRIPT` compares */
+const SUM_BUILD = `export function sum(values) {
+    let total = 0;
+    for (let i = 0; i < values.length; i++) {
+        total += values[i];
+    }
+    return total;
+}
+`;
+
 /**
  * Writes the script to the directory, bundled with `benk/d8` as this
  * process resolves it, from its source or from its bundle, as d8 runs a
@@ -638,6 +657,40 @@ describe.runIf(version)('benk-d8 in d8', () => {
             expect(result.processes?.runs).toHaveLength(1);
             expect(result.processes?.groups.map(group => group.name)).toStrictEqual(['buffers']);
             expect(stderr).toMatch(/\nbuffers: 2 processes, by the (fastest|median) round\n/);
+        });
+    });
+
+    it('compares two builds in d8, at paths from its working directory, and loads each first in turn', async () => {
+        await inDirectory(async directory => {
+            const script = await writeScript(directory, 'compare', COMPARE_SCRIPT);
+            await writeFile(join(directory, 'base.mjs'), SUM_BUILD);
+            await writeFile(join(directory, 'head.mjs'), SUM_BUILD);
+            const head = relative(REPOSITORY, join(directory, 'head.mjs'));
+            const { status, stdout, stderr } = await runCommand([
+                script,
+                '--',
+                ...QUICK,
+                '--base',
+                join(directory, 'base.mjs'),
+                '--head',
+                head,
+                '--processes',
+                '2',
+                '--json',
+                '-'
+            ]);
+
+            expect(status, stderr).toBe(0);
+            const result = JSON.parse(stdout) as RunResult;
+            const builds = expectPresent(result.builds);
+            expect(result.runtime.name).toBe('d8');
+            expect(builds.head).toStrictEqual({
+                module: head,
+                url: await realpath(join(directory, 'head.mjs'))
+            });
+            expect(builds.loadedFirst).toStrictEqual(['base', 'head']);
+            expect(result.groups.map(group => group.name)).toStrictEqual(['sum / numbers']);
+            expect(stderr).toMatch(/\nsum: 2 processes, by the (fastest|median) round\n/);
         });
     });
 
