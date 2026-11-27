@@ -119,18 +119,57 @@ function startCounting(): () => number {
 }
 
 /**
- * The milliseconds that a count of array buffers waits before each sample.
- * V8 frees the buffers of a collection on a background thread after it, and
- * Node's count of array buffers falls as it does, which makes a sample
- * uncountable. In Node 24, 26 and 27 on an Apple M2 Pro, of 10 counts each
- * of 12 calls that allocated nothing to 16 MiB in buffers, 32 of the 360
- * ran out of samples without a wait, all of calls of 1 KiB or 8 KiB, and
- * none with it.
+ * The milliseconds of each wait in which a count of array buffers settles
+ * before a sample. V8 frees the buffers of a collection on a background
+ * thread after it, and Node's count of array buffers falls as it does,
+ * which makes a sample uncountable. In Node 24, 26 and 27 on an Apple M2
+ * Pro, of 10 counts each of 12 calls that allocated nothing to 16 MiB in
+ * buffers, 32 of the 360 ran out of samples without a wait, all of calls of
+ * 1 KiB or 8 KiB, and none with it.
  */
 const SETTLE_TIME = 1;
 
-function settle(): Promise<void> {
-    return wait(SETTLE_TIME);
+/**
+ * The waits that a count of array buffers settles for at most before a
+ * sample. The sample then starts anyway, and doesn't count if the count
+ * falls during it. In the counts of `settle()`, a settle took 15 waits at
+ * most, and 17 with 20 busy processes on the machine's 10 cores.
+ */
+const SETTLE_WAITS = 100;
+
+/**
+ * Waits for V8 to free the buffers of earlier collections: until a wait of
+ * `SETTLE_TIME` in which no collection started and Node's count of array
+ * buffers didn't fall, or `SETTLE_WAITS` waits. A wait's profiler that saw
+ * a collection is collected after the counts, as a sample's is.
+ *
+ * One wait isn't always enough. V8 can collect during the wait itself: in
+ * 160 counts of the calls of `test/node.test.ts` in Node 26, a collection
+ * started in 157 of about 1,020 waits. Freeing the buffers of a large
+ * collection can take longer than a wait, too. A sample during which V8
+ * frees fewer bytes than its calls allocate counts too few, and so does a
+ * median of such samples. In benk's tests on GitHub's Windows runners with
+ * Node 26, one wait made the median of a call of 1 MiB 990,322 bytes.
+ *
+ * In Node 24, 26 and 27 on an Apple M2 Pro, of 10 counts each of the 12
+ * calls above, one wait let 26 of 1,800 samples that counted count too few.
+ * Waiting until the count held let none, and until it held in a wait
+ * without a collection, 1. With 20 busy processes on the machine's 10
+ * cores, in Node 26, one wait let 14 of 600 count too few. Waiting until
+ * the count held let 16 of 1,800, and until it held in a wait without a
+ * collection, 3.
+ */
+async function settle(): Promise<void> {
+    for (let waits = 0; waits < SETTLE_WAITS; waits++) {
+        const stopProfiler = startProfiler();
+        const before = process.memoryUsage().arrayBuffers;
+        await wait(SETTLE_TIME);
+        const after = process.memoryUsage().arrayBuffers;
+
+        if (stopProfiler().length === 0 && after >= before) {
+            return;
+        }
+    }
 }
 
 /**

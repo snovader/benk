@@ -2218,8 +2218,9 @@ garbage collection frees buffers, which benk can't add back as it does heap
 bytes. V8 frees them after the collection, on a background thread, so a
 `GCProfiler`'s statistics don't include them. So:
 
-1. benk waits 1 ms before each sample, for V8 to free the buffers of
-   earlier collections.
+1. Before each sample, benk waits for V8 to free the buffers of earlier
+   collections. It waits 1 ms at a time, until a wait in which no
+   collection started and the count didn't fall, and 100 times at most.
 2. A sample in which a collection starts, or whose count falls, doesn't
    count. The next has half as many calls, until a sample allocates too
    little to start a collection, or is of one call.
@@ -2230,16 +2231,27 @@ bytes. V8 frees them after the collection, on a background thread, so a
    end there, since a sample of one call doesn't count either, as
    [Bytes in d8](#bytes-in-d8) measures in Node and in d8.
 
-In Node 24.22.3, 26.13.0 and 27.0.0-alpha on an Apple M2 Pro, 10 counts each
-of 12 calls gave the right bytes, 360 of 360. The calls allocated from no
-buffer to 16 MiB of them, some among objects on the heap. 31 of the 1,800
-samples that counted counted too few. Without the wait, 32 of the 360 counts
-ran out of samples, and gave `–`. With it, none did. In Node 24 and 26,
-calls of 64 MiB and 256 MiB were counted right too.
+In Node 24.22.3, 26.13.0 and 27.0.0-alpha on an Apple M2 Pro, 20 counts each
+of 12 calls gave the right bytes, 720 of 720. The calls allocated from no
+buffer to 16 MiB of them, some among objects on the heap. None of the 3,600
+samples that counted counted too few. In earlier counts without a wait, 32
+of 360 ran out of samples, and gave `–`. With the waits, none did. In
+Node 24 and 26, calls of 64 MiB and 256 MiB were counted right too.
 
-The count adds about 10 ms to each variant. The 7 groups of
-`benchmarks/array-buffers.ts` took 1.50–1.63 s with it, and 1.35–1.47 s
-without, in 3 runs each.
+One wait of 1 ms isn't always enough. V8 can collect during the wait, and
+freeing the buffers of a large collection can outlast it. In 10 counts each
+of the same calls with one wait, 26 of 1,800 samples counted too few, and
+each median was still right. With 20 busy processes on the machine's 10
+cores, in Node 26, one wait let 14 of 600 samples count too few, and the
+waits 3 of 1,800. In benk's tests on GitHub's Windows runners with Node 26,
+one wait made the median wrong in 2 of 91 runs. A call of 1 MiB counted
+990,322 bytes in one, and 1,048,025 in the other.
+
+The count's waits took 12–16 ms a variant in the counts above, against
+9–10 ms with one wait. The 7 groups of `benchmarks/array-buffers.ts` took
+a median of 1.73 s, against 1.68 s with one wait, and 1.14 s with
+`--no-heap`. These are 6 runs each on Node 26.13.0, with a load average
+between 4 and 18.
 
 ## Typed arrays and detached buffers
 

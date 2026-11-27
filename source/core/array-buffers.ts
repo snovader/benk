@@ -8,9 +8,11 @@ import type { ArrayBufferMeter } from './types.ts';
  * frees the buffers of a collection on a background thread after it, and
  * those that it frees during a later sample take that sample's count down
  * without a collection that the meter could see. In Node 24, 26 and 27 on
- * an Apple M2 Pro, 10 counts each of 12 calls that allocated nothing to
- * 16 MiB in buffers had 1,800 samples that counted. 31 counted too few, up
- * to 9 of one call's 50, and the median of each count was right.
+ * an Apple M2 Pro, 20 counts each of 12 calls that allocated nothing to
+ * 16 MiB in buffers had 3,600 samples that counted, after Node's runtime
+ * settled, none too few and none too many. With one wait before each
+ * sample, 26 of 1,800 counted too few, up to all of a sample's calls, and
+ * the median of each count was still right.
  */
 const SAMPLES = 5;
 
@@ -18,7 +20,7 @@ const SAMPLES = 5;
  * The samples that a count takes at most, counted or not. Each sample that
  * the meter can't count halves the calls of the next, so that a sample
  * allocates too little to start a collection: 21 halve a round of 2²¹
- * calls to a single call. In the counts above, a count took 5 to 14
+ * calls to a single call. In the counts above, a count took 5 to 15
  * samples.
  */
 const ATTEMPTS = 40;
