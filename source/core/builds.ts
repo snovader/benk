@@ -411,15 +411,13 @@ function overallDifference(
     ratios: ReadonlyArray<number | null>,
     noise: ReadonlyArray<number | null> | null
 ): Difference | null {
-    const [first] = differences;
     if (differences.every(difference => difference == null)) {
         return null;
     }
-    if (
-        first !== 'within noise' &&
-        differences.every(other => other === first)
-    ) {
-        return first;
+
+    const agreed = agreedDifference(differences);
+    if (agreed != null) {
+        return agreed;
     }
 
     // Both sign tests must support the same direction. A displaced A/A
@@ -432,6 +430,25 @@ function overallDifference(
     return byBase === signDifference(sides.above, sides.below)
         ? byBase
         : 'within noise';
+}
+
+/**
+ * What every process's rounds showed of head's time against base's, where
+ * each showed that head was faster, or each that it was slower: the
+ * verdict is then of their intervals, round by round. It's null where they
+ * differ, or any is within noise or has no interval, and the verdict is of
+ * the sign tests of their ratios instead.
+ */
+export function agreedDifference(
+    differences: ReadonlyArray<Difference | null>
+): 'faster' | 'slower' | null {
+    const [first] = differences;
+    const agree =
+        first != null &&
+        first !== 'within noise' &&
+        differences.every(other => other === first);
+
+    return agree ? first : null;
 }
 
 /**

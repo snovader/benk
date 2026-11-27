@@ -372,29 +372,20 @@ function acrossD8Processes(
         first,
         others.map(({ date, runtime, groups }) => ({ date, runtime, groups }))
     );
-    const loadedFirst = [...(first.builds?.loadedFirst ?? [])];
-    for (const [i, { builds }] of others.entries()) {
-        if (
-            builds?.base.url !== first.builds?.base.url ||
-            builds?.head.url !== first.builds?.head.url
-        ) {
-            throw new Error(
-                `Expected process ${i + 2} to compare the same builds as the first`
-            );
-        }
-        if (builds != null) {
-            loadedFirst.push(builds.loadedFirst[0]);
-        }
-    }
     if (first.builds == null) {
         return result;
     }
 
-    const { base, head, variants } = first.builds;
+    const { base, head, loadedFirst, variants } = first.builds;
+    // Each run is one process, which recorded the build that it loaded first
+    const loadedFirstInOthers = others.flatMap(
+        run => run.builds?.loadedFirst ?? []
+    );
+
     return withBuilds(result, {
         base,
         head,
-        loadedFirst,
+        loadedFirst: [...loadedFirst, ...loadedFirstInOthers],
         origins: variants
     });
 }

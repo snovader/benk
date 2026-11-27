@@ -1,4 +1,4 @@
-import { sidesOf } from './builds.ts';
+import { agreedDifference, sidesOf } from './builds.ts';
 import { ALLOCATING_CALL, LONG_CALL } from './lead.ts';
 import { modesAreOf } from './statistics.ts';
 import type {
@@ -752,10 +752,7 @@ function describeComparison(loadedFirst: readonly BuildName[]): string {
         count === 2
             ? 'and their range'
             : `the median of the ${count} ratios, and their range`;
-    const order = loadedFirst.every(first => first === loadedFirst[0])
-        ? `Every process loaded ${loadedFirst[0]} first.`
-        : `Processes ${processes('base')} loaded base first, and ${processes('head')} head first.`;
-    return `Head against base in ${count} processes: each variant's ratio of head's time to base's in each, by the statistic that its pair leads with in the first, ${summary}. ${order}`;
+    return `Head against base in ${count} processes: each variant's ratio of head's time to base's in each, by the statistic that its pair leads with in the first, ${summary}. Processes ${processes('base')} loaded base first, and ${processes('head')} head first.`;
 }
 
 /** A table of a group's variants across builds, and its notes */
@@ -861,18 +858,10 @@ function formatDifferences({
             : difference === 'within noise'
               ? `within ${noise}`
               : `head ${difference}, beyond ${noise}`;
-    let statistic = '';
-    if (lead === 'fastest' && difference != null) {
-        if (
-            differences.length === 1 ||
-            (difference !== 'within noise' &&
-                differences.every(d => d === difference))
-        ) {
-            statistic = 'round by round, ';
-        } else if (difference !== 'within noise') {
-            statistic = 'by the fastest rounds, ';
-        }
-    }
+    const statistic =
+        lead === 'fastest' && difference != null
+            ? verdictStatistic({ differences, difference })
+            : '';
     const note = `  ${variant}: ${statistic}${verdict}`;
     if (differences.length === 1) {
         return note;
@@ -886,6 +875,25 @@ function formatDifferences({
         difference => difference === 'faster' || difference === 'slower'
     ).length;
     return `${note}: of ${count} processes, its ratio ${sides}, and its interval showed a difference in ${apart === 0 ? 'none' : apart}`;
+}
+
+/**
+ * What the verdict of a pair that leads with the fastest round is by, as
+ * the ratios beside it are of the fastest rounds: round by round where the
+ * intervals gave it, which are of the median of the per-round ratios, as
+ * one process's do, and those that `agreedDifference()` has. Otherwise the
+ * sign tests of the ratios gave it, and it's by the fastest rounds where
+ * they showed a difference, and by neither where they didn't.
+ */
+function verdictStatistic({
+    differences,
+    difference
+}: Pick<VariantAcrossBuilds, 'differences' | 'difference'>): string {
+    if (differences.length === 1 || agreedDifference(differences) != null) {
+        return 'round by round, ';
+    }
+
+    return difference === 'within noise' ? '' : 'by the fastest rounds, ';
 }
 
 /** How many ratios could be compared, distinguishing missing pairs from ties. */
